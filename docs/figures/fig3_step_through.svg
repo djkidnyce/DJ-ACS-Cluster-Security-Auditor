@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="700" viewBox="0 0 1160 700" font-family="DejaVu Sans, Segoe UI, Arial, sans-serif">
+<rect width="1160" height="700" fill="#0d1117"/>
+<rect x="0" y="0" width="1160" height="62" fill="#1f6feb"/><path d="M26 12 l17 6 v13 c0 10 -7 17 -17 22 c-10 -5 -17 -12 -17 -22 v-13 z" fill="#fff" opacity=".95"/><path d="M19 30 l6 6 l11 -12" stroke="#1f6feb" stroke-width="3.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><text x="56" y="27" font-size="17" font-weight="bold" fill="#fff">DJ's ACS Remediation</text><text x="56" y="47" font-size="11.5" fill="#cfe1ff">Apply fixes to YAML with a preview and a confirmation. Nothing is executed, nothing touches a cluster</text>
+<rect x="24" y="80" width="1112" height="96" rx="9" fill="#161b22" stroke="#30363d"/>
+<text x="42" y="103" font-size="11" font-weight="bold" fill="#58a6ff">HOW DO YOU WANT TO WORK THROUGH THESE</text>
+<rect x="42" y="116" width="168" height="27" rx="6" fill="#1f6feb" stroke="#1f6feb"/>
+<text x="126.0" y="134" font-size="11" fill="#fff" font-weight="bold" text-anchor="middle">Step through one by one</text>
+<rect x="218" y="116" width="208" height="27" rx="6" fill="#1c2330" stroke="#30363d"/>
+<text x="322.0" y="134" font-size="11" fill="#e6edf3" font-weight="normal" text-anchor="middle">Review and apply all auto fixes</text>
+<rect x="434" y="116" width="86" height="27" rx="6" fill="#1c2330" stroke="#30363d"/>
+<text x="477.0" y="134" font-size="11" fill="#e6edf3" font-weight="normal" text-anchor="middle">Undo last</text>
+<rect x="528" y="116" width="116" height="27" rx="6" fill="#1c2330" stroke="#30363d"/>
+<text x="586.0" y="134" font-size="11" fill="#e6edf3" font-weight="normal" text-anchor="middle">Undo everything</text>
+<rect x="900" y="122" width="13" height="13" rx="3" fill="#1c2330" stroke="#30363d"/>
+<text x="920" y="133" font-size="10.5" fill="#8b949e">Skip the confirmation prompt</text>
+<text x="42" y="163" font-size="10.5" fill="#8b949e">Every change is previewed as a diff and needs confirmation. Undo works one step at a time or all the way back.</text>
+<circle cx="40" cy="196" r="11" fill="#58a6ff"/><text x="40" y="200" font-size="12" font-weight="bold" fill="#fff" text-anchor="middle">1</text><text x="58" y="200" font-size="11.5" fill="#e6edf3">Three ways to work. Stepping is the careful one</text>
+<rect x="96" y="218" width="762" height="452" rx="11" fill="#161b22" stroke="#58a6ff" stroke-width="2"/>
+<text x="122" y="248" font-size="12" font-weight="bold" fill="#e6edf3">Fix 3 of 14</text>
+<rect x="206" y="240" width="440" height="8" rx="4" fill="#1c2330"/>
+<rect x="206" y="240" width="94" height="8" rx="4" fill="#58a6ff"/>
+<text x="666" y="248" font-size="10" fill="#8b949e">2 applied so far</text>
+<text x="122" y="278" font-size="15" font-weight="bold" fill="#e6edf3">Privileged Container</text>
+<text x="122" y="298" font-size="11" fill="#58a6ff">ACS.001</text>
+<rect x="174" y="287" width="41.6" height="15" rx="7" fill="#5a2d0c"/><text x="194.8" y="298" font-size="8.5" font-weight="bold" fill="#ffc999" text-anchor="middle">HIGH</text>
+<rect x="231" y="287" width="72" height="14" rx="7" fill="none" stroke="#f85149"/>
+<text x="267" y="298" font-size="8.5" fill="#f85149" text-anchor="middle">live in ACS</text>
+<text x="122" y="326" font-size="10.5" fill="#8b949e">Object</text>
+<text x="246" y="326" font-size="10.5" fill="#e6edf3">Deployment/payments-api</text>
+<text x="122" y="345" font-size="10.5" fill="#8b949e">File</text>
+<text x="246" y="345" font-size="10.5" fill="#e6edf3">live/prod/deployment-payments-api.yaml</text>
+<text x="122" y="364" font-size="10.5" fill="#8b949e">Found</text>
+<text x="246" y="364" font-size="10.5" fill="#e6edf3">Container "api" (containers) runs privileged</text>
+<text x="122" y="383" font-size="10.5" fill="#8b949e">Why it matters</text>
+<text x="246" y="383" font-size="10.5" fill="#e6edf3">Privileged containers can reach all host devices and escape isolation entirely.</text>
+<text x="122" y="402" font-size="10.5" fill="#8b949e">What changes</text>
+<text x="246" y="402" font-size="10.5" fill="#e6edf3">container "api": privileged true to false</text>
+<text x="122" y="421" font-size="10.5" fill="#8b949e">Standards</text>
+<text x="246" y="421" font-size="10.5" fill="#e6edf3">CIS 5.2.1  |  NIST 800-53: AC-6, CM-7  |  PSS: Baseline  |  STIG: verify</text>
+<circle cx="884" cy="300" r="11" fill="#58a6ff"/><text x="884" y="304" font-size="12" font-weight="bold" fill="#fff" text-anchor="middle">2</text><text x="902" y="304" font-size="11.5" fill="#e6edf3">Full advisory before</text>
+<text x="902" y="320" font-size="11.5" fill="#e6edf3">you decide</text>
+<rect x="122" y="452" width="712" height="118" rx="7" fill="#0d1117" stroke="#30363d"/>
+<text x="134" y="474" font-size="11" font-family="monospace" xml:space="preserve" fill="#8b949e">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;securityContext:</text>
+<rect x="123" y="479" width="710" height="17" fill="#67060c"/>
+<text x="134" y="491" font-size="11" font-family="monospace" xml:space="preserve" fill="#ffb3ad">-&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;privileged:&#160;true</text>
+<rect x="123" y="496" width="710" height="17" fill="#0f3d1e"/>
+<text x="134" y="508" font-size="11" font-family="monospace" xml:space="preserve" fill="#7ee2a8">+&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;privileged:&#160;false</text>
+<text x="134" y="525" font-size="11" font-family="monospace" xml:space="preserve" fill="#8b949e">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;capabilities:</text>
+<text x="134" y="542" font-size="11" font-family="monospace" xml:space="preserve" fill="#8b949e">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;drop:</text>
+<text x="134" y="559" font-size="11" font-family="monospace" xml:space="preserve" fill="#8b949e">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;-&#160;ALL</text>
+<circle cx="884" cy="494" r="11" fill="#58a6ff"/><text x="884" y="498" font-size="12" font-weight="bold" fill="#fff" text-anchor="middle">3</text><text x="902" y="498" font-size="11.5" fill="#e6edf3">The real diff, not a</text>
+<text x="902" y="514" font-size="11.5" fill="#e6edf3">description of one</text>
+<rect x="486" y="596" width="92" height="28" rx="6" fill="#1c2330" stroke="#30363d"/>
+<text x="532.0" y="615" font-size="11" fill="#e6edf3" font-weight="normal" text-anchor="middle">Stop here</text>
+<rect x="588" y="596" width="110" height="28" rx="6" fill="#1c2330" stroke="#30363d"/>
+<text x="643.0" y="615" font-size="11" fill="#e6edf3" font-weight="normal" text-anchor="middle">Skip this one</text>
+<rect x="708" y="596" width="122" height="28" rx="6" fill="#1f6feb" stroke="#1f6feb"/>
+<text x="769.0" y="615" font-size="11" fill="#fff" font-weight="bold" text-anchor="middle">Apply and continue</text>
+<circle cx="122" cy="610" r="11" fill="#58a6ff"/><text x="122" y="614" font-size="12" font-weight="bold" fill="#fff" text-anchor="middle">4</text><text x="140" y="614" font-size="11.5" fill="#e6edf3">Apply, skip, or stop. Nothing happens until you choose</text>
+<text x="122" y="654" font-size="10.5" fill="#8b949e">Manual findings never appear in this queue. They are explained in the table and left alone.</text>
+</svg>

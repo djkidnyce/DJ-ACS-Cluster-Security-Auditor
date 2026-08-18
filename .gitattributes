@@ -1,0 +1,19 @@
+# Normalise line endings in the repository, check out native on Windows.
+* text=auto
+
+# Shell scripts must keep LF even on a Windows checkout, or they will not run.
+*.sh text eol=lf
+# PowerShell and cmd are happier with CRLF.
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+
+# Vendored libraries are third party. Do not let them skew language statistics and
+# do not show them in diffs by default.
+vendor/* linguist-vendored
+vendor/* -diff
+
+docs/figures/* linguist-documentation
+
+*.png binary
+*.docx binary
+*.zip binary

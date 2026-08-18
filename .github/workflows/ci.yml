@@ -1,0 +1,70 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['18', '20', '22']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # jsdom is the only thing here that needs a package manager, and it is optional.
+      # The suite skips the whole page tests without it rather than failing, because the
+      # tool itself must keep working on a machine that has no npm.
+      - name: Install jsdom for the whole page tests
+        run: npm install --no-save jsdom
+
+      - name: Run the suite
+        run: node test/run_tests.js
+
+  guarantees:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # These are the properties the README and SECURITY.md claim. Assert them in CI so a
+      # claim cannot quietly become false.
+      - name: No exec, eval or Function constructor in shipped files
+        run: |
+          if grep -nE '\beval\(|new Function\(|child_process' \
+              acs_policies.js dj_acs_auditor.html dj_acs_remediation.html; then
+            echo "::error::found an execution primitive in a shipped file"; exit 1
+          fi
+          echo "clean"
+
+      - name: No token written to browser storage
+        run: |
+          if grep -nE 'localStorage[^;]{0,150}(acsToken|vulnToken|ocpToken)' dj_acs_*.html; then
+            echo "::error::a token reaches browser storage"; exit 1
+          fi
+          echo "clean"
+
+      - name: Engine issues no write methods to a cluster
+        run: |
+          if grep -nE "method: *['\"](POST|PUT|PATCH|DELETE)" acs_policies.js; then
+            echo "::error::engine can write to a cluster"; exit 1
+          fi
+          echo "GET only"
+
+      - name: Vendored dependency hashes match the published values
+        run: |
+          echo "45dc3dd03dc07a06705a2c2989b8c7f709013f04bd5386e3279d4e447f07ebd7  vendor/js-yaml.min.js" | sha256sum -c -
+          echo "acc7e41455a80765b5fd9c7ee1b8078a6d160bbbca455aeae854de65c947d59e  vendor/jszip.min.js"  | sha256sum -c -
+
+      - name: Shell scripts parse under POSIX sh
+        run: for f in scripts/*.sh acs.sh; do sh -n "$f" && echo "ok $f"; done

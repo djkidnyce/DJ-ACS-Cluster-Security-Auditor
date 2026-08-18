@@ -1,0 +1,47 @@
+# Output the tool produces. None of this belongs in the repository, and some of it
+# can contain cluster detail you did not mean to publish.
+acs_audit_*/
+acs_findings_*/
+acs_via_oc_*/
+acs_ssh_*/
+findings/
+*.ndjson
+acs_alerts*.json
+acs_findings*.json
+acs_findings*.sarif
+acs_vulns*.json
+workloads*.json
+*_image_worklist.md
+FIXING_VIOLATIONS.md
+CHANGES.md
+PROPOSED_CHANGES.md
+
+# Credentials and certificates. Belt and braces: the tool never writes these, but a
+# person following the README by hand might.
+*.pem
+*.key
+*.crt
+.hdr
+ca.pem
+central-ca.pem
+.env
+
+# Tooling
+node_modules/
+package-lock.json
+__pycache__/
+*.pyc
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Archives. Ship releases through GitHub Releases, not committed zips.
+*.zip
+
+# Probe files from tooling
+.acs_write_probe
+.write_test

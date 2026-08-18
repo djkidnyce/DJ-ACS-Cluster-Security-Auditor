@@ -1,0 +1,1334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DJ's ACS Remediation</title>
+<!-- Local first so a disconnected machine works, CDN only as a fallback. -->
+<script src="vendor/js-yaml.min.js"></script>
+<script src="vendor/jszip.min.js"></script>
+<script>
+if (typeof jsyaml === 'undefined')
+  document.write('<scr' + 'ipt src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"><\/scr' + 'ipt>');
+if (typeof JSZip === 'undefined')
+  document.write('<scr' + 'ipt src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"><\/scr' + 'ipt>');
+</script>
+<script src="acs_policies.js"></script>
+<style>
+:root{
+  --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --border:#30363d;
+  --text:#e6edf3; --muted:#8b949e; --accent:#58a6ff;
+  --crit:#f85149; --high:#f0883e; --med:#d4a72c; --low:#3fb950;
+  --add:#0f3d1e; --addfg:#7ee2a8; --del:#67060c; --delfg:#ffb3ad; --code:#0d1117;
+}
+body.light{
+  --bg:#f6f8fa; --panel:#ffffff; --panel2:#eef1f5; --border:#d0d7de;
+  --text:#1f2328; --muted:#57606a; --accent:#0969da;
+  --crit:#cf222e; --high:#bc4c00; --med:#7d6608; --low:#1a7f37;
+  --add:#dafbe1; --addfg:#116329; --del:#ffebe9; --delfg:#82071e; --code:#f6f8fa;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5}
+header{padding:16px 26px;border-bottom:1px solid var(--border);background:var(--panel);display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+header h1{font-size:18px;font-weight:600}
+header .sub{color:var(--muted);font-size:12.5px;max-width:900px}
+main{max-width:1320px;margin:0 auto;padding:20px 26px 80px}
+button{background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 15px;font-size:13.5px;cursor:pointer;transition:all .12s}
+button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+button:disabled{opacity:.4;cursor:not-allowed}
+button.primary{background:#1f6feb;border-color:#1f6feb;color:#fff;font-weight:600}
+button.primary:hover:not(:disabled){background:#388bfd;color:#fff}
+button.danger{border-color:var(--crit);color:var(--crit)}
+button.danger:hover:not(:disabled){background:var(--crit);color:#fff}
+button.small{padding:4px 11px;font-size:12px}
+select,input[type=text]{background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;font-size:13px}
+.section{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px 18px;margin:14px 0}
+.section h2{font-size:14px;margin-bottom:11px;color:var(--accent);text-transform:uppercase;letter-spacing:.05em}
+#dropzone{border:2px dashed var(--border);border-radius:10px;padding:30px 20px;text-align:center;color:var(--muted);cursor:pointer;background:var(--panel)}
+#dropzone.drag{border-color:var(--accent);background:var(--panel2);color:var(--accent)}
+.toolbar{display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin:12px 0}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:10px;margin:14px 0}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px 14px}
+.card .num{font-size:23px;font-weight:700}
+.card .lbl{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-top:2px}
+.card.crit .num{color:var(--crit)}.card.high .num{color:var(--high)}
+.card.med .num{color:var(--med)}.card.low .num{color:var(--low)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{color:var(--muted);text-align:left;padding:8px 9px;border-bottom:1px solid var(--border);font-size:11px;text-transform:uppercase;letter-spacing:.05em;white-space:nowrap}
+th.sortable{cursor:pointer;user-select:none}
+th.sortable:hover{color:var(--accent)}
+td{padding:8px 9px;border-bottom:1px solid var(--border);vertical-align:top}
+tr.done td{opacity:.5}
+.sev{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:700;text-transform:uppercase;white-space:nowrap}
+.sev.Critical{background:#67060c;color:#ffb3ad}.sev.High{background:#5a2d0c;color:#ffc999}
+.sev.Medium{background:#4d3800;color:#f2d24b}.sev.Low{background:#0f3d1e;color:#7ee2a8}
+body.light .sev.Critical{background:#ffebe9;color:#82071e}
+body.light .sev.High{background:#fff1e5;color:#8a4600}
+body.light .sev.Medium{background:#fdf5d3;color:#684e00}
+body.light .sev.Low{background:#dafbe1;color:#116329}
+/* The Red Hat vulnerability scale uses different words from the policy severity scale.
+   Same colours so the eye reads them consistently, different labels so nobody conflates
+   an Important CVE with a High policy violation. */
+.sev.Important{background:#5a2d0c;color:#ffc999}.sev.Moderate{background:#4d3800;color:#f2d24b}
+.sev.Unknown{background:#30363d;color:#c9d1d9}
+body.light .sev.Important{background:#fff1e5;color:#8a4600}
+body.light .sev.Moderate{background:#fdf5d3;color:#684e00}
+body.light .sev.Unknown{background:#eaeef2;color:#57606a}
+.chip{display:inline-block;font-size:10px;font-weight:700;padding:1px 6px;border-radius:8px;
+  border:1px solid var(--border);color:var(--muted);white-space:nowrap;text-transform:uppercase}
+.chip.crit{background:#67060c;color:#ffb3ad;border-color:#67060c}
+body.light .chip.crit{background:#ffebe9;color:#82071e;border-color:#ffcecb}
+.mono{font-family:ui-monospace,Consolas,monospace;font-size:11.5px}
+code{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;background:var(--panel2);
+  padding:1px 5px;border-radius:4px}
+.pill{font-size:10.5px;padding:1px 8px;border-radius:9px;border:1px solid var(--border);color:var(--muted);white-space:nowrap}
+.pill.auto{color:var(--low);border-color:var(--low)}
+.pill.manual{color:var(--med);border-color:var(--med)}
+.pill.gen{color:var(--accent);border-color:var(--accent)}
+.pill.acs{color:var(--crit);border-color:var(--crit)}
+.pill.fixed{color:var(--low);border-color:var(--low);background:var(--add)}
+.acsid{font-family:ui-monospace,Consolas,monospace;color:var(--accent);font-weight:600;white-space:nowrap}
+pre.diff{background:var(--code);border:1px solid var(--border);border-radius:8px;padding:0;overflow-x:auto;font-family:ui-monospace,Consolas,monospace;font-size:12px;line-height:1.55;margin:0}
+pre.diff div{padding:1px 10px;white-space:pre}
+pre.diff .add{background:var(--add);color:var(--addfg)}
+pre.diff .del{background:var(--del);color:var(--delfg)}
+pre.diff .ctx{color:var(--muted)}
+pre.diff .gap{color:var(--muted);opacity:.6;font-style:italic}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.66);display:flex;align-items:center;justify-content:center;padding:24px;z-index:50}
+.modal .box{background:var(--panel);border:1px solid var(--border);border-radius:12px;max-width:940px;width:100%;max-height:88vh;overflow:auto;padding:22px 24px}
+.modal h3{font-size:16px;margin-bottom:6px}
+.modal .why{color:var(--muted);font-size:12.5px;margin-bottom:12px}
+.modal .actions{display:flex;gap:9px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap}
+.warn{border-left:3px solid var(--med);background:var(--panel2);padding:9px 12px;border-radius:0 6px 6px 0;font-size:12.5px;color:var(--muted);margin:10px 0}
+.note{color:var(--muted);font-size:12.5px;margin-top:9px}
+.tabs{display:flex;gap:7px;margin-bottom:11px;flex-wrap:wrap}
+.tab{padding:5px 13px;border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:13px;background:var(--panel2)}
+.tab.on{border-color:var(--accent);color:var(--accent);font-weight:600}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+@media(max-width:900px){.grid3{grid-template-columns:1fr}}
+.field label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:3px}
+.field input{width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;font-size:13px}
+pre.cmd{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:11px 13px;overflow-x:auto;font-family:ui-monospace,Consolas,monospace;font-size:12px;white-space:pre-wrap;margin-top:10px}
+.err{border-left:3px solid var(--crit);background:var(--panel2);padding:9px 12px;border-radius:0 6px 6px 0;font-size:12.5px;margin-top:10px}
+.hidden{display:none}
+.stepbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.progress{flex:1;min-width:160px;height:8px;background:var(--panel2);border-radius:4px;overflow:hidden}
+.progress div{height:100%;background:var(--accent);transition:width .25s}
+.kv{display:grid;grid-template-columns:120px 1fr;gap:4px 12px;font-size:12.5px;margin:8px 0}
+.kv .k{color:var(--muted)}
+.filechip{background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:3px 10px;font-size:12px;font-family:ui-monospace,Consolas,monospace;display:inline-block;margin:3px 4px 0 0}
+.filechip.err{border-color:var(--crit);color:var(--crit)}
+a{color:var(--accent)}
+</style>
+</head>
+<body>
+<header>
+  <div style="font-size:24px">&#128736;</div>
+  <div>
+    <h1>DJ's ACS Remediation</h1>
+    <div class="sub">Apply Red Hat Advanced Cluster Security findings to your YAML, one at a time or in bulk, with a full preview and an explicit confirmation before anything changes. Nothing is executed and nothing touches a cluster: this page edits text in your browser and hands the result back to you.</div>
+  </div>
+  <button id="themeBtn" style="margin-left:auto">Light mode</button>
+</header>
+<main>
+
+  <div id="dropzone">
+    <div style="font-size:26px">&#128193;</div>
+    <p><strong>Drop your YAML manifests here</strong>, or a whole folder</p>
+    <p style="font-size:12px;margin-top:3px">Optionally drop an ACS violation export (.json) alongside them to confirm findings against your live cluster</p>
+    <p style="margin-top:9px">
+      <button id="btnFiles">Browse files</button>
+      <button id="btnFolder">Browse folder</button>
+      <button id="btnDemo">Load a deliberately bad sample</button>
+    </p>
+    <input type="file" id="fileinput" multiple accept=".yaml,.yml,.json" style="display:none">
+    <input type="file" id="dirinput" webkitdirectory style="display:none">
+  </div>
+  <div id="filelist" style="margin-top:8px"></div>
+
+  <div class="section">
+    <h2>Or pull straight from your cluster</h2>
+    <div class="tabs">
+      <span class="tab on" data-t="ocp">OpenShift API</span>
+      <span class="tab" data-t="acs">Policy violations</span>
+      <span class="tab" data-t="vuln">Vulnerabilities (CVEs)</span>
+    </div>
+
+    <div id="tab-ocp">
+      <div class="grid3">
+        <div class="field"><label>OpenShift API URL</label>
+          <input type="text" id="ocpUrl" placeholder="https://api.example.com:6443" autocomplete="off"></div>
+        <div class="field"><label>Token</label>
+          <input type="password" id="ocpToken" placeholder="oc whoami -t" autocomplete="off"></div>
+        <div class="field"><label>Namespace (blank pulls all)</label>
+          <input type="text" id="ocpNs" placeholder="prod" autocomplete="off"></div>
+      </div>
+      <div class="toolbar">
+        <button class="primary" id="btnOcpConnect">Pull live workloads</button>
+        <button id="btnOcpCmd">Show the offline command instead</button>
+        <span class="note" id="ocpMsg"></span>
+      </div>
+      <p class="note">Pulls the live objects, strips the server side fields, and loads them here so you can fix them. The corrected YAML you download is clean enough to commit. Nothing is written back to the cluster.</p>
+    </div>
+
+    <div id="tab-acs" class="hidden">
+      <div class="grid3">
+        <div class="field"><label>ACS Central URL</label>
+          <input type="text" id="acsUrl" placeholder="https://central-stackrox.apps.example.com" autocomplete="off"></div>
+        <div class="field"><label>API token</label>
+          <input type="password" id="acsToken" placeholder="paste your ACS API token" autocomplete="off"></div>
+        <div class="field"><label>Filter (optional ACS query)</label>
+          <input type="text" id="acsQuery" placeholder="Severity:CRITICAL_SEVERITY" autocomplete="off"></div>
+      </div>
+      <div class="toolbar">
+        <button class="primary" id="btnAcsConnect">Fetch violations</button>
+        <button id="btnAcsCmd">Show the offline command instead</button>
+        <label class="chk"><input type="checkbox" id="acsHydrate" checked> Fetch violation detail</label>
+        <span class="note" id="acsMsg"></span>
+      </div>
+      <p class="note">Marks findings that are live in your cluster right now, so you can prioritise those first.</p>
+      <p class="note"><strong>Leave detail fetching on.</strong> <code>GET /v1/alerts</code> returns the slim
+        <code>ListAlert</code>, which has a policy name and severity but no violation text. Only
+        <code>GET /v1/alerts/{id}</code> returns the full alert with <code>violations[]</code>. Listing alone
+        is why results can look empty.</p>
+    </div>
+
+    <div id="tab-vuln" class="hidden">
+      <div class="warn" style="margin-top:0">
+        <strong>CVEs are not policy violations and are not in <code>/v1/alerts</code>.</strong>
+        This tab uses <code>/v1/export/vuln-mgmt/workloads</code>, which is where CVE data lives.
+        <br><strong>There is no automatic fix for a CVE, by design.</strong> ACS reports that a package is
+        fixed in a given version. It cannot tell you which image tag contains that package, because that
+        depends on how the image is built. Deriving one from the other would mean guessing, and a wrong
+        guess points a production workload at a tag that does not exist or that quietly breaks it.
+      </div>
+      <div class="grid3">
+        <div class="field"><label>ACS Central URL</label>
+          <input type="text" id="vulnUrl" placeholder="https://central-stackrox.apps.example.com" autocomplete="off"></div>
+        <div class="field"><label>API token</label>
+          <input type="password" id="vulnToken" placeholder="paste your ACS API token" autocomplete="off"></div>
+        <div class="field"><label>Namespace (blank pulls all)</label>
+          <input type="text" id="vulnNs" placeholder="prod" autocomplete="off"></div>
+      </div>
+      <div class="toolbar">
+        <button class="primary" id="btnVulnConnect">Pull vulnerability data</button>
+        <button id="btnVulnCmd">Show the offline command instead</button>
+        <span class="note" id="vulnMsg"></span>
+      </div>
+      <p class="note">The token needs read on <strong>Image</strong> and <strong>Deployment</strong>. A token
+        scoped only to Alert returns 403 here while the violations tab keeps working. You can also drop a
+        <code>.ndjson</code> export from <code>curl</code> or <code>roxctl</code> onto the drop zone above.</p>
+    </div>
+
+    <div class="warn">
+      <strong>How your token is handled.</strong> It stays in a variable in this tab for the
+      duration of the request, then the field is cleared. It is never written to storage,
+      never logged, and never included in any file you download. Use a short lived, read only,
+      least privileged token regardless.
+      <br><strong>This page still never writes to your cluster.</strong> Pulling is read only,
+      and every fix is applied to YAML text that you download.
+    </div>
+    <div id="liveOut"></div>
+  </div>
+
+  <div id="app" class="hidden">
+
+    <div class="cards" id="cards"></div>
+
+    <div class="section">
+      <h2>How do you want to work through these</h2>
+      <div class="toolbar">
+        <button class="primary" id="btnStep">Step through one by one</button>
+        <button id="btnApplyAll">Review and apply all auto fixes</button>
+        <button id="btnUndo" disabled>Undo last</button>
+        <button id="btnReset" disabled>Undo everything</button>
+        <span style="flex:1"></span>
+        <label class="note" style="display:flex;align-items:center;gap:6px;margin:0">
+          <input type="checkbox" id="skipConfirm"> Skip the confirmation prompt
+        </label>
+      </div>
+      <div class="toolbar" style="margin-top:0">
+        <label class="chk"><strong style="color:var(--text)">Mode</strong>
+          <select id="fixMode" style="background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:4px 8px;font-size:13px">
+            <option value="report" selected>Report only</option>
+            <option value="manual">Manual: one at a time, I confirm each</option>
+            <option value="auto">Auto: apply the safe fixes</option>
+          </select></label>
+        <span class="note" id="modeNote"></span>
+      </div>
+      <div class="warn">
+        <strong>Report only is the default, and nothing on this page will change a file until you
+        move off it.</strong> That is deliberate. A remediation tool that can write before you have
+        chosen to write is a new risk rather than a mitigation: the failure is not the tool doing
+        something malicious, it is someone at the end of a long incident clicking the obvious
+        button and producing a change to a production manifest they did not intend and cannot
+        explain in review.
+        <br><br>
+        Every change is still previewed as a diff and still needs your confirmation. Nothing is
+        applied to a cluster, no command is run, and no file on disk is modified until you download
+        the result. Undo works one step at a time or all the way back.
+      </div>
+    </div>
+
+    <div id="vulnPanel" class="section hidden">
+      <h2>Image vulnerabilities</h2>
+      <div class="warn" style="margin-top:0">
+        <strong>Nothing on this panel is auto fixable, and that is the correct answer rather than a
+        missing feature.</strong> ACS tells you a package is fixed in version X. It cannot tell you
+        which image tag ships version X, because only your build knows that. The one real action here
+        is replacing an image reference with one <em>you</em> supply, which is a text edit like any
+        other and gets the same preview, confirmation and undo as every other fix on this page.
+      </div>
+      <div id="vulnSummary"></div>
+      <table id="vimgtable">
+        <thead><tr>
+          <th>Image</th><th>Critical</th><th>Fixable</th><th>CVEs</th>
+          <th>Declared in</th><th>Action</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="toolbar">
+        <button id="btnVulnWorklist">Download the image worklist</button>
+      </div>
+      <p class="note">The worklist groups by image because that is the unit of work: you rebuild an
+        image once and every fixable CVE inside it clears together. A list organised by CVE looks like
+        progress and cannot be actioned.</p>
+    </div>
+
+    <div class="section">
+      <h2>Findings</h2>
+      <table id="ftable">
+        <thead><tr>
+          <th class="sortable" data-key="sev" data-label="Severity">Severity</th>
+          <th class="sortable" data-key="id" data-label="Policy">Policy</th>
+          <th class="sortable" data-key="obj" data-label="Object">Object</th>
+          <th class="sortable" data-key="file" data-label="File">File</th>
+          <th>Finding</th>
+          <th class="sortable" data-key="kind" data-label="Fix">Fix</th>
+          <th>Action</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+      <p class="note">Click a row to read the full advisory: the ACS policy, why it matters, what to do, and the standards behind it. Click a column header to sort.</p>
+    </div>
+
+    <div class="section">
+      <h2>Take the result</h2>
+      <div class="toolbar">
+        <button class="primary" id="btnDownloadAll">Download patched YAML (ZIP)</button>
+        <button id="btnDownloadOne">Download as one file</button>
+        <button id="btnPatches">Download merge patches</button>
+        <button id="btnCopyDiff">Copy the full diff</button>
+        <button id="btnReport">Download change log</button>
+        <span class="note" id="exportMsg"></span>
+      </div>
+      <p class="note">Merge patches are for manifests templated by Helm or Kustomize that cannot be edited directly. Each patch carries only the changed fields plus enough identity to route it to the right object.</p>
+    </div>
+
+  </div>
+</main>
+
+<div id="modalHost"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const E = window;  /* acs_policies.js defines its functions on the global scope */
+
+let STATE = {
+  files: [],          /* {name, text, docs, originalDocs, errors} */
+  findings: [],
+  history: [],        /* {fileName, prevDocs, finding, changes} */
+  applied: new Set(), /* finding keys already applied */
+  acs: null,
+  vulns: null,        /* CVE data from the ACS vulnerability export */
+  vulnCorr: null,     /* which manifest declares each scanned image */
+  sort: { key: 'sev', dir: 1 },
+  stepQueue: null,
+  stepPos: 0,
+};
+
+/* ------------------------------------------------------------------ loading */
+
+const YAML_RE = /\.(ya?ml)$/i;
+const JSON_RE = /\.(json|ndjson|jsonl)$/i;
+
+/* A dropped JSON file is either an alert export or a vulnerability export. They are entirely
+   different documents, so sniff which one it is rather than assuming, and say which it chose.
+   Guessing silently and guessing wrong produces a page that looks fine and shows nothing. */
+function classifyDrop(text) {
+  // Order matters. Check for Kubernetes objects first: an ACS export never has a top
+  // level kind and apiVersion, so this cannot steal a file from the other branches.
+  const k = importKubeJson(text);
+  if (k.count) return { kind: 'workloads', data: k };
+  const v = parseVulnExport(text);
+  if (v.records.length) return { kind: 'vuln', data: v };
+  try {
+    const j = JSON.parse(text);
+    if (Array.isArray(j) || j.alerts || j.results || j.alert || (j.id && j.policy)) return { kind: 'alerts', data: j };
+  } catch (e) { /* not a single JSON document */ }
+  return { kind: 'unknown', errors: (k.errors || []).concat(v.errors || []) };
+}
+
+function loadItems(items) {
+  const known = new Set(STATE.files.map((f) => f.name));
+  for (const it of items) {
+    if (JSON_RE.test(it.name)) {
+      const c = classifyDrop(it.text);
+      if (c.kind === 'workloads') loadItems(c.data.files);
+      else if (c.kind === 'vuln') STATE.vulns = importVulnFindings(c.data, {});
+      else if (c.kind === 'alerts') STATE.acs = importAcsViolations(c.data);
+      else alert('Could not read ' + it.name + '.\n\nExpected one of:\n' +
+        '  Kubernetes or OpenShift objects (oc get ... -o json or -o yaml)\n' +
+        '  an ACS alert export (/v1/alerts)\n' +
+        '  an ACS vulnerability export (/v1/export/vuln-mgmt/workloads)\n' +
+        (c.errors && c.errors.length ? '\n' + c.errors.slice(0, 3).join('\n') : ''));
+      continue;
+    }
+    if (known.has(it.name)) continue;
+    const f = parseFileText(it.name, it.text);
+    f.originalDocs = structuredClone(f.docs);
+    STATE.files.push(f);
+  }
+  STATE.files.sort((a, b) => a.name.localeCompare(b.name));
+  rescan();
+}
+
+function rescan() {
+  STATE.findings = scanFiles(STATE.files);
+  /* Preserve which findings have already been applied across a rescan. */
+  for (const f of STATE.findings) f.applied = STATE.applied.has(findingKey(f));
+  if (STATE.acs) correlate(STATE.findings, STATE.acs.imported);
+  STATE.vulnCorr = STATE.vulns ? correlateVulns(STATE.files, STATE.vulns) : null;
+  render();
+}
+
+
+/* ------------------------------------------------------------- the mode gate
+ *
+ * One place decides what is permitted, and every action asks it. Scattering the checks
+ * across the handlers is how one of them ends up missing the check, and the one that
+ * misses it is the one that writes.
+ */
+function currentMode() {
+  try { return resolveFixMode($('fixMode').value); }
+  catch (e) { return 'report'; }   /* an unrecognised value falls to the SAFE end */
+}
+
+function requireMode(what, action) {
+  const m = currentMode();
+  if (modeAllows(m, what)) return true;
+  flash('Report only. Choose Manual or Auto at the top of the page to ' + action + '.');
+  return false;
+}
+
+/* Reflect the mode in the UI so the state is visible rather than remembered. Buttons that
+   cannot do anything in the current mode are disabled, not silently inert: a button that
+   looks live and does nothing teaches people to click harder. */
+function applyMode() {
+  const m = currentMode();
+  const info = FIX_MODE_INFO[m];
+  $('modeNote').textContent = info.summary;
+
+  const canWrite = modeAllows(m, 'writes');
+  const canEdit = modeAllows(m, 'edits');
+
+  /* render() owns the "is there work" half of the step and apply buttons, so only touch
+     the ones it does not, and let render() recompute the rest. */
+  $('btnPatches').disabled = !canWrite;
+  $('btnDownloadAll').disabled = !canEdit;
+  $('btnDownloadOne').disabled = !canEdit;
+  if (!canWrite) { $('btnStep').disabled = true; }
+  if (!canEdit) { $('btnApplyAll').disabled = true; }
+
+  /* Skipping the confirmation is only offered in auto, and even there it resets on
+     reload. In manual mode the confirmation IS the mode, so it cannot be turned off. */
+  const sc = $('skipConfirm');
+  sc.disabled = (m !== 'auto');
+  if (m !== 'auto') sc.checked = false;
+
+  const lbl = sc.parentElement;
+  if (lbl) lbl.style.opacity = (m === 'auto') ? '1' : '.45';
+
+  /* render() recomputes the buttons that depend on both the mode and the work available,
+     so it has to run after the mode changes, not before. */
+  if (STATE.files.length) render(); else renderTable();
+}
+
+/* ------------------------------------------------------------------- render */
+
+function render() {
+  const fl = $('filelist');
+  fl.innerHTML = '';
+  for (const f of STATE.files) {
+    const n = STATE.findings.filter((x) => x.file === f.name).length;
+    const chip = document.createElement('span');
+    chip.className = 'filechip' + (f.errors.length ? ' err' : '');
+    chip.textContent = f.name + ' (' + f.docs.length + ' doc' + (f.docs.length === 1 ? '' : 's') + ', ' + n + ' finding' + (n === 1 ? '' : 's') + ')';
+    if (f.errors.length) chip.title = f.errors.join('\n');
+    fl.appendChild(chip);
+  }
+  if (STATE.acs) {
+    const chip = document.createElement('span');
+    chip.className = 'filechip';
+    chip.style.borderColor = 'var(--crit)';
+    chip.textContent = 'ACS export: ' + STATE.acs.total + ' violation(s), ' +
+      STATE.acs.imported.length + ' matched, ' + STATE.acs.unmatched.length + ' not mapped';
+    fl.appendChild(chip);
+  }
+
+  // Vulnerability data alone is enough to have something worth showing.
+  const has = STATE.files.length > 0 || !!(STATE.vulns && STATE.vulns.rows.length);
+  $('app').classList.toggle('hidden', !has);
+  if (!has) return;
+  renderVulnPanel();
+  if (!STATE.files.length) { $('cards').innerHTML = ''; return; }
+
+  const open = STATE.findings.filter((f) => !f.applied);
+  const posture = computePosture(STATE.files, open, false);
+  const projected = computePosture(STATE.files, open, true);
+  const autoLeft = open.filter((f) => f.fixKind !== 'manual').length;
+  const manual = open.filter((f) => f.fixKind === 'manual').length;
+  const confirmed = STATE.findings.filter((f) => f.confirmedByAcs).length;
+
+  $('cards').innerHTML =
+    '<div class="card"><div class="num" style="color:' + scoreColour(posture.score) + '">' + posture.score + '</div><div class="lbl">Posture, grade ' + posture.grade + '</div></div>' +
+    '<div class="card"><div class="num" style="color:' + scoreColour(projected.score) + '">' + projected.score + '</div><div class="lbl">After remaining fixes</div></div>' +
+    '<div class="card crit"><div class="num">' + posture.counts.Critical + '</div><div class="lbl">Critical</div></div>' +
+    '<div class="card high"><div class="num">' + posture.counts.High + '</div><div class="lbl">High</div></div>' +
+    '<div class="card med"><div class="num">' + posture.counts.Medium + '</div><div class="lbl">Medium</div></div>' +
+    '<div class="card low"><div class="num">' + posture.counts.Low + '</div><div class="lbl">Low</div></div>' +
+    '<div class="card"><div class="num">' + STATE.applied.size + '</div><div class="lbl">Fixes applied</div></div>' +
+    '<div class="card"><div class="num">' + autoLeft + '</div><div class="lbl">Auto fixable left</div></div>' +
+    '<div class="card"><div class="num">' + manual + '</div><div class="lbl">Need a decision</div></div>' +
+    (STATE.acs ? '<div class="card"><div class="num" style="color:var(--crit)">' + confirmed + '</div><div class="lbl">Confirmed live by ACS</div></div>' : '');
+
+  $('btnUndo').disabled = STATE.history.length === 0;
+  $('btnReset').disabled = STATE.history.length === 0;
+  /* Two conditions gate these buttons and BOTH must hold: there has to be work, and the
+     mode has to permit it. They used to be set in two places, and render() ran last, so
+     it silently undid the mode restriction. The handlers still refused, so nothing could
+     actually be written, but the buttons looked live in report mode. A control that is
+     enforced but not visible teaches people the wrong model of the tool. One expression
+     per button now, and applyMode() is the only other writer. */
+  const mAllowsWrite = modeAllows(currentMode(), 'writes');
+  const mAllowsEdit = modeAllows(currentMode(), 'edits');
+  $('btnStep').disabled = autoLeft === 0 || !mAllowsWrite;
+  $('btnApplyAll').disabled = autoLeft === 0 || !mAllowsEdit;
+
+  renderTable();
+}
+
+function scoreColour(s) { return s >= 80 ? 'var(--low)' : s >= 60 ? 'var(--med)' : 'var(--crit)'; }
+
+function sortVal(f, key) {
+  switch (key) {
+    case 'sev': return sevRank(f.policy.severity);
+    case 'id': return f.policy.id;
+    case 'obj': return f.obj.toLowerCase();
+    case 'file': return f.file.toLowerCase();
+    case 'kind': return f.applied ? 0 : f.fixKind === 'auto' ? 1 : f.fixKind === 'generate' ? 2 : 3;
+    default: return sevRank(f.policy.severity);
+  }
+}
+
+function renderTable() {
+  document.querySelectorAll('#ftable th.sortable').forEach((th) => {
+    th.textContent = th.dataset.label + (STATE.sort.key === th.dataset.key ? (STATE.sort.dir === 1 ? ' ▲' : ' ▼') : '');
+  });
+  const rows = [...STATE.findings].sort((a, b) => {
+    const x = sortVal(a, STATE.sort.key), y = sortVal(b, STATE.sort.key);
+    if (x < y) return -1 * STATE.sort.dir;
+    if (x > y) return 1 * STATE.sort.dir;
+    return b.policy.score - a.policy.score;
+  });
+
+  const tb = $('ftable').querySelector('tbody');
+  tb.innerHTML = '';
+  rows.forEach((f) => {
+    const sev = sevLabel(f.policy.severity);
+    const tr = document.createElement('tr');
+    if (f.applied) tr.className = 'done';
+    const kindPill = f.applied
+      ? '<span class="pill fixed">Fixed</span>'
+      : f.fixKind === 'auto' ? '<span class="pill auto">Auto</span>'
+      : f.fixKind === 'generate' ? '<span class="pill gen">Generate</span>'
+      : '<span class="pill manual">Manual</span>';
+    tr.innerHTML =
+      '<td><span class="sev ' + sev + '">' + sev + '</span></td>' +
+      '<td><span class="acsid">' + f.policy.id + '</span><br><span style="font-size:11.5px">' + esc(f.policy.acsPolicy) + '</span>' +
+        (f.confirmedByAcs ? '<br><span class="pill acs">live in ACS</span>' : '') + '</td>' +
+      '<td>' + esc(f.obj) + '</td>' +
+      '<td style="font-family:ui-monospace,Consolas,monospace;font-size:11.5px">' + esc(f.file) + '</td>' +
+      '<td style="color:var(--muted)">' + esc(f.detail) + '</td>' +
+      '<td>' + kindPill + '</td><td></td>';
+    const cell = tr.lastElementChild;
+    if (!f.applied && f.fixKind !== 'manual') {
+      const b = document.createElement('button');
+      b.className = 'small';
+      b.textContent = 'Fix this';
+      b.addEventListener('click', (ev) => { ev.stopPropagation(); requestFix(f); });
+      cell.appendChild(b);
+    }
+
+    const dr = document.createElement('tr');
+    dr.className = 'hidden';
+    dr.innerHTML = '<td colspan="7" style="background:var(--panel2)">' + advisoryHtml(f) + '</td>';
+    tr.addEventListener('click', () => dr.classList.toggle('hidden'));
+    tb.appendChild(tr); tb.appendChild(dr);
+  });
+}
+
+function advisoryHtml(f) {
+  const p = f.policy;
+  return '<div class="kv">' +
+    '<div class="k">ACS policy</div><div>' + esc(p.acsPolicy) + '</div>' +
+    '<div class="k">ACS criteria</div><div>' + esc(p.acsCriteria) + '</div>' +
+    '<div class="k">Lifecycle</div><div>' + p.lifecycleStages.join(', ') + '</div>' +
+    '<div class="k">Categories</div><div>' + p.categories.join(', ') + '</div>' +
+    '<div class="k">Severity</div><div>' + sevLabel(p.severity) + ', CVSS style score ' + p.score.toFixed(1) + '</div>' +
+    '<div class="k">Vector</div><div style="font-family:ui-monospace,Consolas,monospace;font-size:11.5px">' + esc(p.vector) + '</div>' +
+    '<div class="k">Why it matters</div><div>' + esc(p.rationale) + '</div>' +
+    '<div class="k">What to do</div><div>' + esc(p.remediation) + '</div>' +
+    '<div class="k">Standards</div><div>' + citationsOf(p).map(esc).join(' &nbsp;|&nbsp; ') + '</div>' +
+    (f.confirmedByAcs ? '<div class="k">Live in ACS</div><div>Confirmed by your ACS export in namespace ' + esc(f.acsNamespace || '?') + (f.acsCluster ? ', cluster ' + esc(f.acsCluster) : '') + '</div>' : '') +
+    '</div>';
+}
+
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/* --------------------------------------------------------------- fix engine */
+
+function fileOf(name) { return STATE.files.find((f) => f.name === name); }
+
+/* Build the preview for a single finding without changing anything. */
+function previewFix(f) {
+  if (f.fixKind === 'generate') {
+    const doc = defaultDenyPolicy(f.ns);
+    const yaml = jsyaml.dump(doc, { noRefs: true });
+    return {
+      kind: 'generate', newFileName: 'networkpolicy-default-deny-' + f.ns + '.yaml',
+      yaml, changes: ['new file: a default deny NetworkPolicy for namespace "' + f.ns + '", DNS egress allowed'],
+      diff: yaml.split('\n').map((t) => ({ t: '+', text: t })),
+    };
+  }
+  const file = fileOf(f.file);
+  if (!file) return null;
+  const res = applyOneFix(file.docs, f);
+  if (!res) return null;
+  const before = dumpDocs(file.docs);
+  return {
+    kind: 'edit', file, res,
+    diff: compactDiff(diffLines(before, res.yaml), 3),
+    changes: res.changes,
+  };
+}
+
+/* ------------------------------------------------- vulnerability remediation
+ *
+ * The only honest fix on this side is replacing an image reference with one the operator
+ * supplies. It goes through exactly the same preview, confirm and undo path as every policy
+ * fix, so a mistake here is as recoverable as any other. */
+
+function renderVulnPanel() {
+  const p = $('vulnPanel');
+  if (!STATE.vulns || !STATE.vulns.rows.length) { p.classList.add('hidden'); return; }
+  p.classList.remove('hidden');
+  const s = summarizeVulns(STATE.vulns);
+  $('vulnSummary').innerHTML =
+    '<div class="kv">' +
+    '<div class="k">Active CVEs</div><div>' + s.active + ' across ' + s.images + ' image(s)</div>' +
+    '<div class="k">Critical</div><div>' + s.critical + (s.unfixableCritical ? ', of which ' + s.unfixableCritical + ' have no published fix' : '') + '</div>' +
+    '<div class="k">Known exploited</div><div>' + s.kev + ' on the CISA KEV catalog</div>' +
+    '<div class="k">Fixable now</div><div>' + s.fixable + ' (' + s.fixablePct + '% of active), clearable by rebuilding</div>' +
+    '<div class="k">Accepted in ACS</div><div>' + s.accepted + ' deferred or marked false positive, excluded from the counts above</div>' +
+    '</div>';
+
+  const decl = {};
+  for (const m of ((STATE.vulnCorr && STATE.vulnCorr.matches) || [])) {
+    (decl[m.scannedImage] = decl[m.scannedImage] || []).push(m);
+  }
+  const tb = $('vimgtable').querySelector('tbody');
+  tb.innerHTML = STATE.vulns.images.map((im, i) => {
+    const ms = decl[im.ref] || [];
+    const where = ms.length
+      ? ms.map((m) => '<div class="mono">' + esc(m.file) + '<br><span class="note">' + esc(m.obj) +
+          ', container ' + esc(m.container) + (m.drift ? ' &nbsp;<span class="chip crit">drift</span> manifest says ' + esc(m.manifestImage) : '') +
+          '</span></div>').join('')
+      : '<span class="note">not in the manifests you loaded</span>';
+    return '<tr>' +
+      '<td class="mono">' + esc(im.ref) + '</td>' +
+      '<td>' + (im.critical ? '<span class="sev Critical">' + im.critical + '</span>' : '0') + '</td>' +
+      '<td>' + im.fixable + '</td><td>' + im.cves + '</td>' +
+      '<td>' + where + '</td>' +
+      '<td>' + (ms.length ? '<button data-pin="' + i + '">Replace this image</button>' : '') + '</td>' +
+      '</tr>';
+  }).join('');
+  tb.querySelectorAll('button[data-pin]').forEach((b) => b.addEventListener('click', () =>
+    askImagePin(STATE.vulns.images[Number(b.dataset.pin)], decl[STATE.vulns.images[Number(b.dataset.pin)].ref] || [])));
+}
+
+function askImagePin(im, matches) {
+  if (!requireMode('writes', 'change an image reference')) return;
+  const host = $('modalHost');
+  host.innerHTML =
+    '<div class="modal"><div class="box">' +
+      '<h3>Replace this image reference?</h3>' +
+      '<div class="why mono">' + esc(im.ref) + '</div>' +
+      '<div class="kv">' +
+        '<div class="k">CVEs</div><div>' + im.cves + ', of which ' + im.fixable + ' have a published fix</div>' +
+        '<div class="k">Declared in</div><div>' + matches.map((m) => esc(m.file) + ' (' + esc(m.obj) + ', container ' + esc(m.container) + ')').join('<br>') + '</div>' +
+      '</div>' +
+      '<div class="warn">This tool will not invent a replacement tag for you. ACS reports fixed package ' +
+        'versions, not fixed image tags, and the mapping between them lives in your build. Rebuild the ' +
+        'image, then paste the reference you actually produced.</div>' +
+      '<div class="field" style="margin-top:10px"><label>New image reference</label>' +
+        '<input type="text" id="pinVal" placeholder="' + esc(im.ref.replace(/:[^:/]+$/, ':<new-tag>')) + '" autocomplete="off"></div>' +
+      '<div class="actions">' +
+        '<button id="mNo">Cancel</button>' +
+        '<button class="primary" id="mYes">Preview the change</button>' +
+      '</div>' +
+    '</div></div>';
+  $('mNo').addEventListener('click', closeModal);
+  $('mYes').addEventListener('click', () => {
+    const val = $('pinVal').value.trim();
+    if (!val) { alert('Enter the replacement image reference.'); return; }
+    closeModal();
+    applyImagePinToFiles(matches, val);
+  });
+}
+
+function applyImagePinToFiles(matches, newImage) {
+  if (!requireMode('writes', 'change an image reference')) return;
+  const touched = [];
+  for (const m of matches) {
+    const file = fileOf(m.file);
+    if (!file) continue;
+    const before = dumpDocs(file.docs);
+    const next = structuredClone(file.docs);
+    let changed = 0;
+    for (const doc of next) {
+      if (nameOf(doc) !== m.obj) continue;
+      try { changed += applyImagePin(doc, m.container, newImage); } catch (e) { /* no match here */ }
+    }
+    if (!changed) continue;
+    const after = dumpDocs(next);
+    touched.push({ file, before, after, next, m, changed });
+  }
+  if (!touched.length) { alert('Nothing matched. The manifest may have changed since the scan.'); return; }
+
+  const diff = compactDiff(diffLines(touched[0].before, touched[0].after), 3);
+  const commit = () => {
+    for (const t of touched) {
+      STATE.history.push({
+        fileName: t.file.name,
+        prevDocs: structuredClone(t.file.docs),
+        finding: { policy: { id: 'IMAGE', acsPolicy: 'Image reference replaced', severity: 'MEDIUM_SEVERITY',
+                             remediation: 'Operator supplied image reference' },
+                   obj: t.m.obj, file: t.file.name },
+        changes: ['container "' + t.m.container + '" image set to ' + newImage +
+                  ' (supplied by the operator, not derived by this tool)'],
+      });
+      t.file.docs = t.next;
+    }
+    rescan();
+  };
+  if ($('skipConfirm').checked) { commit(); return; }
+
+  $('modalHost').innerHTML =
+    '<div class="modal"><div class="box">' +
+      '<h3>Apply this image change?</h3>' +
+      '<div class="why">Setting <span class="mono">' + esc(newImage) + '</span> in ' +
+        touched.length + ' place(s).</div>' +
+      '<div class="warn">This changes what gets deployed. It does not verify that the tag exists, that ' +
+        'it is the image you think it is, or that it actually fixes the CVEs. Confirm the digest and test ' +
+        'before this reaches production.</div>' +
+      '<div style="margin:12px 0 4px;font-size:12px;color:var(--muted)">Exactly what will change:</div>' +
+      diffHtml(diff) +
+      '<div class="actions">' +
+        '<button id="mNo">Cancel</button>' +
+        '<button class="primary" id="mYes">Apply this change</button>' +
+      '</div>' +
+    '</div></div>';
+  $('mNo').addEventListener('click', closeModal);
+  $('mYes').addEventListener('click', () => { closeModal(); commit(); });
+}
+
+/* Commit a previewed fix. Separated from preview so nothing changes until confirmed. */
+function commitFix(f, pv) {
+  if (pv.kind === 'generate') {
+    const nf = parseFileText(pv.newFileName, pv.yaml);
+    nf.originalDocs = [];
+    nf.generated = true;
+    STATE.history.push({ generatedFile: pv.newFileName, finding: f, changes: pv.changes });
+    STATE.files.push(nf);
+  } else {
+    STATE.history.push({
+      fileName: pv.file.name,
+      prevDocs: structuredClone(pv.file.docs),
+      finding: f, changes: pv.changes,
+    });
+    pv.file.docs = pv.res.docs;
+  }
+  STATE.applied.add(findingKey(f));
+  rescan();
+}
+
+function requestFix(f) {
+  if (!requireMode('writes', 'apply a fix')) return;
+  const pv = previewFix(f);
+  if (!pv) { alert('Nothing to change for this finding. It may already be fixed.'); return; }
+  if ($('skipConfirm').checked) { commitFix(f, pv); return; }
+  showConfirm(f, pv, () => commitFix(f, pv));
+}
+
+/* ------------------------------------------------------------------- modals */
+
+function closeModal() { $('modalHost').innerHTML = ''; }
+
+function diffHtml(diff) {
+  return '<pre class="diff">' + diff.map((d) => {
+    const cls = d.t === '+' ? 'add' : d.t === '-' ? 'del' : d.t === '@' ? 'gap' : 'ctx';
+    const mark = d.t === '@' ? '  ' : d.t + ' ';
+    return '<div class="' + cls + '">' + esc(mark + d.text) + '</div>';
+  }).join('') + '</pre>';
+}
+
+function showConfirm(f, pv, onYes) {
+  const p = f.policy;
+  const host = $('modalHost');
+  host.innerHTML =
+    '<div class="modal"><div class="box">' +
+      '<h3>Apply this fix?</h3>' +
+      '<div class="why"><span class="acsid">' + p.id + '</span> ' + esc(p.acsPolicy) +
+        ' &nbsp;<span class="sev ' + sevLabel(p.severity) + '">' + sevLabel(p.severity) + '</span></div>' +
+      '<div class="kv">' +
+        '<div class="k">Object</div><div>' + esc(f.obj) + '</div>' +
+        '<div class="k">File</div><div style="font-family:ui-monospace,Consolas,monospace">' + esc(pv.kind === 'generate' ? pv.newFileName + ' (new file)' : f.file) + '</div>' +
+        '<div class="k">What changes</div><div>' + pv.changes.map(esc).join('<br>') + '</div>' +
+        '<div class="k">Why</div><div>' + esc(p.remediation) + '</div>' +
+      '</div>' +
+      (/PLACEHOLDER/.test(pv.changes.join(' ')) ? '<div class="warn">This fix inserts placeholder values. They are safe defaults but they are not tuned to your workload, so review them before you deploy.</div>' : '') +
+      (p.id === 'ACS.010' ? '<div class="warn">This rewrites the variable to read from a Secret, but it does not create that Secret and it cannot un-leak the value. Treat the exposed credential as compromised and rotate it.</div>' : '') +
+      '<div style="margin:12px 0 4px;font-size:12px;color:var(--muted)">Exactly what will change:</div>' +
+      diffHtml(pv.diff) +
+      '<div class="actions">' +
+        '<button id="mNo">Cancel</button>' +
+        '<button class="primary" id="mYes">Apply this fix</button>' +
+      '</div>' +
+    '</div></div>';
+  $('mNo').addEventListener('click', closeModal);
+  $('mYes').addEventListener('click', () => { closeModal(); onYes(); });
+}
+
+/* ------------------------------------------------------- step through mode */
+
+function startStepping() {
+  if (!requireMode('writes', 'step through fixes')) return;
+  const queue = STATE.findings.filter((f) => !f.applied && f.fixKind !== 'manual');
+  if (!queue.length) { alert('Nothing left to fix automatically.'); return; }
+  STATE.stepQueue = queue;
+  STATE.stepPos = 0;
+  showStep();
+}
+
+function showStep() {
+  const q = STATE.stepQueue;
+  if (!q || STATE.stepPos >= q.length) {
+    closeModal();
+    STATE.stepQueue = null;
+    render();
+    return;
+  }
+  const f = q[STATE.stepPos];
+  const pv = previewFix(f);
+  if (!pv) { STATE.stepPos++; showStep(); return; }
+  const p = f.policy;
+  const pct = Math.round((STATE.stepPos / q.length) * 100);
+
+  $('modalHost').innerHTML =
+    '<div class="modal"><div class="box">' +
+      '<div class="stepbar">' +
+        '<strong>Fix ' + (STATE.stepPos + 1) + ' of ' + q.length + '</strong>' +
+        '<div class="progress"><div style="width:' + pct + '%"></div></div>' +
+        '<span class="note" style="margin:0">' + STATE.applied.size + ' applied so far</span>' +
+      '</div>' +
+      '<h3>' + esc(p.acsPolicy) + '</h3>' +
+      '<div class="why"><span class="acsid">' + p.id + '</span> ' +
+        '<span class="sev ' + sevLabel(p.severity) + '">' + sevLabel(p.severity) + '</span> ' +
+        (f.confirmedByAcs ? '<span class="pill acs">live in ACS</span>' : '') + '</div>' +
+      '<div class="kv">' +
+        '<div class="k">Object</div><div>' + esc(f.obj) + '</div>' +
+        '<div class="k">File</div><div style="font-family:ui-monospace,Consolas,monospace">' + esc(pv.kind === 'generate' ? pv.newFileName + ' (new file)' : f.file) + '</div>' +
+        '<div class="k">Found</div><div>' + esc(f.detail) + '</div>' +
+        '<div class="k">Why it matters</div><div>' + esc(p.rationale) + '</div>' +
+        '<div class="k">What changes</div><div>' + pv.changes.map(esc).join('<br>') + '</div>' +
+        '<div class="k">Standards</div><div>' + citationsOf(p).map(esc).join(' &nbsp;|&nbsp; ') + '</div>' +
+      '</div>' +
+      (/PLACEHOLDER/.test(pv.changes.join(' ')) ? '<div class="warn">Placeholder values. Safe defaults, but tune them to the workload before deploying.</div>' : '') +
+      diffHtml(pv.diff) +
+      '<div class="actions">' +
+        '<button id="sStop">Stop here</button>' +
+        '<button id="sSkip">Skip this one</button>' +
+        '<button class="primary" id="sApply">Apply and continue</button>' +
+      '</div>' +
+    '</div></div>';
+
+  $('sStop').addEventListener('click', () => { STATE.stepQueue = null; closeModal(); render(); });
+  $('sSkip').addEventListener('click', () => { STATE.stepPos++; showStep(); });
+  $('sApply').addEventListener('click', () => {
+    commitFix(f, pv);
+    /* Findings are rebuilt by rescan, so requeue from the fresh list rather than the stale one. */
+    const remaining = STATE.findings.filter((x) => !x.applied && x.fixKind !== 'manual');
+    STATE.stepQueue = remaining;
+    STATE.stepPos = 0;
+    if (!remaining.length) { closeModal(); STATE.stepQueue = null; render(); return; }
+    showStep();
+  });
+}
+
+/* --------------------------------------------------------------- apply all */
+
+function reviewApplyAll() {
+  /* Applying the whole batch at once is the auto path by definition. Manual mode is the
+     one where you look at each change, so it deliberately cannot reach this. */
+  if (!requireMode('edits', 'apply the whole batch at once')) return;
+  const queue = STATE.findings.filter((f) => !f.applied && f.fixKind !== 'manual');
+  if (!queue.length) { alert('Nothing left to fix automatically.'); return; }
+
+  /* Preview the whole batch against a scratch copy so the diff shown is the real
+     cumulative result, not an optimistic guess. */
+  const scratch = STATE.files.map((f) => ({ name: f.name, docs: structuredClone(f.docs) }));
+  const perFile = {};
+  const summary = [];
+  const generated = [];
+  for (const f of queue) {
+    if (f.fixKind === 'generate') {
+      generated.push('networkpolicy-default-deny-' + f.ns + '.yaml');
+      summary.push(f.policy.id + '  ' + f.policy.acsPolicy + '  (new file for namespace ' + f.ns + ')');
+      continue;
+    }
+    const sf = scratch.find((s) => s.name === f.file);
+    if (!sf) continue;
+    const res = applyOneFix(sf.docs, f);
+    if (!res) continue;
+    sf.docs = res.docs;
+    perFile[f.file] = true;
+    summary.push(f.policy.id + '  ' + f.policy.acsPolicy + '  on ' + f.obj);
+  }
+
+  let diffHtmlAll = '';
+  for (const name of Object.keys(perFile)) {
+    const orig = dumpDocs(fileOf(name).docs);
+    const next = dumpDocs(scratch.find((s) => s.name === name).docs);
+    diffHtmlAll += '<div style="margin:12px 0 4px;font-size:12px;color:var(--muted)">' + esc(name) + '</div>' +
+      diffHtml(compactDiff(diffLines(orig, next), 2));
+  }
+  if (generated.length)
+    diffHtmlAll += '<div style="margin:12px 0 4px;font-size:12px;color:var(--muted)">New files</div>' +
+      '<pre class="diff">' + generated.map((g) => '<div class="add">+ ' + esc(g) + '</div>').join('') + '</pre>';
+
+  $('modalHost').innerHTML =
+    '<div class="modal"><div class="box">' +
+      '<h3>Apply ' + queue.length + ' fix' + (queue.length === 1 ? '' : 'es') + '?</h3>' +
+      '<div class="why">Every change below is applied to your YAML in this browser. Nothing runs against a cluster, and you can undo all of it.</div>' +
+      '<div class="warn">' + summary.length + ' change' + (summary.length === 1 ? '' : 's') + ' across ' +
+        Object.keys(perFile).length + ' file' + (Object.keys(perFile).length === 1 ? '' : 's') +
+        (generated.length ? ' plus ' + generated.length + ' new file' + (generated.length === 1 ? '' : 's') : '') + '.<br>' +
+        summary.map(esc).join('<br>') + '</div>' +
+      diffHtmlAll +
+      '<div class="actions">' +
+        '<button id="aNo">Cancel</button>' +
+        '<button class="primary" id="aYes">Apply all ' + queue.length + '</button>' +
+      '</div>' +
+    '</div></div>';
+
+  $('aNo').addEventListener('click', closeModal);
+  $('aYes').addEventListener('click', () => {
+    closeModal();
+    /* Re-resolve each finding at apply time; do not trust the preview objects. */
+    let guard = 0;
+    while (guard++ < 500) {
+      const next = STATE.findings.find((f) => !f.applied && f.fixKind !== 'manual');
+      if (!next) break;
+      const pv = previewFix(next);
+      if (!pv) { STATE.applied.add(findingKey(next)); rescan(); continue; }
+      commitFix(next, pv);
+    }
+    render();
+  });
+}
+
+/* ------------------------------------------------------------------- undo */
+
+function undoLast() {
+  const h = STATE.history.pop();
+  if (!h) return;
+  if (h.generatedFile) {
+    STATE.files = STATE.files.filter((f) => f.name !== h.generatedFile);
+  } else {
+    const file = fileOf(h.fileName);
+    if (file) file.docs = h.prevDocs;
+  }
+  STATE.applied.delete(findingKey(h.finding));
+  rescan();
+}
+
+function undoAll() {
+  for (const f of STATE.files) if (f.originalDocs) f.docs = structuredClone(f.originalDocs);
+  STATE.files = STATE.files.filter((f) => !f.generated);
+  STATE.history = [];
+  STATE.applied.clear();
+  rescan();
+}
+
+/* ----------------------------------------------------------------- exports */
+
+function stamp() {
+  const d = new Date(); const p = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+}
+function download(name, content, mime) {
+  const blob = content instanceof Blob ? content : new Blob([content], { type: mime || 'text/plain' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+function flash(msg) { $('exportMsg').textContent = msg; setTimeout(() => { $('exportMsg').textContent = ''; }, 3000); }
+
+function changeLog() {
+  let md = '# ACS remediation change log\n\nGenerated ' + new Date().toISOString().slice(0, 19).replace('T', ' ') + ' UTC by ' + ACS_TOOL + '.\n\n';
+  if (!STATE.history.length) return md + 'No changes were applied.\n';
+  md += STATE.history.length + ' change' + (STATE.history.length === 1 ? '' : 's') + ' applied.\n\n';
+  STATE.history.forEach((h, i) => {
+    const p = h.finding.policy;
+    md += '## ' + (i + 1) + '. ' + p.id + ' ' + p.acsPolicy + '\n\n';
+    md += '* **Severity:** ' + sevLabel(p.severity) + ' (score ' + p.score.toFixed(1) + ')\n';
+    md += '* **Object:** ' + h.finding.obj + '\n';
+    md += '* **File:** ' + (h.generatedFile || h.fileName) + (h.generatedFile ? ' (created)' : '') + '\n';
+    md += '* **Found:** ' + h.finding.detail + '\n';
+    md += '* **Changed:** ' + h.changes.join('; ') + '\n';
+    md += '* **Why this is better:** ' + p.rationale + '\n';
+    md += '* **Standards:** ' + citationsOf(p).join(' | ') + '\n\n';
+  });
+  const openManual = STATE.findings.filter((f) => f.fixKind === 'manual');
+  if (openManual.length) {
+    md += '## Still needing a human decision\n\n';
+    for (const f of openManual) {
+      md += '### ' + f.policy.id + ' ' + f.policy.acsPolicy + ' (' + sevLabel(f.policy.severity) + ')\n\n';
+      md += '* **Where:** ' + f.obj + ' in ' + f.file + '\n';
+      md += '* **Found:** ' + f.detail + '\n';
+      md += '* **Do this:** ' + f.policy.remediation + '\n';
+      md += '* **Standards:** ' + citationsOf(f.policy).join(' | ') + '\n\n';
+    }
+  }
+  md += '\n_No commands were run and no cluster was contacted. These changes were made to YAML text and must be reviewed and deployed through your normal process._\n';
+  return md;
+}
+
+function fullDiffText() {
+  let out = '';
+  for (const f of STATE.files) {
+    if (!f.originalDocs || !f.originalDocs.length) {
+      out += '=== ' + f.name + ' (new file) ===\n' + dumpDocs(f.docs) + '\n';
+      continue;
+    }
+    const before = dumpDocs(f.originalDocs);
+    const after = dumpDocs(f.docs);
+    if (before === after) continue;
+    out += '=== ' + f.name + ' ===\n';
+    for (const d of diffLines(before, after)) out += (d.t === ' ' ? '  ' : d.t + ' ') + d.text + '\n';
+    out += '\n';
+  }
+  return out || 'No changes have been applied yet.\n';
+}
+
+$('btnDownloadAll').addEventListener('click', async () => {
+  const zip = new JSZip();
+  for (const f of STATE.files) zip.file(f.name, dumpDocs(f.docs));
+  zip.file('CHANGE_LOG.md', changeLog());
+  download('acs_remediated_' + stamp() + '.zip', await zip.generateAsync({ type: 'blob' }));
+  flash('ZIP downloaded, folder structure preserved.');
+});
+$('btnDownloadOne').addEventListener('click', () => {
+  const all = STATE.files.map((f) => '# ' + f.name + '\n' + dumpDocs(f.docs)).join('---\n');
+  download('acs_remediated_' + stamp() + '.yaml', all, 'text/yaml');
+  flash('Single YAML downloaded.');
+});
+$('btnPatches').addEventListener('click', async () => {
+  const zip = new JSZip();
+  let n = 0;
+  for (const h of STATE.history) {
+    if (h.generatedFile) {
+      const f = fileOf(h.generatedFile);
+      if (f) { zip.file('new/' + h.generatedFile, dumpDocs(f.docs)); n++; }
+      continue;
+    }
+    const file = fileOf(h.fileName);
+    if (!file || !file.originalDocs) continue;
+    const idx = file.docs.findIndex((d) => nameOf(d) === h.finding.obj);
+    const orig = file.originalDocs.find((d) => nameOf(d) === h.finding.obj);
+    if (idx < 0 || !orig) continue;
+    const patch = buildMergePatch(orig, file.docs[idx]);
+    zip.file('patches/' + h.finding.policy.id + '_' + h.finding.obj.replace(/[^A-Za-z0-9]/g, '_') + '.yaml',
+      '# Strategic merge patch generated by ' + ACS_TOOL + '\n' +
+      '# ' + h.finding.policy.id + ' ' + h.finding.policy.acsPolicy + '\n' +
+      '# Apply through your GitOps process. This file is data, not a command.\n' +
+      jsyaml.dump(patch, { noRefs: true }));
+    n++;
+  }
+  if (!n) { flash('No changes applied yet, so there are no patches to write.'); return; }
+  zip.file('README.md', '# Merge patches\n\nOne strategic merge patch per applied fix, containing only the changed fields.\nUse these when the manifests are templated by Helm or Kustomize and cannot be edited directly.\n\nGenerated by ' + ACS_TOOL + '.\n');
+  download('acs_merge_patches_' + stamp() + '.zip', await zip.generateAsync({ type: 'blob' }));
+  flash(n + ' patch file(s) downloaded.');
+});
+$('btnCopyDiff').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(fullDiffText()); flash('Full diff copied to the clipboard.'); }
+  catch (e) { download('acs_diff_' + stamp() + '.txt', fullDiffText()); flash('Clipboard blocked, downloaded the diff instead.'); }
+});
+$('btnReport').addEventListener('click', () => {
+  download('acs_change_log_' + stamp() + '_' + currentMode() + '.md', changeLog(), 'text/markdown');
+  flash('Change log downloaded.');
+});
+
+/* --------------------------------------------------------------- input wiring */
+
+$('btnStep').addEventListener('click', startStepping);
+$('btnApplyAll').addEventListener('click', reviewApplyAll);
+$('btnUndo').addEventListener('click', undoLast);
+$('btnReset').addEventListener('click', () => {
+  if (confirm('Undo every change and return all files to how they were loaded?')) undoAll();
+});
+
+document.querySelectorAll('#ftable th.sortable').forEach((th) => th.addEventListener('click', () => {
+  if (STATE.sort.key === th.dataset.key) STATE.sort.dir *= -1;
+  else STATE.sort = { key: th.dataset.key, dir: 1 };
+  renderTable();
+}));
+
+const SKIP_DIRS = ['.git', 'node_modules', '.idea', '.vscode', '__pycache__'];
+function readAllEntries(reader) {
+  return new Promise((resolve, reject) => {
+    const out = [];
+    const step = () => reader.readEntries((entries) => {
+      if (!entries.length) return resolve(out);
+      out.push(...entries); step();
+    }, reject);
+    step();
+  });
+}
+async function walkEntry(entry, prefix, items) {
+  if (entry.isFile) {
+    if (!YAML_RE.test(entry.name) && !JSON_RE.test(entry.name)) return;
+    const file = await new Promise((res, rej) => entry.file(res, rej));
+    items.push({ name: prefix + entry.name, text: await file.text() });
+  } else if (entry.isDirectory) {
+    if (SKIP_DIRS.includes(entry.name)) return;
+    for (const e of await readAllEntries(entry.createReader()))
+      await walkEntry(e, prefix + entry.name + '/', items);
+  }
+}
+
+const dz = $('dropzone');
+dz.addEventListener('click', (e) => { if (e.target.closest('button') || e.target.tagName === 'INPUT') return; $('fileinput').click(); });
+$('btnFiles').addEventListener('click', () => $('fileinput').click());
+$('btnFolder').addEventListener('click', () => $('dirinput').click());
+dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('drag'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('drag'));
+dz.addEventListener('drop', async (e) => {
+  e.preventDefault(); dz.classList.remove('drag');
+  const entries = [], plain = [], items = [];
+  if (e.dataTransfer.items && e.dataTransfer.items.length && e.dataTransfer.items[0].webkitGetAsEntry) {
+    for (const it of e.dataTransfer.items) {
+      const en = it.webkitGetAsEntry && it.webkitGetAsEntry();
+      if (en) entries.push(en); else { const f = it.getAsFile && it.getAsFile(); if (f) plain.push(f); }
+    }
+  } else for (const f of e.dataTransfer.files) plain.push(f);
+  for (const en of entries) await walkEntry(en, '', items);
+  for (const f of plain) if (YAML_RE.test(f.name) || JSON_RE.test(f.name)) items.push({ name: f.name, text: await f.text() });
+  loadItems(items);
+});
+$('fileinput').addEventListener('change', async (e) => {
+  const items = [];
+  for (const f of e.target.files) items.push({ name: f.name, text: await f.text() });
+  loadItems(items); e.target.value = '';
+});
+$('dirinput').addEventListener('change', async (e) => {
+  const items = [];
+  for (const f of e.target.files) {
+    const rel = f.webkitRelativePath || f.name;
+    if (!YAML_RE.test(rel) && !JSON_RE.test(rel)) continue;
+    if (SKIP_DIRS.some((d) => rel.split('/').includes(d))) continue;
+    items.push({ name: rel, text: await f.text() });
+  }
+  loadItems(items); e.target.value = '';
+});
+
+$('btnDemo').addEventListener('click', () => loadItems([{ name: 'demo/workload.yaml', text: DEMO }]));
+
+const DEMO = [
+  'apiVersion: apps/v1',
+  'kind: Deployment',
+  'metadata:',
+  '  name: payments-api',
+  '  namespace: prod',
+  'spec:',
+  '  replicas: 2',
+  '  template:',
+  '    spec:',
+  '      hostNetwork: true',
+  '      hostPID: true',
+  '      containers:',
+  '      - name: api',
+  '        image: registry.example.com/payments:latest',
+  '        ports:',
+  '        - containerPort: 8080',
+  '          hostPort: 80',
+  '        env:',
+  '        - name: DB_PASSWORD',
+  '          value: hunter2',
+  '        securityContext:',
+  '          privileged: true',
+  '          runAsUser: 0',
+  '          capabilities:',
+  '            add: [SYS_ADMIN, NET_BIND_SERVICE]',
+  '      volumes:',
+  '      - name: dockersock',
+  '        hostPath:',
+  '          path: /var/run/docker.sock',
+  '',
+].join('\n');
+
+/* ------------------------------------------------------- live cluster panel */
+
+document.querySelectorAll('.tab').forEach((tb) => tb.addEventListener('click', () => {
+  document.querySelectorAll('.tab').forEach((x) => x.classList.remove('on'));
+  tb.classList.add('on');
+  $('tab-acs').classList.toggle('hidden', tb.dataset.t !== 'acs');
+  $('tab-vuln').classList.toggle('hidden', tb.dataset.t !== 'vuln');
+  $('tab-ocp').classList.toggle('hidden', tb.dataset.t !== 'ocp');
+  $('liveOut').innerHTML = '';
+}));
+
+function showCmd(title, cmd) {
+  $('liveOut').innerHTML = '<div class="note" style="margin-top:12px"><strong>' + esc(title) + '</strong></div>' +
+    '<pre class="cmd">' + esc(cmd) + '</pre>';
+}
+function showErr(msg, cmd, cmdTitle) {
+  $('liveOut').innerHTML = '<div class="err"><strong>Could not reach the API.</strong><br>' + esc(msg) + '</div>' +
+    (cmd ? '<div class="note" style="margin-top:10px"><strong>' + esc(cmdTitle) + '</strong></div><pre class="cmd">' + esc(cmd) + '</pre>' : '');
+}
+
+$('btnAcsCmd').addEventListener('click', () =>
+  showCmd('Run this where ACS is reachable, then drop acs_alerts.json onto this page.',
+    acsFallbackCommand($('acsUrl').value, $('acsQuery').value)));
+$('btnOcpCmd').addEventListener('click', () =>
+  showCmd('Run this where the cluster is reachable, then drop the YAML onto this page.',
+    openshiftFallbackCommand($('ocpNs').value)));
+
+$('btnVulnCmd').addEventListener('click', () =>
+  showCmd('Run this where ACS is reachable, then drop acs_vulns.ndjson onto this page.',
+    vulnFallbackCommand($('vulnUrl').value, { namespace: $('vulnNs').value })));
+
+$('btnVulnConnect').addEventListener('click', async () => {
+  const url = $('vulnUrl').value, tok = $('vulnToken').value, ns = $('vulnNs').value;
+  $('vulnMsg').textContent = 'Streaming the vulnerability export, this can take a while...';
+  $('liveOut').innerHTML = '';
+  try {
+    const res = await fetchVulnWorkloads(url, tok, { namespace: ns });
+    STATE.vulns = res;
+    STATE.vulnCorr = correlateVulns(STATE.files, res);
+    const sm = summarizeVulns(res);
+    $('vulnMsg').textContent = res.rows.length + ' CVE(s) across ' + res.images.length + ' image(s).';
+    let note = 'Pulled ' + res.workloads + ' workload(s), ' + res.images.length + ' image(s), ' +
+      res.rows.length + ' distinct CVE(s). ' + sm.critical + ' critical, ' + sm.kev +
+      ' known exploited, ' + sm.fixable + ' fixable now. The token has been cleared from the form.' +
+      '<br>None of these are auto fixable. Rebuild the image, then use Replace this image with the ' +
+      'reference you produced.';
+    if (!res.rows.length) note += '<br><strong>No CVEs came back.</strong> Usually the images have not ' +
+      'been scanned, the token cannot read Image, or the namespace filter matched nothing. An image with ' +
+      'no scan data is not an image with no vulnerabilities.';
+    $('liveOut').innerHTML = '<div class="note" style="margin-top:10px">' + note + '</div>';
+    render();
+  } catch (e) {
+    $('vulnMsg').textContent = '';
+    showErr(e.message, vulnFallbackCommand(url, { namespace: ns }),
+      'Use this instead, it does not involve the browser:');
+  } finally {
+    // Clear the credential on EVERY path, not just success. This used to sit in the try
+    // block, so a 403, a blocked origin or a certificate error left the token sitting in
+    // a DOM input. Failure is the common case for this feature, which made the leak the
+    // default rather than the exception.
+    $('vulnToken').value = '';
+  }
+});
+
+$('btnVulnWorklist').addEventListener('click', () => {
+  if (!STATE.vulns) return;
+  download(stamp() + '_image_worklist.md', buildVulnWorklist(STATE.vulns, STATE.vulnCorr), 'text/markdown');
+});
+
+$('btnAcsConnect').addEventListener('click', async () => {
+  const url = $('acsUrl').value, tok = $('acsToken').value, q = $('acsQuery').value;
+  $('acsMsg').textContent = 'Contacting Central...';
+  $('liveOut').innerHTML = '';
+  try {
+    const res = await fetchAcsAlerts(url, tok, { query: q, hydrate: $('acsHydrate').checked });
+    STATE.acs = res;
+    rescan();
+    $('acsMsg').textContent = res.total + ' violation(s) retrieved, ' + res.imported.length + ' mapped.';
+    $('liveOut').innerHTML = '<div class="note" style="margin-top:10px">Connected. Findings that are live in the cluster are now marked in the table. The token has been cleared from the form.</div>';
+  } catch (e) {
+    $('acsMsg').textContent = '';
+    showErr(e.message, acsFallbackCommand(url, q), 'Use this instead, it does not involve the browser:');
+  } finally {
+    // Clear the credential on EVERY path, not just success. This used to sit in the try
+    // block, so a 403, a blocked origin or a certificate error left the token sitting in
+    // a DOM input. Failure is the common case for this feature, which made the leak the
+    // default rather than the exception.
+    $('acsToken').value = '';
+  }
+});
+
+$('btnOcpConnect').addEventListener('click', async () => {
+  const url = $('ocpUrl').value, tok = $('ocpToken').value, ns = $('ocpNs').value;
+  $('ocpMsg').textContent = 'Pulling workloads...';
+  $('liveOut').innerHTML = '';
+  try {
+    const res = await fetchOpenShiftWorkloads(url, tok, ns);
+    if (!res.count && res.errors.length) throw new Error(res.errors.join(' | '));
+    loadItems(res.files);
+    $('ocpMsg').textContent = res.count + ' live workload(s) pulled.';
+    $('liveOut').innerHTML = '<div class="note" style="margin-top:10px">Pulled ' + res.count +
+      ' object(s), server side fields stripped. Fix them here and download the result. Nothing was written back to the cluster. The token has been cleared from the form.' +
+      (res.errors.length ? '<br>Some kinds could not be listed: ' + esc(res.errors.join(' | ')) : '') + '</div>';
+  } catch (e) {
+    $('ocpMsg').textContent = '';
+    showErr(e.message, openshiftFallbackCommand(ns), 'Use this instead, it does not involve the browser:');
+  } finally {
+    // Clear the credential on EVERY path, not just success. This used to sit in the try
+    // block, so a 403, a blocked origin or a certificate error left the token sitting in
+    // a DOM input. Failure is the common case for this feature, which made the leak the
+    // default rather than the exception.
+    $('ocpToken').value = '';
+  }
+});
+
+$('fixMode').addEventListener('change', () => {
+  applyMode();
+  flash('Mode: ' + FIX_MODE_INFO[currentMode()].label + '. ' + FIX_MODE_INFO[currentMode()].summary);
+});
+applyMode();
+
+const themeBtn = $('themeBtn');
+function applyTheme(t) {
+  document.body.classList.toggle('light', t === 'light');
+  themeBtn.textContent = t === 'light' ? 'Dark mode' : 'Light mode';
+  try { localStorage.setItem('djacsTheme', t); } catch (e) {}
+}
+themeBtn.addEventListener('click', () => applyTheme(document.body.classList.contains('light') ? 'dark' : 'light'));
+try { applyTheme(localStorage.getItem('djacsTheme') || 'dark'); } catch (e) { applyTheme('dark'); }
+</script>
+</body>
+</html>
