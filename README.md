@@ -17,7 +17,7 @@ Audit Kubernetes and OpenShift manifests against Red Hat Advanced Cluster Securi
 | `scripts/acs_pull_all.sh` and `.ps1` | Pull every finding ACS has, all severities and states, from outside the browser |
 | `scripts/acs_pull_via_oc.sh` | Same, but reaches Central through your existing `oc` session |
 | `scripts/acs_pull_over_ssh.ps1` | PowerShell, when only a bastion can reach the cluster |
-| `test/run_tests.js` | 531 tests against the real engine, pages and CLI |
+| `test/run_tests.js` | 694 tests against the real engine, pages and CLI |
 
 Open either HTML file directly. There is nothing to install and no server to run.
 
@@ -38,9 +38,53 @@ Three sources, and you can use any combination.
 
 **Local scan.** Drop in YAML and the engine evaluates it against replicas of the ACS default Deploy stage policies. Works with no ACS access at all, which makes it usable in development, in CI, and on a disconnected network.
 
-**Your ACS violations.** Pull live from Central, or drop in an export or a roxctl JSON report alongside the YAML. Each violation is matched back to a policy by name, so findings present in both are marked **live in ACS**, which tells you the problem is not theoretical: it exists in a running cluster right now.
+**Your ACS violations.** Run `scripts/acs_pull_all.sh`, then drop what it writes onto the page. A roxctl JSON report works too. Each violation is matched back to a policy by name, so findings present in both are marked **live in ACS**, which tells you the problem is not theoretical: it exists in a running cluster right now.
 
-**Your ACS vulnerability export.** Pull live, or drop the `.ndjson` on the page. Every CVE is ranked, tied back to the manifest and container line that pulls the image, and checked for drift between what git says and what ACS actually scanned.
+**Your ACS vulnerability export.** Same route, then drop the `.ndjson` on the page. Every CVE is ranked, tied back to the manifest and container line that pulls the image, and checked for drift between what git says and what ACS actually scanned.
+
+Drop as many of those files as you like, in any order. They accumulate rather than replace each other, and a violation that arrives twice, once slim from the list endpoint and once hydrated from the detail endpoint, is deduplicated with the hydrated copy kept.
+
+**The pages never connect to anything.** There is no URL field, no token field, and no `fetch` call in either of them. A page opened from a file has a null origin and neither ACS Central nor the OpenShift API sends a header that permits it, so an in browser connector could never have worked. Building one anyway meant asking for a live API token in exchange for a request the browser then blocked. The scripts run where the cluster is actually reachable, keep the token out of shell history and out of `ps`, and verify TLS properly.
+
+## Seeing and fixing violations
+
+Every violation in the export gets a row: severity, policy, object, namespace, state, the violation text, and what can be done about it. Filters cover your workloads against platform components, matched against unmatched, and fixable only. Click a row for the rationale, the standards it maps to, and the reasoning behind the fix route.
+
+The Fix column is the point. A count you cannot act on is not a finding.
+
+| Route | What it means |
+|---|---|
+| **In your YAML** | The manifest is loaded, so the fix is applied to it directly on the remediation page and you download the corrected file. |
+| **Patch** | No manifest for this object, so a strategic merge patch is drafted from the violation itself. |
+| **Need manifest** | Fixable in principle, but the violation does not carry enough to draft a patch safely. |
+| **Human decision** | The policy has no mechanical fix. Somebody has to decide. |
+| **Platform** | A platform component. Listed, never patched. |
+| **Not modelled** | No policy in the catalogue matches. Reported rather than dropped. |
+
+Each row has a checkbox. Nothing is selected until you select it, and the draft button stays disabled until something is, for the same reason report mode is the default. The header box takes every fixable violation **currently shown**, which is not the same as everything imported. A violation with no fix route gets a disabled checkbox rather than none, so the absence of an option reads as an answer instead of an oversight. The selection follows the violation, not the row, so filtering and sorting do not move your ticks.
+
+Drafted fixes are YAML files and nothing else. No command is run and no cluster is touched, on any surface, in any mode. Each file carries a header naming the object, the namespace, the policies it covers, and the fact that it was built from a violation rather than from a manifest and therefore needs verifying. Test it against a namespace you do not care about, then apply it yourself.
+
+Violations on platform components are always listed and never patched. The owning operator reverts manual edits, so a patch there changes nothing except how hard the drift is to find. Raise a policy exception with an expiry, change the cluster configuration through the supported path, or open a case with Red Hat.
+
+From the CLI:
+
+```bash
+# the default: an account of what could be fixed, and no YAML at all
+node acs_cli.js --alerts 02_alerts_full.json --violation-fixes
+
+# the YAML itself, for everything
+node acs_cli.js --alerts 02_alerts_full.json --violation-fixes --mode manual --out fixes
+
+# see what is there, then act on a subset
+node acs_cli.js --alerts 02_alerts_full.json --list-violations
+node acs_cli.js --alerts 02_alerts_full.json --violation-fixes --mode manual \
+  --select Deployment/payments-api,ACS.004 --out fixes
+```
+
+`--select` takes an alert id, an object name, or a policy id. A term that matches nothing exits non zero and writes nothing, rather than warning and continuing: a typo in a narrowing option does not narrow less, it fails to narrow at all, and a run you believed was scoped to one Deployment would quietly cover the cluster. Omitting `--select` still means everything, which is how it behaved before the option existed.
+
+The written account records the scope. If you drafted fixes for four violations out of thirty it says so at the top and states that the other twenty six are not described anywhere in it, because a report covering a subset otherwise reads identically to one covering the whole cluster.
 
 ## Vulnerabilities
 
@@ -261,11 +305,17 @@ node test/run_tests.js
 npm install jsdom && node test/run_tests.js
 ```
 
-247 engine tests, no install required, plus 33 whole page tests that need jsdom and skip without it. 280 in total. They cover the policy catalogue, scanning and scoring, fix application and YAML validity, diff correctness, merge patch minimality, ACS import across all three export shapes plus renamed policy matching, the full remediation flow including that preview mutates nothing and undo restores byte for byte, and the vulnerability path end to end: NDJSON parsing, CVE deduplication, priority reasoning, manifest correlation and drift.
+580 engine and CLI tests, no install required, plus 114 whole page tests that need jsdom and skip without it. 694 in total.
+
+They cover the policy catalogue, scanning and scoring, fix application and YAML validity, diff correctness, merge patch minimality, ACS import across every export shape the pull script writes plus renamed policy matching, the full remediation flow including that preview mutates nothing and undo restores byte for byte, and the vulnerability path end to end: NDJSON parsing, CVE deduplication, priority reasoning, manifest correlation and drift.
 
 Four of them fail against the pre fix alert entity resolution and pass against the current one, which is the evidence that the ListAlert bug is actually fixed rather than merely reported as fixed.
 
-`test/page.cjs` adds 33 more that load each HTML file in a real DOM and drive it. They catch what engine tests structurally cannot: an element id that does not exist, a handler never bound, a panel that never unhides. It needs jsdom, so it is optional and skips rather than fails.
+`test/exports.cjs` loads all six files `acs_pull_all.sh` writes and asserts each is understood, that dropping several merges rather than overwrites, that merging the same file twice changes nothing, and that a file which cannot be loaded is told what it is rather than what it is not.
+
+`test/cli_violations.cjs` runs the CLI as a real process and inspects what lands on disk. The strongest assertion in it is the negative one: report mode leaves nothing behind that anyone could apply.
+
+`test/page.cjs` loads each HTML file in a real DOM and drives it. It catches what engine tests structurally cannot: an element id that does not exist, a handler never bound, a panel that never unhides. The violation fix button shipped once with no click handler at all, which is exactly that shape of defect. It needs jsdom, so it is optional and skips rather than fails.
 
 ## Security
 
@@ -275,21 +325,30 @@ The tool has been reviewed against itself. Findings, and what was done:
 |---|---|
 | CVE links from an ACS export reached an `href` with no scheme check, so `javascript:` and `data:` executed in a page holding a live token | **Fixed.** `safeUrl` allowlists http and https, everything else renders as inert text. 19 cases in `test/hardening.cjs`. |
 | Generated commands used `curl -sk`, teaching operators to disable TLS verification on a request carrying a bearer token | **Fixed.** Verification on by default, `--cacert` guidance shown, insecure is opt in and warns. |
-| Token clearing sat inside `try`, so it was skipped on failure, and failure is the common path with CORS | **Fixed.** Moved to `finally` across all six connectors. |
+| Token clearing sat inside `try`, so it was skipped on failure, and failure is the common path with CORS | **Superseded.** The in browser connectors were removed entirely, so there is no longer a token to clear. |
+| The browser asked for a live ACS API token in exchange for a request the browser then blocked | **Fixed by removal.** A page opened from a file has a null origin and neither ACS Central nor the OpenShift API sends a header that permits it, so the feature could never work from there. The risk was real and the benefit was zero. Use `scripts/acs_pull_all.sh`, which runs where the cluster is reachable, keeps the token out of shell history and out of `ps`, and verifies TLS. |
 | No CSP on the pages or the generated report | **Proposed**, see `docs/PROPOSAL_page_hardening.md`. |
 | CDN fallback with no SRI, which also contradicts the offline claim | **Proposed**, same document. Recommendation is to fail closed. |
 
 Every fix has a regression test that was confirmed to fail against the pre fix code.
-Standing guarantees, asserted on every run: no `exec`, `eval` or `Function` constructor
-in any shipped file; no token in browser storage; every token field a password input;
-GET only, no write method to any cluster.
+
+Standing guarantees, asserted on every run: no `exec`, `eval` or `Function` constructor in
+any shipped file; no token in browser storage; no password field, no token identifier and
+no `fetch` call anywhere in either page; GET only, no write method to any cluster; and
+nothing in the remediation path runs a command, on any surface, in any mode.
+
+One process is spawned anywhere in the tool, and it is worth naming rather than leaving the
+guarantee looking broader than it is. `--in-place --mode auto` runs `git status --porcelain`
+via `execFileSync` with an argument array and no shell, in the directory you pointed at, and
+refuses to overwrite your files if the tree is dirty or is not a repository. It reads. It
+remediates nothing. Everything else the tool produces is a file.
 
 ## Documentation
 
 | Document | For |
 |---|---|
 | `docs/DJ_ACS_Auditor_User_Guide.docx` | Operators. How to scan, connect to a live cluster, apply fixes, and export. Illustrated. |
-| `docs/DJ_Security_Tooling_Administration_Guide.docx` | Maintainers. Architecture, tests, adding policies, vendoring, waivers, CI, release. Covers KYSA too. |
+| `docs/DJ_Security_Tooling_Administration_Guide.docx` | Maintainers. Architecture, tests, adding policies, vendoring, exceptions, CI, release. |
 
 Figures are generated from source: `python3 docs/make_figures.py` and `python3 docs/make_admin_figures.py`.
 The documents are built with `node docs/doc1.js` and `node docs/doc2.js`.

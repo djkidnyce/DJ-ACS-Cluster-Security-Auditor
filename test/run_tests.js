@@ -26,6 +26,8 @@ const SUITES = [
   ['cli.cjs', 'the command line runner, gating, fixes, patches, SARIF'],
   ['kubejson.cjs', 'loading workloads exported from a cluster as JSON'],
   ['platform.cjs', 'platform violations, all states, and fixing without a manifest'],
+  ['exports.cjs', 'loading all six acs_pull_all.sh outputs, merging, violation fix routes'],
+  ['cli_violations.cjs', 'the CLI drafting violation fixes to YAML, run end to end'],
   ['page.cjs', 'whole page wiring in a real DOM (needs jsdom, skips without it)'],
 ];
 

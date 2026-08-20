@@ -20,24 +20,25 @@ const title = [
   new Paragraph({ spacing: { before: 900 }, children: [new TextRun({ text: '' })] }),
   ...Note('crit', 'The one guarantee that governs this entire tool', [
     'No command is ever executed to remediate a finding. Every fix is a text edit made to YAML inside your browser and handed back to you as a file. The tool does not call oc, kubectl, roxctl, helm, or a shell. It does not write to a cluster. It does not apply anything on your behalf.',
-    'The two live connect features described in section 6 are read only HTTP GET calls that pull manifests and violations in. Nothing is ever pushed back out.']),
+    'The pages do not connect to anything at all. They have no URL field, no token field, and no network call in them. Data comes out of ACS through the scripts in section 6, which run in a shell where the cluster is reachable and only ever issue a GET.']),
   new Paragraph({ children: [new PageBreak()] }),
 ];
 
 const toc = [
   P('Contents', { heading: HeadingLevel.HEADING_1 }),
   ...['1. What this tool does','2. Report, manual, or auto','3. Before you start','4. Quick start',
-      '5. Loading manifests and reading the audit','6. Pulling straight from your cluster',
+      '5. Loading manifests and reading the audit','6. Getting the data out of ACS',
       '7. Vulnerabilities: why an empty alert list proves nothing',
-      '8. Working the CVE list','9. Cross checking against your ACS export','10. Applying fixes',
+      '8. Working the CVE list','9. Seeing and fixing violations','10. Applying fixes',
       '11. What gets fixed automatically, and what deliberately does not','12. Taking the result out',
       '13. How the score is calculated','14. Policy reference','15. Limits, stated plainly',
       '16. Troubleshooting','17. Contact'].map((t) => P(t, { spacing: { after: 90 }, size: 22 })),
   P('Figures', { bold: true, size: 22, spacing: { before: 240, after: 90 } }),
   ...['Figure 1. The auditor after a scan (section 5)',
-      'Figure 2. The live connect panel (section 6)',
+      'Figure 2. Getting the data out of ACS (section 6)',
       'Figure 7. The two ACS data planes (section 7)',
       'Figure 3. Step through remediation (section 10)',
+      'Figure 8. The violations panel and the fix routes (section 9)',
       'Figure 4. Export options (section 12)'].map((t) => P(t, { spacing: { after: 90 }, size: 22, color: MUT })),
   new Paragraph({ children: [new PageBreak()] }),
 ];
@@ -148,40 +149,46 @@ H2('Posture by category');
 T('The bars group findings the way ACS groups its own policies: Privileges, Network, Kubernetes, Docker CIS, Resource Management, Security Best Practices, and DevOps Best Practices. A single tall bar usually means a systemic problem, one bad base template copied across twenty services, rather than twenty unrelated mistakes.');
 
 // ---------------- 5
-H1('6. Pulling straight from your cluster');
-T('Both pages carry a live connect panel. It has two tabs. The OpenShift tab pulls the live workload objects out of the cluster API so you can audit what is actually deployed rather than what you think is deployed. The ACS tab pulls violations out of ACS Central so findings can be marked as confirmed in a running cluster.');
-push(Fig(F('fig2_live_connect.png'), 'Figure 2. The live connect panel, showing the ACS Central tab. The OpenShift API tab sits beside it.', 640));
-H2('OpenShift API tab');
-push(NumList(['API URL: your cluster API endpoint, for example https://api.example.com:6443. You can get it with oc whoami --show-server.',
-  'Token: a bearer token. The quickest source is oc whoami -t once you are logged in.',
-  'Namespace: optional. Leave it blank to sweep every namespace you can read, or name one to scope the pull.',
-  'Press Pull live workloads.']));
-T('The tool requests Deployments, DaemonSets, StatefulSets, Jobs, CronJobs, and Pods, then sanitises each object before it goes anywhere near the scanner.');
-H2('What sanitising removes, and why it matters');
-T('A live object from the API is not a manifest. It carries server side bookkeeping that would be wrong, noisy, or actively dangerous to write back into git. The tool strips it:');
-push([Bul('managedFields, resourceVersion, uid, selfLink, generation, and creationTimestamp, all of which are assigned by the API server.'),
+H1('6. Getting the data out of ACS');
+T('Earlier versions of this tool carried a connect panel in the page: type a Central URL, paste an API token, press fetch. It has been removed. This section explains why, because the reasoning matters more than the feature did, and then shows what to do instead.');
+push(Note('warn', 'Why there is no connect button any more', [
+  'A page opened from a file has a null origin. Neither ACS Central nor the OpenShift API sends a header that permits a null origin, so the browser blocks the response before the page ever sees it. This is the browser working correctly and no amount of rewriting the page changes it.',
+  'That left a feature which asked you to paste a live ACS API token into a browser tab in exchange for a request that then failed. The token was real, the risk was real, and the benefit was zero.',
+  'Mitigating that risk, masking the field, clearing the value, keeping it out of storage, was work spent making a credential slightly safer in a place it had no reason to be. Removing the feature deletes the risk class instead of managing it. The test suite now asserts the stronger property: no password field, no token identifier and no network call exists in either page.']));
+push(Fig(F('fig2_pull_workflow.png'), 'Figure 2. The supported path. The scripts run where the cluster is reachable, and the page reads what they write.', 640));
+
+H2('Step one: the preflight');
+T('Run scripts/acs_preflight.sh before anything else. It checks that the endpoint resolves and answers, that TLS verifies, that the token is valid, and, most usefully, that the token can actually read each of the three things the export needs.');
+T('That last check is worth its own paragraph. A token scoped only to Alert will pull violations perfectly and return 403 on the vulnerability export. You see violations, you see no CVEs, and nothing tells you the second half silently failed. The preflight catches it in one line.');
+H2('Step two: the pull');
+T('scripts/acs_pull_all.sh writes seven files into a timestamped directory:');
+push([Tbl(['File', 'Endpoint', 'What it is for'], [
+  ['00_auth_status.json', '/v1/auth/status', 'Who the token is and what it can see. Evidence for the audit trail.'],
+  ['01_alerts_list.json', '/v1/alerts', 'Every violation, slim. No violation text, by design of the API.'],
+  ['02_alerts_full.json', '/v1/alerts/{id}', 'The same violations hydrated with their violation text. This is the one that matters.'],
+  ['03_vuln_workloads.ndjson', '/v1/export/vuln-mgmt/workloads', 'CVEs in the images your workloads are actually running.'],
+  ['04_all_images.ndjson', '/v1/export/images', 'Every image ACS has scanned, deployed or not.'],
+  ['05_nodes.ndjson', '/v1/export/nodes', 'CVEs on the nodes themselves.'],
+  ['06_snoozed.ndjson', '/v1/alerts', 'Violations somebody deferred, so a deferral does not become invisible.'],
+], [2700, 2700, 3900])]);
+body.push(P('', { spacing: { after: 140 } }));
+T('The scripts read the token from the environment or prompt for it without echo. It is never passed as a command argument, so it does not appear in ps output where any other user on the machine could read it, and it does not land in your shell history. TLS is verified by default and --cacert is supported for a private CA.');
+push(Note('info', 'If you are not on a Unix shell, or Central is not reachable from your workstation', [
+  'scripts/acs_pull_all.ps1 is the PowerShell equivalent and needs no additional modules.',
+  'scripts/acs_pull_over_ssh.ps1 runs the pull on a jump host over SSH and brings the files back, for the case where Central is only reachable from inside the environment.',
+  'scripts/acs_pull_via_oc.sh uses an oc port forward to Central instead of a route, for clusters where Central has no external route at all. Note that an HTTP proxy will break a port forward: the tool passes --noproxy so the local forward is not sent through it.']));
+H2('Step three: drop them on the page');
+T('Drag all of them onto the drop zone at once, in any order, alongside your YAML. They accumulate rather than replace each other, which was not true in an earlier version and is the reason this is spelled out: dropping six files used to leave you looking at whichever one landed last.');
+T('A violation that arrives twice, once slim from 01 and once hydrated from 02, is recognised as the same violation and deduplicated, with the hydrated copy kept. Nothing is uploaded anywhere. The file is read inside the tab and never leaves the machine.');
+H2('Auditing what is deployed rather than what you think is deployed');
+T('To audit the running cluster rather than the repository, export the live objects with oc and drop that file on the page as well:');
+push(Code(['oc get deployment,daemonset,statefulset,cronjob,job --all-namespaces -o json > workloads.json']));
+T('A live object from the API is not a manifest. It carries server side bookkeeping that would be wrong, noisy, or actively dangerous to write back into git, so the tool strips it on load:');
+push([Bul('managedFields, resourceVersion, uid, selfLink, generation and creationTimestamp, all assigned by the API server.'),
       Bul('ownerReferences, so a Pod created by a ReplicaSet does not carry a dangling parent link into your repository.'),
-      Bul('The entire status block, which is observed state and not something you declare.'),
+      Bul('The entire status block, which is observed state rather than something you declare.'),
       Bul('The kubectl.kubernetes.io/last-applied-configuration annotation, which is a stale copy of the object embedded inside the object.')]);
 T('Meaningful annotations survive. If stripping annotations would leave an empty map, the map itself is removed rather than left as an empty stub, which keeps the emitted YAML clean. The test suite asserts all of this, including that a sanitised object remains fully scannable and fixable.');
-H2('ACS Central tab');
-push(NumList(['Central URL: the route to ACS Central, for example https://central-stackrox.apps.example.com.',
-  'Token: an ACS API token. Generate one in the ACS console under Platform Configuration, Integrations, Authentication Tokens. A read only role is sufficient and is what you should use.',
-  'Query: optional ACS search syntax, for example Severity:CRITICAL_SEVERITY, to narrow what comes back.',
-  'Press Fetch violations.']));
-T('The tool calls the /v1/alerts endpoint with an Authorization bearer header. Every violation returned is matched back to a policy in the catalogue, and any violation that cannot be matched to a manifest is reported separately rather than quietly dropped.');
-H2('Token handling');
-push(Note('warn', 'Read this before you paste a token', [
-  'Both token fields are password inputs, so the value is masked on screen and excluded from browser autofill history.',
-  'The token is held in a variable for the duration of the request and cleared afterward. It is never written to localStorage, sessionStorage, IndexedDB, or a cookie. It is never included in the audit report, the JSON export, the change log, or any downloaded file. This has been verified by grep across every shipped file and is covered by the test suite.',
-  'It is still a live credential in a browser tab. Use a short lived, least privilege token. For OpenShift, oc whoami -t returns a token tied to your session, which expires. For ACS, create a dedicated read only token rather than reusing an admin one, and revoke it when you are finished.']));
-H2('When the connection fails');
-T('The most common failure is not a bad token. It is the browser blocking the request before it leaves, because a page opened from disk has a null origin and neither the OpenShift API server nor ACS Central sends a header permitting it. This is the browser working correctly.');
-T('The tool classifies the failure and tells you which one you hit rather than showing a generic error. Three ways forward:');
-push([Bul('Add your origin to spec.additionalCORSAllowedOrigins on the APIServer resource. This is a cluster change and needs a change request in most environments.'),
-      Bul('Serve the page from an origin the API already trusts, such as a route on the cluster itself.'),
-      BulRich([{ t: 'Use the offline path. Press ' }, { t: 'Show the offline command instead', b: true },
-               { t: ' and the tool prints a ready to run curl or oc command with your URL already filled in. Run it in a terminal, save the output, and drop the file onto the page. Same result, no cluster change, and it is usually the fastest route in a locked down environment.' }])]);
 
 // ---------------- 6
 // ---------------- 6 vulnerabilities
@@ -205,10 +212,10 @@ push([Bul('It streams NDJSON, one JSON object per line, not a single JSON docume
 T('Field names and response shapes were verified against the upstream StackRox service and message definitions: vuln_mgmt_service.proto for the endpoint and query syntax, image.proto for the scan structure, and vulnerability.proto and cve.proto for the CVE fields and the severity and state enumerations. Confirm them against your own ACS version before treating them as fixed.');
 H2('Using it');
 push(NumList([
-  'Open the Vulnerabilities (CVEs) tab in the live connect panel.',
-  'Enter the Central URL and an API token with read on Image and Deployment. Scope by namespace if the cluster is large, because a full export is slow.',
-  'Press Pull vulnerability data.',
-  'Or, if the browser blocks the call, press Show the offline command instead, run the curl it generates, and drop the resulting .ndjson file onto the drop zone with your manifests.']));
+  'Run scripts/acs_preflight.sh and confirm the token can read Image and Deployment. A token scoped only to Alert fails here and nowhere else.',
+  'Run scripts/acs_pull_all.sh. Scope by namespace if the cluster is large, because a full export is slow.',
+  'Drop 03_vuln_workloads.ndjson onto the page with your manifests. Add 04_all_images.ndjson if you want images that are scanned but not deployed, and 05_nodes.ndjson for the nodes themselves.']));
+T('The tool reads all three shapes. An image with no running workload is labelled as not deployed rather than attributed to a Deployment that does not exist, and a node CVE is labelled as a node. A record that carried scan data the tool could not tie to either is reported as an error rather than silently dropped.');
 
 // ---------------- 7 working the CVE list
 H1('8. Working the CVE list');
@@ -249,10 +256,67 @@ T('Download the image worklist gives you a markdown document grouped by image ra
 T('A list organised by CVE looks like progress and cannot be actioned. A list organised by image is a set of rebuilds.');
 
 // ---------------- 8
-H1('9. Cross checking against your ACS export');
-T('You do not need a live connection to use ACS data. Export violations from ACS Central or produce a roxctl JSON report, then drop that file onto the page alongside your YAML. The importer accepts all three export shapes.');
-T('Findings that appear in both your manifests and your ACS data are marked live in ACS. That marking is worth more than it looks: it tells you the problem is not theoretical, it exists in a running cluster right now, and it should jump the queue.');
-H2('Reading the disagreements');
+H1('9. Seeing and fixing violations');
+T('An earlier version of this page reported ACS data as three numbers: violations imported, violations matched, violations not matched. That tells you something is wrong and gives you no way to look at it or act on it. Every violation now gets a row, and every row says what can be done about it.');
+push(Fig(F('fig8_violations_panel.png'), 'Figure 8. The violations panel. Tick what you want to fix; the Fix column says what each route will do.', 640));
+H2('The filters');
+T('Five checkboxes, and the defaults are chosen to match what the ACS console shows you first:');
+push([Bul('Your workloads and Platform components. On by default and off by default respectively, the same split the ACS console applies. Platform violations are real and worth seeing, but they are not yours to fix, and mixing them into your queue makes your queue look worse and less actionable than it is.'),
+      Bul('Matched to a policy and Unmatched. A violation the catalogue cannot map to a policy is still shown, under its own filter, rather than dropped.'),
+      Bul('Fixable only, for when you want the work queue rather than the picture.')]);
+T('Click any row to open the rationale, the standards the policy maps to, the cluster and lifecycle stage it came from, and the reasoning behind the fix route it was given.');
+H2('The fix routes');
+T('Six routes, and which one a violation gets depends on what the tool can see:');
+push([Tbl(['Route', 'What it means', 'What you do'], [
+  ['In your YAML', 'The manifest for this object is loaded, so the fix can be made in the real file.', 'Use the remediation page. You get a diff, a confirmation, and undo.'],
+  ['Patch', 'ACS reported it, you did not load the manifest, but the violation carries enough to draft a patch.', 'Draft the YAML, review it, test it, apply it.'],
+  ['Need manifest', 'Fixable in principle, but the violation does not carry enough to draft a patch safely.', 'Load the manifest, then it becomes an in place fix.'],
+  ['Human decision', 'The policy has no mechanical fix. A network policy or an image provenance rule is a decision, not an edit.', 'Read the remediation text and decide.'],
+  ['Platform', 'A platform component.', 'Do not patch it. See below.'],
+  ['Not modelled', 'No policy in the catalogue matches this one.', 'Add it to the catalogue, or handle it in ACS.'],
+], [1700, 4200, 3400])]);
+body.push(P('', { spacing: { after: 140 } }));
+H2('Why platform components are never patched');
+push(Note('warn', 'A patch here changes nothing except how hard the drift is to find', [
+  'Objects in openshift-, kube- and redhat- namespaces are reconciled by an operator. Edit one and the operator reverts it, usually within seconds and without telling you.',
+  'The edit does not fix the violation. It does add drift between what is declared and what is running, and that drift is now harder to see because somebody has made a change that looks deliberate.',
+  'The supported routes are a policy exception in ACS with an expiry on it, a configuration change through whatever path the operator exposes, or a case with Red Hat. All three leave a record. A silent manual edit does not.']));
+H2('Choosing which ones to fix');
+T('Each row carries a checkbox. Nothing is ticked when the table first renders, and the draft button stays disabled until something is, which is the same reasoning as report mode being the default: the state you get by doing nothing is the state that does nothing.');
+push([Bul('The box in the table header ticks or clears every fixable violation currently shown. Currently shown, not everything imported. Selecting rows you have filtered out of view is how somebody ends up drafting a patch for a namespace they had deliberately excluded.'),
+      Bul('A violation with no fix route this tool can take, a platform component for instance, gets a disabled checkbox rather than no checkbox. Hover it for the reason. A missing control looks like an oversight; a disabled one with a tooltip is an answer.'),
+      Bul('The selection follows the violation, not the row. Change a filter or sort a column and your ticks stay on the same violations. The count next to the button tells you if some of what you selected is currently hidden.'),
+      Bul('A violation imported after you made a selection does not arrive pre ticked. Consent given for one finding does not extend to findings you have not seen yet.')]);
+push(Note('info', 'The report records the scope, not just the fixes', [
+  'If you drafted fixes for four violations out of thirty, the written account says so at the top and states that the other twenty six are not described anywhere in it.',
+  'This matters six months later. A document covering a subset reads identically to a document covering the whole cluster unless it says which one it is, and the person reading it then is usually not the person who generated it.']));
+H2('Drafting the fix');
+T('Press Draft fixes for the ones you selected. What comes out is YAML files and a written account, and nothing else. No command is run. No cluster is contacted. Nothing is applied.');
+T('Each drafted file carries a header naming the object, the namespace, the policies it covers, and the fact that it was built from a violation rather than from a manifest the tool has read, which is exactly why it needs a human to look at it before it goes anywhere. Where several policies apply to the same object they are merged into one file, because you apply a patch to an object once, and ten files for the same Deployment is not ten fixes.');
+push(Note('info', 'One warning the header will sometimes carry, and why it matters', [
+  'A strategic merge patch keys the containers array on name. If the container name could not be read out of the violation text, the patch would add a nameless container to your Deployment rather than patching the one you meant.',
+  'The tool does not guess. It emits the patch with the name blank and puts a warning in the header telling you to fill it in. Read the header before you apply anything.']));
+T('The same thing from the command line, where the mode is explicit for the same reason it is explicit in the page:');
+push(Code(['# the default. An account of what could be fixed, and no YAML at all.',
+           'node acs_cli.js --alerts 02_alerts_full.json --violation-fixes',
+           '',
+           '# the YAML itself, for everything.',
+           'node acs_cli.js --alerts 02_alerts_full.json --violation-fixes --mode manual --out fixes']));
+T('The checkboxes have a command line equivalent. See what is there, then name what you want:');
+push(Code(['# the menu: every violation, its key, its object and its fix route. Writes nothing.',
+           'node acs_cli.js --alerts 02_alerts_full.json --list-violations',
+           '',
+           '# then act on a subset. Takes an alert id, an object, or a policy id.',
+           'node acs_cli.js --alerts 02_alerts_full.json --violation-fixes --mode manual \\',
+           '  --select Deployment/payments-api,ACS.004 --out fixes']));
+push(Note('warn', 'A --select term that matches nothing is an error, not a warning', [
+  'The command exits non zero, names the term that matched nothing, and writes no files.',
+  'This is deliberate and it is the opposite of how most tools treat a bad filter. A typo in a narrowing option does not narrow less, it fails to narrow at all, and the run you thought was scoped to one Deployment quietly covers the cluster. Failing is the safe direction.',
+  'Omitting --select entirely still means everything, which is how the tool behaved before the option existed. That is the one permissive default here, and it is only for compatibility.']));
+T('Then review the files, apply them to a namespace you do not care about, confirm the workload still runs, and only then take them to the change you actually care about.');
+
+H2('Cross checking against what you have in git');
+T('If you loaded manifests as well, findings that appear in both are marked live in ACS. That marking is worth more than it looks: it tells you the problem is not theoretical, it exists in a running cluster right now, and it should jump the queue.');
 T('The cross check earns its keep in both directions.');
 push([Bul('In the manifest but not in ACS. The namespace may be outside ACS coverage, or a policy exception may be suppressing it. Both are worth confirming rather than assuming.'),
       Bul('In ACS but not in your manifests. Either the manifest is not in the set you loaded, or the cluster has drifted away from git. Drift is a finding in its own right.')]);
@@ -353,7 +417,7 @@ T('Every finding also carries citations to the CIS Kubernetes Benchmark, NIST SP
 
 // ---------------- 12
 H1('15. Limits, stated plainly');
-push([Bul('This is static analysis of manifest text. It does not query a cluster unless you explicitly use the live connect panel, and even then it only reads.'),
+push([Bul('This is static analysis of manifest text. The pages never contact a cluster at all. The scripts do, and they only ever issue a GET.'),
       Bul('It is not a replacement for ACS, for admission control such as Pod Security Admission or Kyverno, or for runtime enforcement. It is a way to fix the manifest before any of those have to reject it.'),
       Bul('ACS policies that evaluate build metadata or runtime process behaviour cannot be judged from YAML at all. Those violations are reported as unmatched rather than pretended away.'),
       Bul('Image CVEs are pulled from ACS, not discovered by this tool. It does no scanning of its own. If ACS has not scanned an image, this tool has nothing to report about it, and it says so rather than showing a reassuring zero.'),
@@ -365,8 +429,11 @@ push([Bul('This is static analysis of manifest text. It does not query a cluster
 H1('16. Troubleshooting');
 push([Tbl(['Symptom', 'Cause and fix'], [
   ['Folder upload opens a second dialog', 'Your browser does not support the File System Access API and fell back to a directory input. Pick the folder once in the fallback dialog. Chrome and Edge take the single action path.'],
-  ['Live connect fails immediately with no network activity', 'Browser blocked it at the origin check. Use Show the offline command instead, or serve the page from a trusted origin. See section 6.'],
-  ['Certificate error on connect', 'Your cluster or Central uses an internal CA the browser does not trust. Trust the CA, or use the offline command path.'],
+  ['Looking for the connect button from an older version', 'Removed, deliberately. It could never work from a file:// page and the token risk was real while the benefit was zero. Use scripts/acs_pull_all.sh. See section 6.'],
+  ['Certificate error running the pull script', 'Central uses an internal CA. Pass --cacert with your CA bundle. Do not reach for the insecure flag on a request carrying a bearer token.'],
+  ['Dropped six files and only one appeared', 'Fixed. Imports now accumulate and deduplicate rather than replacing each other. If you are on an older copy, that is the symptom, and updating is the fix.'],
+  ['A file is rejected with "expected Kubernetes or OpenShift objects"', 'The page now says what the file actually is instead. The most common case is dropping the tool\'s own findings export back in: that is a record of a previous run, not an input, and it has no manifests in it to rescan.'],
+  ['Violations import but there is nothing to click', 'You are on an older copy. Violations are rows with a fix route on each one. See section 9.'],
   ['ACS violations import but nothing is marked live', 'Policy names did not match. Check the unmatched list. If a name in your ACS version is missing from the alias table, it belongs in acs_policies.js. See the administration guide.'],
   ['Alerts come back with a policy name but no explanation', 'You fetched the list without the detail. GET /v1/alerts returns ListAlert, which has no violations array. Tick Fetch violation detail. See section 6.'],
   ['Zero alerts returned and the cluster is clearly not clean', 'Three usual causes: the query defaults to active violations only, the token is scoped to fewer namespaces than you think, or you are looking for CVEs, which never appear here at all. Use the Vulnerabilities tab.'],

@@ -39,37 +39,41 @@ def render(name,svg,w,h,scale=2):
     print("  ",name+".png",f"{int(w*scale)}x{int(h*scale)}")
 os.makedirs(OUT,exist_ok=True); print("Rendering admin figures")
 
-# ---------------- Figure 5: architecture of both toolsets
-W,H=1160,660
+# ---------------- Figure 5: architecture
+W,H=1160,600
 p=[f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" font-family="{FONT}">',
    f'<rect width="{W}" height="{H}" fill="{BG}"/>',DEFS,
-   hdr(W,"Architecture of both toolsets","One engine per toolset. Every surface reads it. Nothing duplicates policy logic.")]
-# KYSA column
-p.append(f'<rect x="24" y="82" width="546" height="546" rx="10" fill="{PANEL2}" stroke="{BORDER}"/>')
-p.append(f'<text x="44" y="108" font-size="14" font-weight="bold" fill="{TEXT}">DJ\'s KYSA  v2.0</text>')
-p.append(f'<text x="44" y="126" font-size="10.5" fill="{MUTED}">Kubernetes and OpenShift YAML security auditor</text>')
-p.append(box(44,142,506,58,"ksa_catalog.js   ENGINE",["KSA.001 to KSA.0xx  |  checks, fixes, citations, weights"],GRN,PANEL,True))
-p.append(arrow(297,200,297,224,"","#4b5563"))
-for i,(t,l) in enumerate([("dj_kysa_kubernetes_openshift_yaml_auditor.html",["Browser GUI. Scan, score, select fixes, bundle"]),
-                          ("kysa_cli.js  +  kysa.ps1 / .cmd / .sh",["Same engine headless. Fix, annotate, commit, push, PR"]),
-                          ("dj_kysa_catalog_manager.html",["Author and deprecate KSA ids. Emits catalog + README"]),
-                          ("dj_kysa_pipeline_console.html",["Builds the exact CLI command for you to copy"])]):
-    p.append(box(44,226+i*74,506,60,t,l,ACC))
-p.append(box(44,522,506,58,"test/run_tests.js",["80 tests against the same engine the GUI loads"],PUR))
-p.append(f'<text x="44" y="606" font-size="10.5" fill="{MUTED}">vendor/  js-yaml 4.1.0 and JSZip 3.10.1, committed. No package manager, no network.</text>')
-# ACS column
-p.append(f'<rect x="590" y="82" width="546" height="546" rx="10" fill="{PANEL2}" stroke="{BORDER}"/>')
-p.append(f'<text x="610" y="108" font-size="14" font-weight="bold" fill="{TEXT}">DJ\'s ACS Auditor  v1.0</text>')
-p.append(f'<text x="610" y="126" font-size="10.5" fill="{MUTED}">Red Hat Advanced Cluster Security policy audit and remediation</text>')
-p.append(box(610,142,506,58,"acs_policies.js   ENGINE",["ACS.001 to ACS.020  |  checks, fixes, ACS mapping, STIG refs"],GRN,PANEL,True))
-p.append(arrow(863,200,863,224,"","#4b5563"))
-for i,(t,l) in enumerate([("dj_acs_auditor.html",["Read only. Scan, score, cross check ACS, export report"]),
-                          ("dj_acs_remediation.html",["Preview, confirm, step through, undo. Writes YAML only"]),
-                          ("Live connect  (read only HTTP GET)",["OpenShift /apis/apps/v1  |  ACS Central /v1/alerts"]),
-                          ("Export routes",["ZIP, single YAML, strategic merge patches, diff, change log"])]):
-    p.append(box(610,226+i*74,506,60,t,l,ACC))
-p.append(box(610,522,506,58,"test/run_tests.js",["149 tests across smoke, fixes, import, flow, live"],PUR))
-p.append(f'<text x="610" y="606" font-size="10.5" fill="{MUTED}">vendor/  identical js-yaml and JSZip builds, verified by SHA-256.</text>')
+   hdr(W,"Architecture","One engine. Every surface reads it. Nothing duplicates policy logic.")]
+
+p.append(box(310,84,540,62,"acs_policies.js   THE ENGINE",
+  ["ACS.001 to ACS.020  |  checks, fixes, ACS import and matching, CVE model,",
+   "violation fix routing, patch drafting, diff, citations, weights"],GRN,PANEL,True))
+
+# fan out to the surfaces
+for x in (170,470,770,1010):
+    p.append(arrow(580,148,x if x!=580 else 580,196,"","#4b5563"))
+
+surfaces=[(24,"dj_acs_auditor.html",["Read only. Scan, score,","cross check, violations","panel, export the report"]),
+          (318,"dj_acs_remediation.html",["Preview, confirm, step","through, undo. Produces","YAML you download"]),
+          (612,"acs_cli.js",["Headless. Same output,","for a pipeline. acs.sh,","acs.ps1, acs.cmd wrap it"]),
+          (906,"test/*.cjs",["694 assertions against","the same engine every","surface loads"])]
+for x,t,l in surfaces:
+    p.append(box(x,196,230,110,t,l,PUR if t.startswith("test") else ACC))
+
+# what talks to a cluster, and what does not
+p.append(f'<rect x="24" y="330" width="1112" height="112" rx="10" fill="{PANEL2}" stroke="{BORDER}"/>')
+p.append(f'<text x="44" y="356" font-size="11" font-weight="bold" fill="{ACC}">WHERE THE CLUSTER IS ACTUALLY CONTACTED</text>')
+p.append(f'<text x="44" y="380" font-size="11" fill="{TEXT}">Nowhere above. The pages contain no network call at all, and the CLI reads files.</text>')
+p.append(f'<text x="44" y="400" font-size="11" fill="{MUTED}">scripts/acs_pull_all.sh and its PowerShell, SSH and oc port forward variants issue every request, GET only, in a shell where</text>')
+p.append(f'<text x="44" y="418" font-size="11" fill="{MUTED}">the token can be kept out of ps and out of history. Their output is dropped onto a page or passed to the CLI with --alerts.</text>')
+
+p.append(f'<text x="24" y="470" font-size="10.5" fill="{MUTED}">vendor/  js-yaml 4.1.0 and JSZip 3.10.1, committed and verified by SHA-256. No package manager, no network, works air gapped.</text>')
+
+p.append(f'<rect x="24" y="490" width="1112" height="86" rx="10" fill="{PANEL2}" stroke="{BORDER}"/>')
+p.append(f'<rect x="24" y="490" width="3" height="86" fill="{GRN}"/>')
+p.append(f'<text x="44" y="516" font-size="12" font-weight="bold" fill="{TEXT}">The rule this diagram exists to enforce</text>')
+p.append(f'<text x="44" y="538" font-size="11" fill="{MUTED}">Never copy a check into a second file to make a surface work. If a surface cannot reach the engine, fix the loading, not the logic.</text>')
+p.append(f'<text x="44" y="558" font-size="11" fill="{MUTED}">The failure this prevents: the page reports a finding, the pipeline does not, and nobody notices for months.</text>')
 p.append('</svg>')
 render("fig5_architecture","".join(p),W,H)
 
@@ -78,11 +82,11 @@ W,H=1160,560
 p=[f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" font-family="{FONT}">',
    f'<rect width="{W}" height="{H}" fill="{BG}"/>',DEFS,
    hdr(W,"Maintenance cycle","What a maintainer runs, in order, and what gates the release")]
-steps=[("1","Watch the sources",["dj_kysa_source_watcher.py","STIG viewer, NVD 90 days,","NSA guidance, PSS hash"],AMB),
-       ("2","Review the drift",["dj_kysa_catalog_manager.html","What changed since the","last published catalog"],AMB),
-       ("3","Edit the engine",["ksa_catalog.js  or","acs_policies.js","check, fix, citations, weight"],ACC),
-       ("4","Run the tests",["node test/run_tests.js","80 KYSA  +  149 ACS","New policy, new test"],PUR),
-       ("5","Bump and release",["CHANGELOG.md, version stamp","cleanup_release.sh","Tag, then publish"],GRN)]
+steps=[("1","Upgrade ACS",["Red Hat adds, renames and","re-weights default policies","between releases"],AMB),
+       ("2","Diff the defaults",["ACS console vs","acs_policies.js","Watch the unmatched count"],AMB),
+       ("3","Edit the engine",["acs_policies.js","check, fix, alias, citations,","weight. One file only"],ACC),
+       ("4","Run the tests",["node test/run_tests.js","694, and prove any new","regression test fails first"],PUR),
+       ("5","Release",["CHANGELOG.md, version stamp","git status --short","Then publish"],GRN)]
 x=24
 for i,(n,t,lines,col) in enumerate(steps):
     p.append(box(x,110,196,132,t,lines,col))

@@ -9,17 +9,18 @@ const title = [
   new Paragraph({ spacing: { before: 2600, after: 0 },
     children: [new TextRun({ text: 'Administration Guide', bold: true, size: 60, color: DARK })] }),
   new Paragraph({ spacing: { after: 60 }, children: [new TextRun({
-    text: "Managing and maintaining DJ's KYSA and DJ's ACS Auditor", size: 26, color: ACC })] }),
+    text: "Managing and maintaining DJ's ACS Auditor", size: 26, color: ACC })] }),
   new Paragraph({ spacing: { after: 400 },
     border: { bottom: { style: BorderStyle.SINGLE, size: 8, color: ACC } }, children: [new TextRun({ text: '' })] }),
   P('For maintainers, platform engineers, and anyone who owns these tools', { bold: true, size: 24 }),
-  P("Covers DJ's KYSA v2.0 and DJ's ACS Auditor v1.0", { size: 22, color: MUT }),
+  P("Covers DJ's ACS Auditor v1.0", { size: 22, color: MUT }),
   P('Document date: 11 August 2026', { size: 22, color: MUT }),
   P('Author: DJ', { size: 22, color: MUT }),
   new Paragraph({ spacing: { before: 900 }, children: [new TextRun({ text: '' })] }),
   ...Note('info', 'Who this is for', [
     'This is the operator and maintainer document. It assumes you are comfortable with Node, git, YAML, and Kubernetes security concepts, and it skips the definitions.',
-    'For a walkthrough of using the ACS tool, read the User Guide instead. For a non technical introduction to KYSA, read GETTING_STARTED.md in that repository.']),
+    'For a walkthrough of using the tool, read the User Guide instead.',
+    'Scope: this covers the ACS Auditor only. DJ\'s KYSA is a separate tool in a separate repository, maintained separately. The two share design principles and nothing else, and until they are actually merged this document describes only what ships in this repository. Documenting a tool that is not here means describing files a reader cannot find.']),
   new Paragraph({ children: [new PageBreak()] }),
 ];
 
@@ -47,58 +48,50 @@ const push = (a) => a.forEach((x) => body.push(x));
 
 // 1
 H1('1. What you are maintaining');
-T('Two related but independent toolsets. They share design principles, a scoring model, and a vendoring strategy. They do not share code, and neither depends on the other.');
-push([Tbl(['', "DJ's KYSA v2.0", "DJ's ACS Auditor v1.0"], [
-  ['Judges against', 'CIS, NSA and CISA, NIST 800-53 Rev 5, Pod Security Standards, DISA STIG', 'Red Hat ACS default Deploy stage policies, plus the same standards as citations'],
-  ['Policy ids', 'KSA.001 upward, extensible by the catalog manager', 'ACS.001 through ACS.020, fixed set mirroring ACS defaults'],
-  ['Engine file', 'ksa_catalog.js', 'acs_policies.js'],
-  ['Surfaces', 'Browser GUI, CLI, catalog manager, pipeline console, source watcher', 'Auditor page, remediation page, live connect'],
-  ['Writes to disk', 'Yes, via the CLI when you pass the fix switches', 'No. The browser hands you files to download'],
-  ['Talks to a cluster', 'No', 'Read only GET, only when you ask. Three endpoints: OpenShift workloads, ACS alerts, ACS vulnerability export'],
-  ['Tests', '80', '531 across the engine, the pages and the command line'],
-], [1700, 3800, 3800])]);
+T('One tool, in one repository, with three surfaces over a single engine. The auditor page reads and scores. The remediation page proposes and applies text edits to YAML. The command line does either, headless, for a pipeline. All three load acs_policies.js and none of them reimplements a check.');
+push([Tbl(['', "DJ's ACS Auditor v1.0"], [
+  ['Judges against', 'Red Hat ACS default Deploy stage policies, with CIS, NIST 800-53 Rev 5, Pod Security Standards and DISA STIG carried as citations'],
+  ['Policy ids', 'ACS.001 through ACS.020, a fixed set mirroring the ACS defaults'],
+  ['Engine file', 'acs_policies.js, and only that file'],
+  ['Surfaces', 'Auditor page, remediation page, pull scripts, command line'],
+  ['Writes to disk', 'The pages hand you files to download. The CLI writes only where you point it, and only in manual or auto mode'],
+  ['Talks to a cluster', 'The pages never do. The scripts and the CLI issue GET only'],
+  ['Tests', '694 across the engine, the pages and the command line'],
+], [1900, 7400])]);
 body.push(P('', { spacing: { after: 140 } }));
-T('KYSA is the broader tool and the one wired into CI. The ACS Auditor is narrower and deliberately more conservative, because it exists to be used against production manifests by people who may not have written them.');
+T('It is deliberately conservative, because it exists to be pointed at production manifests by people who may not have written them. That is the reason report is the default mode, the reason platform components are never patched, and the reason nothing it produces is ever applied on your behalf.');
+push(Note('info', 'On DJ\'s KYSA, and the eventual merge', [
+  'KYSA is a separate tool in a separate repository. It judges against CIS, NSA and CISA, NIST and STIG directly rather than against ACS policy, it has its own engine and its own catalogue, and it is the one wired into CI.',
+  'The two are intended to merge into one project. They have not merged yet, so nothing in this document describes KYSA, and nothing in this repository contains it. When the merge happens, the shared parts, the scoring model, the vendoring strategy, the waiver format and the CI templates, will be documented here in one place rather than described twice.',
+  'Until then, a reader following this document should be able to find every file it mentions in this repository. That is the test this document is written against.']));
 
 // 2
 H1('2. Repository layout');
-H2("DJ's KYSA");
 push([Tbl(['Path', 'Role'], [
-  ['ksa_catalog.js', 'The policy catalogue and engine. Every finding, check, fix, weight, and citation lives here.'],
-  ['dj_kysa_kubernetes_openshift_yaml_auditor.html', 'The browser GUI. Also holds the version constant that stamps every report.'],
-  ['kysa_cli.js', 'Headless runner. Scan, fix, annotate, commit, push, open a pull request.'],
-  ['kysa.ps1, kysa.cmd, kysa.sh', 'Shell wrappers. Identical switches across PowerShell, Command Prompt, and Bash.'],
-  ['kysa_build_engine.js', 'Generates the engine module from the HTML so the GUI and CLI cannot drift apart.'],
-  ['dj_kysa_catalog_manager.html', 'Authoring surface for new and deprecated KSA ids. Emits the catalogue and a README.'],
-  ['dj_kysa_pipeline_console.html', 'Builds the exact CLI invocation from checkboxes. Useful for people who will not read switches.'],
-  ['dj_kysa_source_watcher.py', 'Pulls current STIG, CVE, and guidance state. Standard library only.'],
-  ['kysa_waivers.yaml', 'Accepted risk register. Every entry carries an expiry.'],
-  ['ci_templates/', 'GitHub Actions and GitLab CI starting points.'],
-  ['vendor/', 'js-yaml and JSZip, committed with hashes documented in vendor/README.md.'],
-  ['test/run_tests.js', '80 tests.'],
-  ['cleanup_release.sh, make_v2_release.sh, make_v2_release.ps1', 'Release helpers. Written for bash 3.2, see section 12.'],
-], [3600, 5700])]);
-body.push(P('', { spacing: { after: 140 } }));
-H2("DJ's ACS Auditor");
-push([Tbl(['Path', 'Role'], [
-  ['acs_policies.js', 'Engine. Twenty policies, alert import and matching, the vulnerability export parser and CVE model, the live connectors, diff, and merge patch builder.'],
+  ['acs_policies.js', 'Engine. Twenty policies, alert import and matching, the vulnerability export parser and CVE model, violation fix routing and patch drafting, diff, and merge patch builder. Policy logic lives here and nowhere else, so the page, the CLI and the tests cannot disagree.'],
   ['dj_acs_auditor.html', 'Read only audit surface.'],
   ['dj_acs_remediation.html', 'Interactive fix surface with preview, confirm, step through, and undo.'],
   ['vendor/', 'Identical js-yaml and JSZip builds.'],
-  ['test/*.cjs', 'smoke, fixes, import, flow, live, vuln, hardening, cli, kubejson, platform. page.cjs needs jsdom and skips cleanly without it.'],
+  ['acs_cli.js', 'Headless runner. Same engine, same output, no cluster access.'],
+  ['acs.sh, acs.ps1, acs.cmd', 'Wrappers so the switches are identical across Bash, PowerShell and Command Prompt.'],
+  ['scripts/', 'The ACS pull scripts. Preflight, full pull, an oc port forward variant, and PowerShell and SSH equivalents.'],
+  ['test/*.cjs', 'smoke, fixes, import, flow, live, vuln, hardening, cli, kubejson, platform, exports, cli_violations. page.cjs needs jsdom and skips cleanly without it.'],
   ['test/run_tests.js', 'Runner. Aggregates every suite and prints one total.'],
   ['docs/', 'Figure generators and the two Word documents.'],
 ], [3600, 5700])]);
 body.push(P('', { spacing: { after: 140 } }));
-push(Note('warn', 'Housekeeping worth doing on the KYSA folder', [
-  'The KYSA working folder currently contains a directory literally named # holding a complete duplicate of the release, several dated zip archives, a Version/ folder of older bundles, and macOS .DS_Store files.',
-  'None of that belongs in a published repository. The duplicate is the dangerous one: a maintainer editing the wrong copy will not get an error, they will get a change that silently does nothing. Delete it before you publish, and keep .gitignore covering .DS_Store, __pycache__, and *.zip.']));
+push(Note('warn', 'Keep the published tree clean', [
+  'A working folder accumulates things that should never reach a published repository: duplicate copies of a release, dated zip archives, older version bundles, and macOS .DS_Store files.',
+  'The duplicate copy is the dangerous one. A maintainer editing the wrong copy does not get an error, they get a change that silently does nothing, and they lose an afternoon before they work out why.',
+  'Keep .gitignore covering .DS_Store, __pycache__, *.zip and any acs_audit_* output directory, and run git status --short before you push rather than after.']))
+
+// 3
 
 // 3
 H1('3. The one architectural rule');
-T('Policy logic lives in exactly one file per toolset. Every graphical surface, every command line entry point, and every test loads that file. Nothing reimplements a check.');
-push(Fig(F('fig5_architecture.png'), 'Figure 5. Both toolsets. One engine each, with every surface reading from it.', 640));
-T('This is not a style preference. The failure mode it prevents is specific and expensive: the GUI reports a finding, the CLI in CI does not, and nobody notices for months because the two were never compared. KYSA goes one step further and generates the CLI engine module from the HTML with kysa_build_engine.js, so drift is not merely discouraged, it is structurally impossible.');
+T('Policy logic lives in exactly one file. Every graphical surface, every command line entry point, and every test loads acs_policies.js. Nothing reimplements a check.');
+push(Fig(F('fig5_architecture.png'), 'Figure 5. One engine, with every surface reading from it.', 640));
+T('This is not a style preference. The failure mode it prevents is specific and expensive: the page reports a finding, the CLI in the pipeline does not, and nobody notices for months because the two were never compared against each other. When the engine is the only place a check exists, that disagreement cannot happen.');
 H2('The corollary for you');
 push([Bul('Never copy a check into a second file to make something work. If a surface cannot reach the engine, fix the loading, not the logic.'),
       Bul('The ACS engine is a dual mode module: it attaches to the browser global and exports through CommonJS. That is what lets the same file serve two HTML pages and five test suites. Preserve both paths when you edit it.'),
@@ -178,23 +171,30 @@ push(Note('warn', 'If you change a weight, change the documentation in the same 
 
 // 5
 H1('6. Running the test suites');
-push(Code(['# ACS Auditor, from the repository root',
-  'node test/run_tests.js', '',
-  '# KYSA, from its repository root',
-  'node test/run_tests.js']));
-T('No install, no test framework, no network. Both runners are plain Node and print a pass and fail count per suite plus a total.');
-H2('What the ACS suites actually assert');
+push(Code(['node test/run_tests.js', '',
+  '# the whole page tests need jsdom, and skip cleanly without it',
+  'npm install jsdom && node test/run_tests.js']));
+T('No install, no test framework, no network for the engine suites. The runner is plain Node and prints a pass and fail count per suite plus a total.');
+H2('What the suites actually assert');
 push([Tbl(['Suite', 'Count', 'Covers'], [
   ['smoke.cjs', '35', 'Catalogue integrity, unique ids, valid severities, every policy has a check, scanning and posture maths.'],
   ['fixes.cjs', '30', 'Each fix produces valid YAML, changes only what it should, and is idempotent when reapplied.'],
   ['import.cjs', '16', 'All three ACS export shapes parse, renamed policies still match, unmatched violations surface rather than vanish.'],
   ['flow.cjs', '36', 'Preview mutates nothing, undo restores byte for byte, merge patches stay minimal, diffs are correct.'],
-  ['live.cjs', '32', 'URL normalising, actionable error classification, fallback command generation, live object sanitising.'],
+  ['live.cjs', '32', 'URL normalising, actionable error classification, command generation, live object sanitising.'],
+  ['vuln.cjs', '99', 'NDJSON parsing, CVE deduplication, priority reasoning, manifest correlation and image drift.'],
+  ['hardening.cjs', '36', 'URL scheme allowlisting, and the standing guarantees: no eval, no credential field, no network call in either page, no write method anywhere.'],
+  ['cli.cjs', '95', 'The whole argument surface, the mode gate, exit codes, and that --fail-on blocks on the right severities.'],
+  ['kubejson.cjs', '38', 'oc get -o json in every shape it comes in, and that server side fields are stripped before scanning.'],
+  ['platform.cjs', '60', 'Platform detection, all alert states, and fixing a violation with no manifest in hand.'],
+  ['exports.cjs', '50', 'All six files acs_pull_all.sh writes, merging rather than overwriting, and that an unloadable file is told what it is.'],
+  ['cli_violations.cjs', '29', 'The CLI run as a real process, inspecting what lands on disk. Chiefly that report mode leaves nothing applyable behind.'],
 ], [1900, 900, 6500])]);
 body.push(P('', { spacing: { after: 140 } }));
 H2('The optional whole page tests');
-T('test/page.cjs loads each HTML file from disk in a real DOM, with the actual script tags resolving to the actual files in document order, then drives it: drops an export, checks the panel unhides, clicks the filters, walks the image replacement dialog through preview, confirm and undo.');
-T('It catches a class of defect the engine tests structurally cannot see. An element id that does not exist, a handler never bound, a panel that never unhides, a filter wired to the wrong checkbox. The engine can be perfect and the page still show nothing, which is exactly the failure this whole release was about.');
+T('test/page.cjs loads each HTML file from disk in a real DOM, with the actual script tags resolving to the actual files in document order, then drives it: drops an export, checks the panel unhides, clicks the filters, expands a violation row, drafts the fixes and inspects the YAML that would have been downloaded, and walks the image replacement dialog through preview, confirm and undo. 88 assertions.');
+T('It catches a class of defect the engine tests structurally cannot see. An element id that does not exist, a handler never bound, a panel that never unhides, a filter wired to the wrong checkbox. The engine can be perfect and the page still show nothing.');
+T('This is not hypothetical. The Download button under the violation fix panel shipped once with no click handler at all. Every engine test passed, the bundle it would have produced was correct, and pressing the button did nothing. Only a page test can see that.');
 push(Note('info', 'jsdom is the one thing here that needs a package manager, so it is optional', [
   'Without jsdom the suite prints a skip notice and reports zero, it does not fail. The tool itself must keep working on a disconnected machine with no npm, and a test dependency that breaks that would defeat the point of vendoring everything else.',
   'Run them where you can: npm install jsdom, then node test/run_tests.js. Do it before any release that touched a page.']));
@@ -251,16 +251,19 @@ T('ACS renames default policies between releases. The importer holds an alias ta
 H1('8. Keeping the standards current');
 T('Manifests can sit untouched for six months while the ground shifts under them. A new STIG release changes a requirement, guidance gets revised, a new class of weakness gets published. Nothing in the repository changed, but what counts as secure did. Catching that is the difference between a security check and a security program.');
 push(Fig(F('fig6_maintenance.png'), 'Figure 6. The maintenance cycle, the gates before release, and what rots if nobody looks.', 640));
-H2('The source watcher');
-push(Code(['python3 dj_kysa_source_watcher.py [output_directory]']));
-T('Standard library only, so it runs on any Python 3 without a package install. It pulls four things:');
-push([Bul('Kubernetes and OpenShift STIG versions and V ids, via stigviewer.com JSON exports. This is a community mirror of the DISA STIG Library. Verify ids at public.cyber.mil before citing them in an RMF package.'),
-      Bul('Recent Kubernetes and OpenShift CVEs from the NVD API 2.0, over a rolling 90 day window.'),
-      Bul('Drift in the NSA and CISA Kubernetes Hardening Guidance PDF, detected from HTTP headers rather than by downloading it repeatedly.'),
-      Bul('A content hash of the Kubernetes Pod Security Standards page, so a silent edit upstream becomes visible.')]);
-T('It writes ksa_sources.js next to the KYSA pages. The catalog manager reads that file and shows what changed since your last published catalogue. On an air gapped network, run the watcher on a connected machine and carry that single file across.');
+H2('What keeps this tool current, and what does not');
+T('The ACS Auditor has no standards watcher of its own, and does not need one, because its policy set mirrors the ACS defaults rather than tracking the standards directly. The thing that goes stale here is the mirror, not the standards.');
+push(Note('warn', 'The maintenance task that actually matters for this tool', [
+  'When you upgrade ACS, diff its default policies against acs_policies.js and reconcile. Red Hat adds policies, renames them, and changes default severities between releases.',
+  'A renamed policy does not break loudly. The importer falls back through the alias table and then token scoring, and a violation it still cannot place is reported as unmatched rather than dropped. Watch the unmatched count after an ACS upgrade: a jump in it is the signal that the catalogue has drifted from your ACS version.',
+  'Most teams also tune the defaults. A tuned policy that no longer matches the shipped name is indistinguishable from a renamed one, and both are fixed the same way: add the name to the alias table.']));
+H2('The citations, and how far to trust them');
+T('Every policy carries CIS, NIST 800-53 Rev 5, Pod Security Standards and DISA STIG references. Those are mapping aids written to help you find the control, not authoritative extracts.');
+push([Bul('Verify STIG ids against the current DISA release at public.cyber.mil before citing them in an accreditation package. Ids move between releases.'),
+      Bul('NIST control families are stable, but the specific enhancement cited may not be the one your assessor expects. Treat it as a starting point for the conversation, not the end of it.'),
+      Bul('If you change a citation, change it in acs_policies.js. It appears in the page, the report, the JSON and the SARIF from that one place.')]);
 H2('Cadence');
-T('Weekly is the right interval, and the CI templates already schedule it. More often is noise, less often means a STIG release can sit unnoticed for a quarter. The ACS toolset has no equivalent watcher because its policy set mirrors ACS defaults: when you upgrade ACS, diff its default policies against acs_policies.js and reconcile.');
+T('Tie the review to your ACS upgrade cycle rather than to the calendar. There is no value in reviewing the catalogue on a schedule when nothing upstream has moved, and considerable value in reviewing it the week ACS changes underneath you.');
 
 // 7
 H1('9. Vendored dependencies');
@@ -288,7 +291,7 @@ push(Code(['# verify the hash',
   'node -e "const y = require(\'./vendor/js-yaml.min.js\');',
   '        const n = y.loadAll(\'kind: A\\n---\\nkind: B\\n\').length;',
   '        console.log(n === 2 ? \'OK\' : \'FAILED\')"']));
-T('The scripts fetch_vendor_libs.sh and fetch_vendor_libs.ps1 in the KYSA repository do all of this, including the functional parse. If unpkg is blocked, cdnjs mirrors both libraries, but its js-yaml build may differ, in which case verify functionally rather than by hash.');
+T('Do this by hand for now; there is no fetch helper in this repository. If unpkg is blocked, cdnjs mirrors both libraries, but its js-yaml build may differ, in which case verify functionally rather than by hash: parse a manifest with an anchor, a block scalar and a YAML 1.1 boolean, and confirm the result matches what the committed build produced.');
 
 // 8
 H1('10. Waivers and accepted risk');
@@ -306,22 +309,31 @@ H2('The expiry field is not optional, and that is deliberate');
 T('On the expiry date the finding returns automatically, the build gate counts it again, and the summary flags it as expired. Security exceptions granted without a deadline become permanent, and years later nobody remembers why the exception exists or whether the reason still applies. A date forces a fresh decision by someone who is still around to make it.');
 T('Waived findings still appear in the report, marked as waived with the justification, so an auditor sees exactly what was accepted and why. They do not lower the score, because a documented decision was made. Expired ones do.');
 H2('Per resource waivers');
-T('For a genuine one off, annotate the resource itself with kysa.io/waive, kysa.io/waive-reason, kysa.io/waive-approver, and kysa.io/waive-expires. Use the file when a reviewer should see everything in one place. Use the annotation when the exception belongs to one specific resource and should travel with it.');
+T('The ACS Auditor does not read a waiver file today. The exception mechanism that applies to it is the one in ACS itself: a policy exception with an expiry, which the tool then sees reflected in the export as a deferred violation and reports as accepted rather than active. Use that rather than inventing a local override, because an exception ACS does not know about does not stop ACS alerting on it.');
 push(Note('warn', 'Review waivers on a schedule', [
   'Nobody notices a waiver expiring unless someone looks. Put a recurring calendar item against the waiver file. The most common failure of this entire model is not a bad waiver, it is a good waiver nobody revisited.']));
 
 // 9
 H1('11. CI integration');
-push([Bul('GitHub: copy ci_templates/github_actions_kysa.yml to .github/workflows/kysa.yml'),
-      Bul('GitLab: copy ci_templates/gitlab_ci_kysa.yml to .gitlab-ci.yml')]);
-T('You get three behaviours: a scan on every proposed change with results in the job summary, findings published to the security dashboard on the main branch, and a weekly standards refresh followed by a pull request with fixes. Findings are emitted as SARIF, which GitHub and GitLab both read natively, so they land in the security tab rather than buried in log output.');
+T('There are no CI templates in this repository yet. The CLI is built to be driven from one, and this is what a job needs to do.');
+push(Code(['- name: ACS manifest audit',
+  '  run: |',
+  '    node acs_cli.js --path ./manifests \\',
+  '      --sarif --json \\',
+  '      --fail-on high \\',
+  '      --out ./acs_out',
+  '',
+  '- name: Publish to the security tab',
+  '  uses: github/codeql-action/upload-sarif@v3',
+  '  with:',
+  '    sarif_file: ./acs_out/acs_findings.sarif']));
+T('SARIF is the reason this works without a bespoke integration. GitHub and GitLab both read it natively, so findings land in the security tab with file and line annotations rather than buried in log output.');
 H2('Rolling it out without the team switching it off');
-T('Start in reporting mode. Do not enable the build gate on day one. If the first run blocks every merge, the tool gets disabled within a week and you have made things worse than before you installed it. Report only, work the backlog down, then set --fail-on high so new problems cannot get in while you finish clearing the old ones.');
-H2('Token handling in CI');
-T('The CLI reads KYSA_TOKEN from the environment. Store it as a repository or group secret, never in the workflow file and never on the command line where it lands in shell history and process listings. On GitHub use a fine grained personal access token with read and write on code and pull requests. On GitLab use a project access token with api and write_repository scope. Scope it to the one repository it needs.');
-push(Note('info', 'What the automation is allowed to do', [
-  'It clones, fixes what is safe, annotates the rest, creates a branch, and opens a pull request with the before and after posture in the description. With --review-comments it comments on the specific lines needing attention.',
-  'It never touches your branch. The work arrives as a proposal a person approves or rejects. Automation does the tedious part, humans keep the final say. If you ever change that, you have changed the risk profile of the tool entirely.']));
+T('Start with no gate. Do not set --fail-on on day one. If the first run blocks every merge, the tool gets disabled within a week and you have made things worse than before you installed it. Report only, publish to the security tab so the backlog is visible, work it down, then set --fail-on high so new problems cannot get in while you finish clearing the old ones.');
+push(Note('info', 'What a pipeline should and should not be allowed to do', [
+  'Run it in report mode in CI. That is the default, so a job that forgets to say so gets the safe behaviour rather than the permissive one.',
+  'Do not run --mode auto --in-place in a pipeline. The mode gate exists so that writing is a decision a person makes, and a pipeline is not a person. If you want the fixes as an artifact, use --mode manual --patches and let a human open the pull request.',
+  'The CLI needs no credential. It reads files. Everything that touches ACS happens in the pull scripts, which run before the pipeline or beside it, and those take a read only token.']));
 
 // 10
 H1('12. Release procedure');
@@ -348,19 +360,21 @@ H1('13. Security posture of the tooling itself');
 T('A security tool is a target and a trust anchor. These are the properties that have been verified, and the ones you must not regress.');
 push([Tbl(['Property', 'How it is enforced'], [
   ['No remediation ever executes a command', 'No exec, eval, or Function constructor exists in any shipped ACS file. Verified by grep. Fixes are pure text edits to YAML.'],
-  ['Tokens are never persisted', 'Both token fields are password inputs. No token is written to localStorage, sessionStorage, IndexedDB, or a cookie. Tokens are cleared after the request and are absent from every export. The only browser storage used anywhere is the light or dark theme preference. Verified by grep and covered by tests.'],
-  ['Live connect is read only', 'Only HTTP GET is issued across all three endpoints. There is no code path that writes to a cluster.'],
+  ['The one process the tool ever spawns', 'acs_cli.js --in-place --mode auto runs git status --porcelain through execFileSync with an argument array and no shell, and refuses to overwrite your files if the tree is dirty or is not a repository. It reads, and it remediates nothing. Named here so the guarantee above is exact rather than approximately true.'],
+  ['No credential can enter a browser tab', 'The in browser connectors were removed rather than hardened. Neither page contains a password field, a token identifier, a URL field, or a fetch call. The test suite asserts their absence, which is a stronger property than the token handling rules it replaced. The only browser storage used anywhere is the light or dark theme preference.'],
+  ['Every cluster call is a GET', 'The engine connectors, which now serve only the scripts and the CLI, issue no write method. There is no code path anywhere in the tool that writes to a cluster.'],
+  ['The token stays out of ps and out of history', 'The pull scripts read it from the environment or prompt without echo, never as a command argument. TLS is verified by default and --cacert is supported for a private CA.'],
   ['Nothing applyable is produced without an explicit mode', 'report is the default everywhere, unknown modes throw rather than defaulting, and the mode gates the handlers rather than only the buttons. See section 4.'],
   ['No CVE is ever auto remediated', 'ACS reports fixed package versions, not fixed image tags. applyImagePin only ever writes a value the operator typed, and it goes through the same preview, confirm and undo path as every other fix.'],
   ['Hydration is rate limited by construction', 'Alert detail is fetched sequentially and capped at 200. Central is a security control; a report is not worth destabilising it.'],
-  ['No telemetry, no phone home', 'The browser pages make no outbound request except the live connect calls you explicitly trigger.'],
+  ['No telemetry, no phone home', 'The browser pages make no outbound request at all. There is no fetch call in either of them.'],
   ['No network at rest', 'Dependencies are vendored. The pages load nothing from a CDN.'],
   ['Live objects are sanitised', 'Server side fields, ownerReferences, status, and last applied configuration are stripped before an object is scanned or emitted.'],
 ], [3000, 6300])]);
 body.push(P('', { spacing: { after: 140 } }));
 H2('Threat model, stated plainly');
 push([Bul('Untrusted input is the YAML and the ACS export a user loads. Both are parsed by js-yaml, never evaluated. A malicious manifest can produce a wrong finding. It cannot execute anything.'),
-      Bul('The credential exposure window is a live token in a browser tab for the duration of a request. Mitigate with short lived least privilege tokens rather than by trusting the tab.'),
+      Bul('There is no longer a credential exposure window in the browser, because there is no longer a credential in the browser. The window moved to the shell, where a short lived least privilege token is read from the environment, kept out of ps and out of history, and used for GETs only. This is a smaller window in a place with better controls, which is the point of moving it.'),
       Bul('The supply chain risk is the two vendored libraries. Mitigate by pinning, hashing, and verifying functionally on refresh.'),
       Bul('The most realistic failure is not an attack. It is a wrong finding trusted without review, or a stale policy set that quietly stops catching something. That is what sections 6 and 8 exist to prevent.')]);
 
@@ -380,7 +394,7 @@ push([Tbl(['Symptom', 'Diagnosis'], [
   ['CVE counts disagree with the ACS console', 'Check whether the console view includes deferred and false positive CVEs. This tool excludes them from active counts by design and reports them separately.'],
   ['Projected posture does not survive a rescan', 'The denominator is being derived from findings rather than from what was scanned. This is the defect that produced 60 against an actual 57.'],
   ['EPERM on a path that clearly exists', 'macOS privacy protection, not a missing file. EPERM means it exists and access was denied. Grant the folder or move the work.'],
-  ['An edit to a file appears to do nothing', 'Check for a duplicate copy of the tree, such as the # directory in the KYSA folder. Delete duplicates rather than working around them.'],
+  ['An edit to a file appears to do nothing', 'Check for a duplicate copy of the tree in your working folder. Editing the wrong copy produces no error, just a change with no effect. Delete duplicates rather than working around them.'],
 ], [3200, 6100])]);
 
 // 13
@@ -404,7 +418,7 @@ const doc = new Document({
       paragraph: { spacing: { before: 240, after: 90 } } },
   } },
   features: { updateFields: true },
-  sections: [Object.assign({}, pageSetup('Administration Guide  |  KYSA and ACS Auditor'),
+  sections: [Object.assign({}, pageSetup('Administration Guide  |  ACS Auditor'),
     { children: [...title, ...toc, ...body] })],
 });
 Packer.toBuffer(doc).then((b) => { fs.writeFileSync(__dirname + '/DJ_Security_Tooling_Administration_Guide.docx', b); console.log('WROTE', b.length, 'bytes'); });

@@ -1536,11 +1536,55 @@ function parseVulnExport(text) {
   const errors = [];
   if (!raw) return { records, errors };
 
+  /* ACS has three export endpoints and they return three different record shapes. This
+   * parser originally understood only the first, so two thirds of what acs_pull_all.sh
+   * writes was rejected as unreadable:
+   *
+   *   /v1/export/vuln-mgmt/workloads   {"result": {deployment, images[], livePods}}
+   *   /v1/export/images                {"result": {storage.Image}}   no deployment
+   *   /v1/export/nodes                 {"result": {storage.Node}}    no deployment, no images
+   *
+   * The last two carry CVEs in exactly the same place, scan.components[].vulns[], so the
+   * fix is to normalise them into the workload shape rather than write two more parsers.
+   * An image with nothing running it is still an image you are storing, and a node CVE is
+   * still a CVE. Both belong in the report.
+   */
   const take = (o) => {
     if (!o || typeof o !== 'object') return;
     if (o.error) { errors.push(String(o.error.message || o.error)); return; }
     const r = o.result || o;
-    if (r && (r.deployment || r.images)) records.push(r);
+    if (!r || typeof r !== 'object') return;
+
+    if (r.deployment || r.images) { records.push(r); return; }
+
+    /* A bare image. Wrap it as a workload with no deployment so everything downstream
+       treats it identically. livePods 0 is the truth and it matters: the priority model
+       adds 0.5 for a running image, and an image nothing runs must not collect it. */
+    const nm = r.name;
+    if (r.scan && nm && typeof nm === 'object' &&
+        (nm.fullName || nm.full_name || nm.remote || /^sha256:/.test(String(r.id || '')))) {
+      records.push({ deployment: null, livePods: 0, sourceKind: 'image', images: [r] });
+      return;
+    }
+
+    /* A node. The scan looks the same but there is no image to attribute it to.
+       Synthesise one named for the node so the CVE is counted and traceable, and mark the
+       record so the UI can say plainly this is a node finding. You cannot fix a node CVE
+       by editing a manifest, and the tool should never imply that you can. */
+    if (r.scan && typeof nm === 'string' && nm) {
+      records.push({
+        deployment: { name: nm, namespace: '(node)', type: 'Node',
+                      clusterName: r.clusterName || r.cluster_name || '' },
+        livePods: 0, sourceKind: 'node',
+        images: [{ id: r.id || nm, name: { fullName: 'node/' + nm }, scan: r.scan }],
+      });
+      return;
+    }
+
+    /* Scan data we could not attribute. Say so rather than dropping it: a parser that
+       silently discards what it does not recognise is indistinguishable from one that
+       found nothing. */
+    if (r.scan) errors.push('A record carried scan data but no recognisable image or node identity.');
   };
 
   // Try whole document first: array, or a single object.
@@ -1632,12 +1676,18 @@ function importVulnFindings(parsed, opts) {
   for (const rec of records) {
     const dep = rec.deployment || {};
     const livePods = Number(rec.livePods !== undefined ? rec.livePods : rec.live_pods) || 0;
+    /* An image export has no deployment at all. Labelling it "unknown" reads like missing
+       data the operator should go and find; "(not deployed)" is the actual fact and tells
+       them the image exists in a registry ACS scanned but nothing is running it. */
+    const kindOf = rec.sourceKind === 'node' ? 'Node'
+                 : rec.sourceKind === 'image' ? 'Image' : (dep.type || 'Deployment');
     const workload = {
-      kind: dep.type || 'Deployment',
-      name: dep.name || 'unknown',
-      namespace: dep.namespace || 'unknown',
+      kind: kindOf,
+      name: dep.name || (rec.sourceKind === 'image' ? '(not deployed)' : 'unknown'),
+      namespace: dep.namespace || (rec.sourceKind === 'image' ? '(no workload)' : 'unknown'),
       cluster: dep.clusterName || dep.cluster_name || '',
       livePods: livePods,
+      sourceKind: rec.sourceKind || 'workload',
     };
     for (const img of (rec.images || [])) {
       const ref = imageRef(img);
@@ -2312,6 +2362,19 @@ function buildViolationPatch(rec) {
 /* The deliverable: patches for everything fixable, and a written account of everything
    that is not, with the reason. A bundle that silently omits what it could not do is how
    an operator ends up believing a cluster is clean. */
+/* The identity of a violation, in one place.
+ *
+ * Deduplication on import, the checkbox on a row, and --select on the command line all
+ * have to agree on what "the same violation" means, or a selection made in the page will
+ * not correspond to the thing the CLI fixes. An alert id is the natural key. Records
+ * without one, a roxctl report for instance, fall back to the tuple that actually
+ * identifies a violation.
+ */
+function violationKey(rec) {
+  if (!rec) return '';
+  return rec.acsAlertId || (rec.acsPolicyName + '|' + rec.obj + '|' + rec.namespace);
+}
+
 function buildViolationFixBundle(acs, opts) {
   const o = opts || {};
   const mode = resolveFixMode(o.mode);
@@ -2321,7 +2384,18 @@ function buildViolationFixBundle(acs, opts) {
      patch files at all. The point is that nothing leaves this function in report mode
      that anyone could apply, deliberately or otherwise. */
   const emitPatches = modeAllows(mode, 'patches');
-  const recs = ((acs && acs.imported) || []).concat((acs && acs.unmatched) || []);
+  const all = ((acs && acs.imported) || []).concat((acs && acs.unmatched) || []);
+
+  /* A selection, when one is given, decides which violations are in scope. Undefined means
+     all of them, so every existing caller is unaffected. An EMPTY selection means none,
+     and must not be confused with "no selection given": that distinction is the whole
+     point of letting somebody choose, and collapsing it would silently fix everything at
+     the moment they had deliberately chosen nothing. */
+  const sel = o.selected == null ? null
+    : (o.selected instanceof Set ? o.selected : new Set(Array.from(o.selected)));
+  const recs = sel === null ? all : all.filter(function (r) { return sel.has(violationKey(r)); });
+  const deselected = all.length - recs.length;
+
   const patches = [];
   const skipped = [];
   const inplace = [];
@@ -2371,15 +2445,29 @@ function buildViolationFixBundle(acs, opts) {
     }
     return { name: 'violation-patches/' + safe + '.yaml',
              text: header.join('\n') + '\n' + jsyaml.dump(g.patch, { noRefs: true, lineWidth: 120 }),
+             obj: g.rec.obj, namespace: g.rec.namespace, policies: g.policies.slice().sort(),
              needsContainerName: g.needsContainerName };
   });
 
   const emitted = emitPatches ? files : [];
+  /* Name the object, not just the file. In report mode this list is the entire output, and
+     a reader deciding whether to re-run in manual mode needs to know which workloads are
+     in scope. A flattened filename like batch_Deployment_batch_runner.yaml is not that:
+     the separator and the name separator are the same character, so you cannot tell where
+     the namespace ends and the object begins. */
   buildViolationFixReport.lastWouldBe = emitPatches ? [] :
-    files.map(function (f) { return '`' + f.name + '`' + (f.needsContainerName ? '  **container name missing**' : ''); });
+    files.map(function (f) {
+      return '**' + f.obj + '** in `' + f.namespace + '` covering ' + f.policies.join(', ') +
+             '  \n  would be written to `' + f.name + '`' +
+             (f.needsContainerName ? '  **container name missing, see the file header**' : '');
+    });
   return { mode: mode, files: emitted, patches: patches, skipped: skipped, inplace: inplace,
            suppressed: emitPatches ? 0 : files.length,
-           report: buildViolationFixReport(emitted, skipped, inplace, mode, emitPatches ? 0 : files.length) };
+           selected: recs.length, deselected: deselected, total: all.length,
+           report: buildViolationFixReport(emitted, skipped, inplace, mode,
+                                           emitPatches ? 0 : files.length,
+                                           { selected: recs.length, deselected: deselected,
+                                             total: all.length }) };
 }
 
 function mergePatchObjects(a, b) {
@@ -2402,7 +2490,7 @@ function mergePatchObjects(a, b) {
   return out;
 }
 
-function buildViolationFixReport(files, skipped, inplace, mode, suppressed) {
+function buildViolationFixReport(files, skipped, inplace, mode, suppressed, scope) {
   const m = resolveFixMode(mode);
   const L = [];
   L.push('# Fixing ACS violations');
@@ -2411,6 +2499,25 @@ function buildViolationFixReport(files, skipped, inplace, mode, suppressed) {
   L.push(modeBanner(m));
   L.push('No command was run. Nothing was applied to any cluster.');
   L.push('');
+
+  /* Say what was left out. A report that silently covers a subset reads exactly like a
+     report that covers everything, and the person reading it six months from now has no
+     way to tell which one they are holding. */
+  if (scope && scope.deselected) {
+    L.push('## Scope: ' + scope.selected + ' of ' + scope.total + ' violation(s) were selected');
+    L.push('');
+    L.push(scope.deselected + ' violation(s) were deliberately left out of this run and are not');
+    L.push('described anywhere below. This document covers the selection, not the cluster.');
+    L.push('');
+  } else if (scope && scope.total) {
+    L.push('Scope: all ' + scope.total + ' imported violation(s).');
+    L.push('');
+  }
+  if (scope && scope.total && scope.selected === 0) {
+    L.push('**Nothing was selected, so nothing was drafted.** This is not the same as nothing');
+    L.push('being fixable. Select the violations you want and run it again.');
+    L.push('');
+  }
   if (suppressed) {
     L.push('## Report mode: ' + suppressed + ' patch(es) were NOT written');
     L.push('');
@@ -2464,6 +2571,97 @@ function buildViolationFixReport(files, skipped, inplace, mode, suppressed) {
     L.push('');
   }
   return L.join('\n');
+}
+
+/* ================================================== merging multiple exports
+ *
+ * acs_pull_all.sh writes six files and you are meant to drop all of them at once. Each
+ * import used to replace the last, so dropping the whole folder left you looking at
+ * whichever file happened to land last and silently discarded the rest.
+ *
+ * These merge instead, deduplicating on identity rather than on object equality, because
+ * the same alert appears in both 01_alerts_list.json and 02_alerts_full.json and only the
+ * second has violation text. Later, richer records win.
+ */
+
+function mergeAcsImports(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  const out = { imported: [], unmatched: [], total: 0, hydratable: 0,
+                platform: 0, user: 0,
+                platformFlagPresent: !!(a.platformFlagPresent || b.platformFlagPresent) };
+  const byId = {};
+  const order = [];
+  const absorb = (rec) => {
+    const key = violationKey(rec);
+    const prev = byId[key];
+    if (!prev) { byId[key] = rec; order.push(key); return; }
+    /* Prefer the hydrated one. This is the whole reason 01 and 02 both exist: the list is
+       fast and empty of detail, the per id fetch has the violation text. */
+    if (!prev.hydrated && rec.hydrated) byId[key] = rec;
+    else if (prev.hydrated && rec.hydrated && rec.violations.length > prev.violations.length) byId[key] = rec;
+  };
+  for (const src of [a, b]) {
+    for (const r of (src.imported || [])) absorb(r);
+    for (const r of (src.unmatched || [])) absorb(r);
+  }
+  for (const k of order) {
+    const r = byId[k];
+    (r.matched ? out.imported : out.unmatched).push(r);
+    if (r.isPlatform) out.platform += 1; else out.user += 1;
+    if (!r.hydrated && r.acsAlertId) out.hydratable += 1;
+  }
+  out.total = out.imported.length + out.unmatched.length;
+  return out;
+}
+
+function mergeVulnImports(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  const rows = [];
+  const seen = {};
+  for (const src of [a, b]) {
+    for (const r of (src.rows || [])) {
+      const key = r.cve + '|' + r.image + '|' + r.component.name + '|' + r.component.version;
+      if (seen[key]) {
+        /* Same CVE seen from two exports. Keep the record that knows more: a workload
+           export knows how many pods run it, an image export does not. */
+        const prev = seen[key];
+        for (const w of r.workloads) if (prev.workloads.indexOf(w) === -1) prev.workloads.push(w);
+        prev.livePods = Math.max(prev.livePods, r.livePods);
+        if (r.priority > prev.priority) { prev.priority = r.priority; prev.reasons = r.reasons; }
+        continue;
+      }
+      seen[key] = r;
+      rows.push(r);
+    }
+  }
+  const images = {};
+  for (const src of [a, b]) for (const im of (src.images || [])) {
+    if (!images[im.ref]) images[im.ref] = im;
+    else {
+      const p = images[im.ref];
+      for (const w of im.workloads) if (p.workloads.indexOf(w) === -1) p.workloads.push(w);
+    }
+  }
+  /* Recount per image from the merged rows rather than summing, which would double count
+     an image that appeared in two exports. */
+  for (const ref of Object.keys(images)) {
+    const mine = rows.filter((r) => r.image === ref);
+    images[ref].cves = mine.length;
+    images[ref].fixable = mine.filter((r) => r.fixable).length;
+    images[ref].critical = mine.filter((r) => r.sevRank === 4).length;
+    images[ref].important = mine.filter((r) => r.sevRank === 3).length;
+  }
+  rows.sort((x, y) => (y.sevRank - x.sevRank) || (y.priority - x.priority) || x.cve.localeCompare(y.cve));
+  return {
+    rows: rows,
+    images: Object.keys(images).map((k) => images[k])
+      .sort((x, y) => (y.critical - x.critical) || (y.cves - x.cves)),
+    accepted: rows.filter((r) => r.accepted).length,
+    parseErrors: (a.parseErrors || []).concat(b.parseErrors || []),
+    workloads: (a.workloads || 0) + (b.workloads || 0),
+  };
 }
 
 /* ==================================================================== fix mode
@@ -2696,8 +2894,57 @@ function citationsOf(p) {
 }
 
 /* Dual mode: plain script in the browser, CommonJS module under Node for the tests. */
+
+/* ------------------------------------------------- recognising our own output
+ *
+ * The findings JSON this tool writes is derived output. Dropping it back in is a
+ * reasonable thing to try, and the honest answer is no rather than a partial yes: the
+ * findings carry a file name and an object name but not the manifest, so nothing could be
+ * fixed from them and any posture recomputed from them would be a copy of the number
+ * already in the file. What the file deserves is a message that says what it is and what
+ * to load instead, not "expected Kubernetes or OpenShift objects", which describes
+ * everything the file is not and none of what it is.
+ */
+function describeUnloadable(text) {
+  let j;
+  try { j = JSON.parse(text); } catch (e) { return null; }
+  if (!j || typeof j !== 'object') return null;
+
+  if (j.tool && j.findings && j.posture) {
+    return 'This is a findings export written by ' + String(j.tool) + ' itself' +
+      (j.generated ? ' on ' + String(j.generated).slice(0, 10) : '') + '.\n\n' +
+      'It is a record of a previous run, not an input. It names the objects and the files ' +
+      'they came from but does not contain the manifests, so nothing in it can be rescanned ' +
+      'or fixed.\n\n' +
+      'Load the sources instead: the YAML directory, the workloads export, ' +
+      '02_alerts_full.json, and 03_vuln_workloads.ndjson.';
+  }
+  if (j.runs && j.version && String(j.version).indexOf('2.1') === 0) {
+    return 'This is a SARIF file, which is a report format for a security tab in a CI ' +
+      'system. It is output rather than input. Load the ACS exports or your YAML instead.';
+  }
+  if (j.kind === 'Status' && j.status === 'Failure') {
+    return 'This is a Kubernetes API error, not data:\n\n  ' +
+      String(j.message || j.reason || 'no message') + '\n\n' +
+      'The command that produced it failed. Check the token, the namespace and the RBAC, ' +
+      'then re-run the export.';
+  }
+  if (j.error || j.Error) {
+    const e = j.error || j.Error;
+    return 'This file contains an API error rather than data:\n\n  ' +
+      String((e && (e.message || e.msg)) || e) + '\n\n' +
+      'Re-run the export that produced it.';
+  }
+  if (Object.keys(j).length === 0) return 'This file is an empty JSON object. The export ' +
+    'that produced it returned nothing, which usually means the search filter matched no ' +
+    'records rather than that there is nothing to find.';
+  return null;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
+    violationKey: violationKey,
+    describeUnloadable: describeUnloadable,
     ACS_TOOL, ACS_SEVERITY, ACS_POLICIES, WORKLOADS,
     sevLabel, sevWeight, sevRank,
     podSpec, containersOf, nameOf, nsOf,
@@ -2707,6 +2954,7 @@ if (typeof module !== 'undefined' && module.exports) {
     safeUrl, SAFE_URL_SCHEMES, tlsPreamble, curlFlags,
     PLATFORM_SCOPES, looksPlatform, PLATFORM_NS_RE,
     FIX_MODES, FIX_MODE_INFO, resolveFixMode, modeAllows, modeBanner,
+    mergeAcsImports, mergeVulnImports,
     violationFixability, buildViolationPatch, buildViolationFixBundle,
     containerFromViolation, VIOLATION_PATCHES,
     normalizeBase, explainFetchError, fetchAcsAlerts, acsFallbackCommand,

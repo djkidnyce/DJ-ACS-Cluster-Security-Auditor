@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="600" viewBox="0 0 1160 600" font-family="DejaVu Sans, Segoe UI, Arial, sans-serif">
+<rect width="1160" height="600" fill="#0d1117"/>
+<rect x="0" y="0" width="1160" height="62" fill="#1f6feb"/><path d="M26 12 l17 6 v13 c0 10 -7 17 -17 22 c-10 -5 -17 -12 -17 -22 v-13 z" fill="#fff" opacity=".95"/><path d="M19 30 l6 6 l11 -12" stroke="#1f6feb" stroke-width="3.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><text x="56" y="27" font-size="17" font-weight="bold" fill="#fff">Getting the data out of ACS</text><text x="56" y="47" font-size="11.5" fill="#cfe1ff">The scripts run where the cluster is reachable. The page reads what they write.</text>
+<rect x="24" y="80" width="1112" height="128" rx="9" fill="#161b22" stroke="#30363d"/>
+<rect x="24" y="80" width="3" height="128" fill="#d4a72c"/>
+<text x="44" y="106" font-size="12" font-weight="bold" fill="#e6edf3">The pages do not connect to anything, and that is deliberate.</text>
+<text x="44" y="130" font-size="11" fill="#8b949e">A page opened from a file has a null origin. Neither ACS Central nor the OpenShift API sends a header that permits it, so the browser</text>
+<text x="44" y="148" font-size="11" fill="#8b949e">blocks the response before the page ever sees it. An in browser connector could not work from here no matter how it was written.</text>
+<text x="44" y="166" font-size="11" fill="#8b949e">Building one anyway meant asking you to paste a live ACS API token into a browser tab in exchange for a request that then failed.</text>
+<text x="44" y="184" font-size="11" fill="#8b949e">The token risk was real and the benefit was zero, so the connectors were removed rather than mitigated.</text>
+<rect x="24" y="228" width="352" height="214" rx="9" fill="#161b22" stroke="#30363d"/><circle cx="50" cy="256" r="13" fill="#58a6ff"/><text x="50" y="261" font-size="13" font-weight="bold" fill="#fff" text-anchor="middle">1</text><text x="72" y="261" font-size="13" font-weight="bold" fill="#e6edf3">Run the preflight</text><text x="42" y="286" font-size="10.5" fill="#e6edf3" font-family="monospace">$ ./scripts/acs_preflight.sh</text><text x="42" y="303" font-size="10.5" fill="#8b949e"></text><text x="42" y="320" font-size="10.5" fill="#8b949e">Checks the endpoint is reachable, the token</text><text x="42" y="337" font-size="10.5" fill="#8b949e">is valid, TLS verifies, and the token can</text><text x="42" y="354" font-size="10.5" fill="#8b949e">actually read Alert, Image and Deployment.</text><text x="42" y="371" font-size="10.5" fill="#8b949e"></text><text x="42" y="388" font-size="10.5" fill="#8b949e">A token scoped only to Alert returns 403 on</text><text x="42" y="405" font-size="10.5" fill="#8b949e">the vulnerability export while violations keep</text><text x="42" y="422" font-size="10.5" fill="#8b949e">working, which is a confusing way to see</text><text x="42" y="439" font-size="10.5" fill="#8b949e">nothing. This catches it in one line.</text>
+<rect x="404" y="228" width="352" height="214" rx="9" fill="#161b22" stroke="#30363d"/><circle cx="430" cy="256" r="13" fill="#58a6ff"/><text x="430" y="261" font-size="13" font-weight="bold" fill="#fff" text-anchor="middle">2</text><text x="452" y="261" font-size="13" font-weight="bold" fill="#e6edf3">Pull everything</text><text x="422" y="286" font-size="10.5" fill="#e6edf3" font-family="monospace">$ ./scripts/acs_pull_all.sh</text>
+<text x="422" y="303" font-size="9.5" font-family="monospace" fill="#e6edf3">00_auth_status.json</text>
+<text x="606" y="303" font-size="9.5" fill="#8b949e">who the token is</text>
+<text x="422" y="320" font-size="9.5" font-family="monospace" fill="#e6edf3">01_alerts_list.json</text>
+<text x="606" y="320" font-size="9.5" fill="#8b949e">every violation</text>
+<text x="422" y="337" font-size="9.5" font-family="monospace" fill="#e6edf3">02_alerts_full.json</text>
+<text x="606" y="337" font-size="9.5" fill="#8b949e">with the violation text</text>
+<text x="422" y="354" font-size="9.5" font-family="monospace" fill="#e6edf3">03_vuln_workloads.ndjson</text>
+<text x="606" y="354" font-size="9.5" fill="#8b949e">running images</text>
+<text x="422" y="371" font-size="9.5" font-family="monospace" fill="#e6edf3">04_all_images.ndjson</text>
+<text x="606" y="371" font-size="9.5" fill="#8b949e">deployed or not</text>
+<text x="422" y="388" font-size="9.5" font-family="monospace" fill="#e6edf3">05_nodes.ndjson</text>
+<text x="606" y="388" font-size="9.5" fill="#8b949e">node CVEs</text>
+<text x="422" y="405" font-size="9.5" font-family="monospace" fill="#e6edf3">06_snoozed.ndjson</text>
+<text x="606" y="405" font-size="9.5" fill="#8b949e">what was deferred</text>
+<rect x="784" y="228" width="352" height="214" rx="9" fill="#161b22" stroke="#30363d"/><circle cx="810" cy="256" r="13" fill="#3fb950"/><text x="810" y="261" font-size="13" font-weight="bold" fill="#fff" text-anchor="middle">3</text><text x="832" y="261" font-size="13" font-weight="bold" fill="#e6edf3">Drop them on the page</text><text x="802" y="286" font-size="10.5" fill="#8b949e">All of them at once, in any order.</text><text x="802" y="303" font-size="10.5" fill="#8b949e"></text><text x="802" y="320" font-size="10.5" fill="#8b949e">They accumulate rather than replace each</text><text x="802" y="337" font-size="10.5" fill="#8b949e">other. A violation that arrives twice, once</text><text x="802" y="354" font-size="10.5" fill="#8b949e">slim from the list and once hydrated from</text><text x="802" y="371" font-size="10.5" fill="#8b949e">the detail endpoint, is deduplicated and</text><text x="802" y="388" font-size="10.5" fill="#8b949e">the hydrated copy is kept.</text><text x="802" y="405" font-size="10.5" fill="#8b949e"></text><text x="802" y="422" font-size="10.5" fill="#8b949e">Nothing is uploaded. The file is read in</text><text x="802" y="439" font-size="10.5" fill="#8b949e">the tab and never leaves the machine.</text>
+<path d="M386 335 l14 0" stroke="#8b949e" stroke-width="2"/>
+<path d="M400 335 l-6 -5 l0 10 z" fill="#8b949e"/>
+<path d="M766 335 l14 0" stroke="#8b949e" stroke-width="2"/>
+<path d="M780 335 l-6 -5 l0 10 z" fill="#8b949e"/>
+<rect x="24" y="462" width="1112" height="122" rx="9" fill="#161b22" stroke="#30363d"/>
+<text x="44" y="488" font-size="11" font-weight="bold" fill="#58a6ff">WHY THE SHELL IS THE SAFER PLACE FOR THE TOKEN</text>
+<text x="44" y="510" font-size="10.5" fill="#8b949e">The scripts read the token from the environment or prompt for it without echo. It is never passed as an argument, so it does not appear in ps</text>
+<text x="44" y="527" font-size="10.5" fill="#8b949e">output where any other user on the box could read it, and it does not land in your shell history. TLS is verified by default and --cacert is</text>
+<text x="44" y="544" font-size="10.5" fill="#8b949e">supported for a private CA. Every call is a GET. There is no code path in any script that writes to a cluster.</text>
+<text x="44" y="561" font-size="10.5" fill="#8b949e">PowerShell equivalents are in scripts/acs_pull_all.ps1, and scripts/acs_pull_over_ssh.ps1 runs the pull on a jump host when Central is not</text>
+<text x="44" y="578" font-size="10.5" fill="#8b949e">reachable from your workstation at all.</text>
+</svg>

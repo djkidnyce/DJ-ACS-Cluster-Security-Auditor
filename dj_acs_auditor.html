@@ -130,110 +130,32 @@ a{color:var(--accent)}
   <div id="filelist" style="margin-top:8px"></div>
 
   <div class="section">
-    <h2>Or pull straight from your cluster</h2>
-    <div class="tabs">
-      <span class="tab on" data-t="acs">Policy violations</span>
-      <span class="tab" data-t="vuln">Vulnerabilities (CVEs)</span>
-      <span class="tab" data-t="ocp">OpenShift API</span>
-    </div>
+    <h2>Getting data out of ACS</h2>
+    <p class="note">This page does not talk to ACS or to your cluster, on purpose. A page
+      opened from a file has a null origin, and neither ACS Central nor the OpenShift API
+      sends a header that permits it, so an in browser connector could never work from
+      here. Building one anyway would mean asking you to paste a live ACS API token into a
+      browser tab in exchange for a request the browser then blocks. The token risk would
+      be real and the benefit would be zero.</p>
+    <p class="note">Use the scripts instead. They run where the cluster is actually
+      reachable, keep the token out of your shell history and out of <code>ps</code>, and
+      verify TLS properly. Then drop what they write onto the drop zone above. You can drop
+      the whole output folder at once.</p>
+    <pre class="cmd">./scripts/acs_preflight.sh https://central-stackrox.apps.example.com
+    tells you which server you are pointed at and what your token can read
 
-    <div id="tab-acs">
-      <div class="grid3">
-        <div class="field"><label>ACS Central URL</label>
-          <input type="text" id="acsUrl" placeholder="https://central-stackrox.apps.example.com" autocomplete="off"></div>
-        <div class="field"><label>API token</label>
-          <input type="password" id="acsToken" placeholder="paste your ACS API token" autocomplete="off"></div>
-        <div class="field"><label>Filter (optional ACS query)</label>
-          <input type="text" id="acsQuery" placeholder="Severity:CRITICAL_SEVERITY" autocomplete="off"></div>
-      </div>
-      <div class="toolbar">
-        <button class="primary" id="btnAcsConnect">Fetch violations</button>
-        <button id="btnAcsCmd">Show the offline command instead</button>
-        <label class="chk"><input type="checkbox" id="acsHydrate" checked> Fetch violation detail</label>
-        <label class="chk">Scope
-          <select id="acsPlatform" style="background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:3px 6px;font-size:12px">
-            <option value="all" selected>User and platform</option>
-            <option value="user">User workloads only</option>
-            <option value="platform">Platform only</option>
-          </select></label>
-        <label class="chk">State
-          <select id="acsState" style="background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:3px 6px;font-size:12px">
-            <option value="ALL" selected>All states</option>
-            <option value="ACTIVE">Active only (matches the console)</option>
-            <option value="RESOLVED">Resolved only</option>
-            <option value="ATTEMPTED">Attempted only</option>
-          </select></label>
-        <span class="note" id="acsMsg"></span>
-      </div>
-      <p class="note"><strong>Leave detail fetching on.</strong> <code>GET /v1/alerts</code> returns the slim
-        <code>ListAlert</code>, which carries a policy name and severity but no violation text at all. Only
-        <code>GET /v1/alerts/{id}</code> returns the full alert with <code>violations[]</code>. Listing alone
-        is why the results can look empty. Detail is fetched one alert at a time, capped at 200, so this
-        page does not hammer Central.</p>
-      <p class="note"><strong>The console does not show you both by default.</strong> Since ACS 4.6 the
-        Violations page has a user workloads, platform, or both selector, and it opens on user
-        workloads. Anything you can see there under the platform view is missing from a default API
-        pull. This defaults to both, because hiding half the estate behind a filter you did not set
-        is not an audit. On ACS older than 4.6 the field does not exist and the query falls back
-        automatically.</p>
-      <p class="note">Create a token in ACS under Platform Configuration, Integrations, Authentication Tokens, API Token. Give it a role with read access to alerts, nothing more.</p>
-    </div>
+export ROX_ENDPOINT=https://central-stackrox.apps.example.com
+export ROX_API_TOKEN=&lt;ACS API token&gt;
+./scripts/acs_pull_all.sh -o findings
+    writes six files: alerts listed and hydrated, image CVEs for running
+    workloads, image CVEs for everything else, node CVEs, and snoozed CVEs
 
-    <div id="tab-vuln" class="hidden">
-      <div class="warn" style="margin-top:0">
-        <strong>CVEs are not policy violations, and they are not in <code>/v1/alerts</code>.</strong>
-        An image vulnerability only produces an alert if somebody wrote a policy that fires on it, so a
-        cluster riddled with critical CVEs can return an empty alert list. This tab uses the separate
-        vulnerability export, <code>/v1/export/vuln-mgmt/workloads</code>, which is where CVE data
-        actually lives.
-      </div>
-      <div class="grid3">
-        <div class="field"><label>ACS Central URL</label>
-          <input type="text" id="vulnUrl" placeholder="https://central-stackrox.apps.example.com" autocomplete="off"></div>
-        <div class="field"><label>API token</label>
-          <input type="password" id="vulnToken" placeholder="paste your ACS API token" autocomplete="off"></div>
-        <div class="field"><label>Namespace (blank pulls all)</label>
-          <input type="text" id="vulnNs" placeholder="prod" autocomplete="off"></div>
-      </div>
-      <div class="toolbar">
-        <button class="primary" id="btnVulnConnect">Pull vulnerability data</button>
-        <button id="btnVulnCmd">Show the offline command instead</button>
-        <label class="chk"><input type="checkbox" id="vulnFixOnly"> Fixable only</label>
-        <span class="note" id="vulnMsg"></span>
-      </div>
-      <p class="note">The token needs read access to <strong>Image</strong> and <strong>Deployment</strong>.
-        A token scoped only to Alert returns 403 here while the violations tab keeps working, which is a
-        confusing failure worth knowing about in advance. The export streams NDJSON and a large cluster
-        takes a while.</p>
-      <p class="note">Already have an export on disk from <code>curl</code> or <code>roxctl</code>? Drop the
-        <code>.ndjson</code> or <code>.json</code> file onto the drop zone above with your manifests. No
-        connection needed.</p>
-    </div>
-
-    <div id="tab-ocp" class="hidden">
-      <div class="grid3">
-        <div class="field"><label>OpenShift API URL</label>
-          <input type="text" id="ocpUrl" placeholder="https://api.example.com:6443" autocomplete="off"></div>
-        <div class="field"><label>Token</label>
-          <input type="password" id="ocpToken" placeholder="oc whoami -t" autocomplete="off"></div>
-        <div class="field"><label>Namespace (blank scans all)</label>
-          <input type="text" id="ocpNs" placeholder="prod" autocomplete="off"></div>
-      </div>
-      <div class="toolbar">
-        <button class="primary" id="btnOcpConnect">Pull live workloads</button>
-        <button id="btnOcpCmd">Show the offline command instead</button>
-        <span class="note" id="ocpMsg"></span>
-      </div>
-      <p class="note">Pulls Deployments, DaemonSets, StatefulSets and CronJobs, strips the server side fields, and audits what is actually running. Comparing that against your git manifests is often where the interesting gap shows up.</p>
-    </div>
-
-    <div class="warn">
-      <strong>How your token is handled.</strong> It stays in a variable in this tab for the
-      duration of the request. It is never written to storage, never logged, never included in
-      any export, and it is gone when you close the tab. Nothing is sent anywhere except the
-      URL you typed. Use a short lived, least privileged, read only token anyway.
-    </div>
-    <div id="liveOut"></div>
+./scripts/acs_pull_via_oc.sh          reaches Central through your oc session
+.\scripts\acs_pull_over_ssh.ps1       PowerShell, through an SSH bastion</pre>
+    <p class="note">Then drag the <code>findings</code> folder here. Every file it contains
+      is understood, and dropping several merges them rather than replacing: the alert list
+      and the hydrated alerts are the same violations, so they are deduplicated and the one
+      carrying violation text wins.</p>
   </div>
 
   <div id="app" class="hidden">
@@ -248,21 +170,55 @@ a{color:var(--accent)}
     <div id="acsPanel" class="section hidden">
       <h2>Cross check against your ACS export</h2>
       <div id="acsSummary"></div>
+      <div id="acsPlatformOut"></div>
+      <div id="acsOnly"></div>
+    </div>
+
+    <div id="violPanel" class="section hidden">
+      <h2>Violations from ACS</h2>
+      <p class="note">Every violation in the export, whether or not you loaded the manifest it
+        came from. The Fix column says what can be done about each one and by which route, so a
+        violation is never just a number you cannot act on.</p>
+      <div class="toolbar">
+        <label class="chk"><input type="checkbox" id="vfUser" checked> Your workloads</label>
+        <label class="chk"><input type="checkbox" id="vfPlatform"> Platform components</label>
+        <label class="chk"><input type="checkbox" id="vfFixable"> Fixable only</label>
+        <label class="chk"><input type="checkbox" id="vfMatched" checked> Matched to a policy</label>
+        <label class="chk"><input type="checkbox" id="vfUnmatched"> Unmatched</label>
+        <span class="note" id="violCount"></span>
+      </div>
+      <table id="vtbl">
+        <thead><tr>
+          <th style="width:26px"><input type="checkbox" id="vSelAll" title="Select or clear every fixable violation currently shown"></th>
+          <th class="sortable" data-vk="sev" data-label="Severity">Severity</th>
+          <th class="sortable" data-vk="policy" data-label="ACS policy">ACS policy</th>
+          <th class="sortable" data-vk="obj" data-label="Object">Object</th>
+          <th class="sortable" data-vk="ns" data-label="Namespace">Namespace</th>
+          <th class="sortable" data-vk="state" data-label="State">State</th>
+          <th>Violation</th>
+          <th class="sortable" data-vk="fix" data-label="Fix">Fix</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+      <p class="note">Click a row for the full detail and the reasoning behind the fix route.
+        Tick the ones you want to act on. The box in the header takes every fixable violation
+        currently shown, which is not the same as every violation imported.</p>
       <div class="toolbar">
         <label class="chk">What do you want to do
           <select id="violMode" style="background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:3px 6px;font-size:12px">
             <option value="report" selected>Report only</option>
             <option value="manual">Manual fix: give me patches to review</option>
           </select></label>
-        <button id="btnFixViolations">Download</button>
+        <button id="btnFixViolations">Draft the fixes as YAML</button>
+        <span class="note" id="violSelCount"></span>
         <span class="note" id="fixViolMsg"></span>
       </div>
       <p class="note">Report only produces the written account of what could be fixed and by
         which route, and no patch files at all. Manual adds the patches. There is no auto option
         here on purpose: these patches are built from a violation rather than from a manifest this
-        tool has seen, so a human has to look at them before they go anywhere near a cluster.</p>
-      <div id="acsPlatformOut"></div>
-      <div id="acsOnly"></div>
+        tool has seen, so a human has to look at them before they go anywhere near a cluster.
+        A checkbox is disabled where the violation has no fix route this tool can take; hover it
+        for the reason.</p>
     </div>
 
     <div id="vulnPanel" class="section hidden">
@@ -386,22 +342,32 @@ function loadItems(items) {
           'Server side fields were stripped, so this is safe to commit.' +
           (c.data.errors && c.data.errors.length ? ' ' + esc(c.data.errors.join(' ')) : ''));
       } else if (c.kind === 'vuln') {
-        STATE.vulns = importVulnFindings(c.data, { onlyFixable: false });
+        STATE.vulns = mergeVulnImports(STATE.vulns, importVulnFindings(c.data, { onlyFixable: false }));
         notes.push(it.name + ': read as a vulnerability export, ' +
           STATE.vulns.rows.length + ' CVE(s) across ' + STATE.vulns.images.length + ' image(s).');
       } else if (c.kind === 'alerts') {
-        STATE.acs = importAcsViolations(c.data);
+        STATE.acs = mergeAcsImports(STATE.acs, importAcsViolations(c.data));
         notes.push(it.name + ': read as a policy violation export, ' + STATE.acs.total + ' alert(s).' +
           (STATE.acs.hydratable
             ? ' ' + STATE.acs.hydratable + ' of them carry no violation text, which means this came from ' +
               'GET /v1/alerts. Only /v1/alerts/{id} returns the detail.'
             : ''));
       } else {
-        alert('Could not read ' + it.name + '.\n\nExpected one of:\n' +
-          '  Kubernetes or OpenShift objects (oc get ... -o json or -o yaml)\n' +
-          '  an ACS alert export (/v1/alerts)\n' +
-          '  an ACS vulnerability export (/v1/export/vuln-mgmt/workloads)\n' +
-          (c.errors && c.errors.length ? '\n' + c.errors.slice(0, 3).join('\n') : ''));
+        {
+          /* Say what the file IS before saying what it is not. "Expected Kubernetes or
+             OpenShift objects" describes everything the file could have been and nothing
+             about the one in front of you, which is how you end up hunting a parser bug
+             that is not there. */
+          const why = describeUnloadable(it.text);
+          alert(why
+            ? 'Nothing to load from ' + it.name + '.\n\n' + why
+            : 'Could not read ' + it.name + '.\n\nExpected one of:\n' +
+              '  Kubernetes or OpenShift objects (oc get ... -o json or -o yaml)\n' +
+              '  an ACS alert export (/v1/alerts or /v1/alerts/{id})\n' +
+              '  an ACS vulnerability export (/v1/export/vuln-mgmt/workloads)\n' +
+              '  an ACS image or node export (/v1/export/images, /v1/export/nodes)\n' +
+              (c.errors && c.errors.length ? '\n' + c.errors.slice(0, 3).join('\n') : ''));
+        }
       }
       continue;
     }
@@ -431,7 +397,11 @@ function render() {
   }
   // Vulnerability data alone is enough to have something worth showing. Requiring manifests
   // would hide a valid CVE pull behind an unrelated precondition.
-  const has = STATE.files.length > 0 || !!(STATE.vulns && STATE.vulns.rows.length);
+  // ACS data alone is enough to have something worth showing. Requiring manifests would
+  // hide a perfectly good violation export behind an unrelated precondition, which is
+  // exactly the dead end that made violations look like counts you could not act on.
+  const has = STATE.files.length > 0 || !!(STATE.vulns && STATE.vulns.rows.length) ||
+              !!(STATE.acs && STATE.acs.total);
   $('app').classList.toggle('hidden', !has);
   if (!has) return;
 
@@ -466,6 +436,7 @@ function render() {
     '<div style="flex:1;text-align:center;color:var(--muted);font-size:11px">AFTER AUTO FIXES</div><div class="bv"></div></div>';
 
   renderAcs();
+  renderViolations();
   renderVulns();
   renderTable();
 }
@@ -513,6 +484,189 @@ function renderAcs() {
     STATE.onlyInAcs.map((v) => '<tr><td>' + esc(v.acsPolicyName) + '</td><td>' + esc(v.obj) + '</td><td>' + esc(v.namespace) + '</td><td>' + esc(v.cluster || '') + '</td></tr>').join('') +
     '</tbody></table>';
 }
+
+/* ------------------------------------------------------- violations panel
+ *
+ * This exists because counts are not findings. The page used to report "N violations
+ * imported, M matched" and stop, which tells an operator that something is wrong and
+ * gives them no way to see it or act on it. Every violation now gets a row, and every row
+ * says what can be done about it.
+ */
+
+const VSORT2 = { key: 'sev', dir: 1 };
+
+function violRows() {
+  if (!STATE.acs) return [];
+  const all = STATE.acs.imported.concat(STATE.acs.unmatched);
+  const wantUser = $('vfUser').checked, wantPlat = $('vfPlatform').checked;
+  const onlyFix = $('vfFixable').checked;
+  const wantMatched = $('vfMatched').checked, wantUnmatched = $('vfUnmatched').checked;
+
+  const filesByObj = {};
+  for (const f of STATE.files) for (const d of f.docs) filesByObj[nameOf(d)] = f.name;
+
+  let rows = all.map((r) => {
+    const fx = violationFixability(r, !!filesByObj[r.obj]);
+    return { rec: r, fx: fx, file: filesByObj[r.obj] || '' };
+  });
+  rows = rows.filter((x) => {
+    if (x.rec.isPlatform ? !wantPlat : !wantUser) return false;
+    if (x.rec.matched ? !wantMatched : !wantUnmatched) return false;
+    if (onlyFix && !x.fx.fixable) return false;
+    return true;
+  });
+
+  const k = VSORT2.key, d = VSORT2.dir;
+  const fixOrder = { inplace: 0, patch: 1, 'needs-manifest': 2, manual: 3, platform: 4, unmatched: 5 };
+  rows.sort((a, b) => {
+    let x = 0;
+    if (k === 'sev') x = sevRank(a.rec.acsSeverity || 'LOW_SEVERITY') - sevRank(b.rec.acsSeverity || 'LOW_SEVERITY');
+    else if (k === 'policy') x = (a.rec.acsPolicyName || '').localeCompare(b.rec.acsPolicyName || '');
+    else if (k === 'obj') x = a.rec.obj.localeCompare(b.rec.obj);
+    else if (k === 'ns') x = a.rec.namespace.localeCompare(b.rec.namespace);
+    else if (k === 'state') x = (a.rec.state || '').localeCompare(b.rec.state || '');
+    else if (k === 'fix') x = (fixOrder[a.fx.kind] || 9) - (fixOrder[b.fx.kind] || 9);
+    return x * d;
+  });
+  return rows;
+}
+
+const FIX_PILL = {
+  inplace: ['auto', 'In your YAML'],
+  patch: ['gen', 'Patch'],
+  'needs-manifest': ['manual', 'Need manifest'],
+  manual: ['manual', 'Human decision'],
+  platform: ['acs', 'Platform'],
+  unmatched: ['manual', 'Not modelled'],
+};
+
+/* Which violations the operator has chosen to act on.
+ *
+ * Held by violation key rather than by row index, because the rows are filtered and
+ * sorted. An index would mean that changing a filter silently reassigned every tick to a
+ * different violation, and the operator would have no way to notice. The key survives
+ * filtering, sorting, and loading another export on top.
+ *
+ * It starts empty on purpose. Nothing is selected until somebody selects it, which is the
+ * same reasoning as report mode being the default: the state you get by doing nothing is
+ * the state that does nothing.
+ */
+const SELECTED = new Set();
+
+function selectableRows() { return violRows().filter((x) => x.fx.fixable); }
+
+function syncSelectionUi() {
+  const shown = selectableRows();
+  const chosen = shown.filter((x) => SELECTED.has(violationKey(x.rec)));
+  const box = $('vSelAll');
+  if (box) {
+    box.checked = shown.length > 0 && chosen.length === shown.length;
+    box.indeterminate = chosen.length > 0 && chosen.length < shown.length;
+    box.disabled = shown.length === 0;
+  }
+  const btn = $('btnFixViolations');
+  if (btn) {
+    /* The button says what it will act on. "Draft the fixes" with nothing ticked is a
+       button that looks like it works and does nothing. */
+    btn.textContent = SELECTED.size
+      ? 'Draft fixes for ' + SELECTED.size + ' selected'
+      : 'Draft the fixes as YAML';
+    btn.disabled = SELECTED.size === 0;
+  }
+  const c = $('violSelCount');
+  if (c) {
+    c.textContent = SELECTED.size === 0
+      ? 'Nothing selected. Tick the violations you want to fix.'
+      : SELECTED.size + ' selected' +
+        (SELECTED.size > chosen.length ? ', ' + (SELECTED.size - chosen.length) + ' of them hidden by the current filters' : '');
+  }
+}
+
+function bindSelection(tb) {
+  tb.querySelectorAll('input.vsel').forEach((cb) => cb.addEventListener('click', (ev) => {
+    ev.stopPropagation();           /* the row itself toggles the detail panel */
+    if (cb.checked) SELECTED.add(cb.dataset.vkey); else SELECTED.delete(cb.dataset.vkey);
+    syncSelectionUi();
+  }));
+}
+
+function renderViolations() {
+  const p = $('violPanel');
+  if (!STATE.acs || !STATE.acs.total) { p.classList.add('hidden'); return; }
+  p.classList.remove('hidden');
+  const rows = violRows();
+  const total = STATE.acs.total;
+  $('violCount').textContent = 'showing ' + rows.length + ' of ' + total +
+    ' violation(s): ' + STATE.acs.user + ' on your workloads, ' + STATE.acs.platform + ' on platform components';
+
+  const tb = $('vtbl').querySelector('tbody');
+  tb.innerHTML = rows.slice(0, 500).map((x, i) => {
+    const r = x.rec;
+    const s = sevLabel(r.acsSeverity || 'LOW_SEVERITY');
+    const pill = FIX_PILL[x.fx.kind] || ['manual', x.fx.kind];
+    return '<tr class="frow" data-vi="' + i + '">' +
+      '<td class="selcell">' +
+        (x.fx.fixable
+          ? '<input type="checkbox" class="vsel" data-vkey="' + esc(violationKey(r)) + '"' +
+            (SELECTED.has(violationKey(r)) ? ' checked' : '') + '>'
+          : '<input type="checkbox" disabled title="' + esc(x.fx.why) + '">') +
+      '</td>' +
+      '<td><span class="sev ' + esc(s) + '">' + esc(s) + '</span></td>' +
+      '<td>' + (r.policy ? '<span class="acsid">' + esc(r.policy.id) + '</span> ' : '') + esc(r.acsPolicyName) + '</td>' +
+      '<td>' + esc(r.obj) + (r.isPlatform ? ' <span class="chip">platform</span>' : '') + '</td>' +
+      '<td>' + esc(r.namespace) + '</td>' +
+      '<td>' + esc(r.state || '') + '</td>' +
+      '<td class="note" style="margin:0">' + esc((r.detail || '').slice(0, 140)) + '</td>' +
+      '<td><span class="pill ' + pill[0] + '">' + esc(pill[1]) + '</span></td>' +
+      '</tr><tr class="vdet hidden"><td colspan="8" style="background:var(--panel2)">' +
+      '<div class="kv">' +
+      (r.policy ? '<div class="k">Why it matters</div><div>' + esc(r.policy.rationale) + '</div>' +
+                  '<div class="k">What to do</div><div>' + esc(r.policy.remediation) + '</div>' +
+                  '<div class="k">Standards</div><div>' + citationsOf(r.policy).map(esc).join(' | ') + '</div>' : '') +
+      '<div class="k">Cluster</div><div>' + esc(r.cluster || 'not reported') + '</div>' +
+      '<div class="k">Lifecycle</div><div>' + esc(r.lifecycleStage || 'not reported') + '</div>' +
+      (x.file ? '<div class="k">Manifest</div><div style="font-family:ui-monospace,Consolas,monospace">' + esc(x.file) + '</div>' : '') +
+      '<div class="k">Fix route</div><div>' + esc(x.fx.why) + '</div>' +
+      (r.violations && r.violations.length > 1
+        ? '<div class="k">All violations</div><div>' + r.violations.map(esc).join('<br>') + '</div>' : '') +
+      '</div></td></tr>';
+  }).join('');
+  if (rows.length > 500) {
+    tb.innerHTML += '<tr><td colspan="8" class="note">Showing the first 500 of ' + rows.length +
+      '. Narrow it with the filters above.</td></tr>';
+  }
+  tb.querySelectorAll('tr.frow').forEach((tr) => tr.addEventListener('click', () => {
+    const d = tr.nextElementSibling;
+    if (d) d.classList.toggle('hidden');
+  }));
+  bindSelection(tb);
+  syncSelectionUi();
+}
+
+['vfUser', 'vfPlatform', 'vfFixable', 'vfMatched', 'vfUnmatched'].forEach((id) =>
+  $(id).addEventListener('change', renderViolations));
+
+if ($('vSelAll')) {
+  $('vSelAll').addEventListener('click', () => {
+    /* Acts on what is currently shown, not on everything imported. Selecting rows you
+       cannot see is how somebody ends up drafting a patch for a namespace they had
+       deliberately filtered out. */
+    const shown = selectableRows();
+    const all = shown.every((x) => SELECTED.has(violationKey(x.rec)));
+    for (const x of shown) {
+      if (all) SELECTED.delete(violationKey(x.rec));
+      else SELECTED.add(violationKey(x.rec));
+    }
+    renderViolations();
+  });
+}
+
+
+document.querySelectorAll('#vtbl th.sortable').forEach((th) => th.addEventListener('click', () => {
+  const k = th.dataset.vk;
+  if (VSORT2.key === k) VSORT2.dir *= -1; else { VSORT2.key = k; VSORT2.dir = 1; }
+  renderViolations();
+}));
 
 /* ------------------------------------------------------ vulnerability panel */
 
@@ -706,6 +860,71 @@ $('btnJson').addEventListener('click', () => {
   $('msg').textContent = 'JSON downloaded.';
   setTimeout(() => { $('msg').textContent = ''; }, 3000);
 });
+/* Drafting fixes for violations.
+ *
+ * The output is YAML on disk and nothing else. No command is run, no cluster is touched,
+ * and the files are written so they can be reviewed, tested against a non production
+ * namespace, and applied by whoever owns the workload. That ordering is the point: the
+ * tool produces evidence and a proposal, a human produces the change.
+ */
+$('btnFixViolations').addEventListener('click', () => {
+  if (!STATE.acs || !STATE.acs.total) { $('fixViolMsg').textContent = 'No ACS violations loaded.'; return; }
+  if (!SELECTED.size) {
+    $('fixViolMsg').textContent = 'Nothing is selected. Tick the violations you want to fix, ' +
+      'or use the box in the table header to take all of the ones currently shown.';
+    return;
+  }
+
+  let mode;
+  try { mode = resolveFixMode($('violMode').value); }
+  catch (e) { mode = 'report'; }          /* an unrecognised value falls to the SAFE end */
+
+  /* Any violation whose object we also hold a manifest for gets fixed in that manifest
+     rather than by a patch, so pass the mapping in. */
+  const filesByObj = {};
+  for (const f of STATE.files) for (const d of f.docs) filesByObj[nameOf(d)] = f.name;
+
+  const bundle = buildViolationFixBundle(STATE.acs,
+    { filesByObj: filesByObj, mode: mode, selected: SELECTED });
+  const tag = stamp() + '_' + mode;
+
+  if (!bundle.files.length) {
+    download('acs_violation_fixes_' + tag + '.md', bundle.report, 'text/markdown');
+    $('fixViolMsg').textContent = mode === 'report'
+      ? 'Report only, so no YAML was written. ' + bundle.suppressed + ' patch(es) would be. Switch to Manual to get them.'
+      : (bundle.inplace.length
+          ? bundle.inplace.length + ' violation(s) are fixed directly in a manifest you loaded, so ' +
+            'no patch was drafted for them. Open the remediation page to apply those. The report ' +
+            'lists the rest and why each was refused.'
+          : 'Nothing was drafted. The report explains why for each violation.');
+  } else if (typeof JSZip === 'undefined') {
+    /* Without the zip library, write the files one at a time rather than silently
+       dropping all but the first. */
+    download('acs_violation_fixes_' + tag + '.md', bundle.report, 'text/markdown');
+    bundle.files.forEach((f, i) => setTimeout(() => download(f.name, f.text, 'text/yaml'), i * 150));
+    $('fixViolMsg').textContent = 'Downloaded the report and ' + bundle.files.length + ' YAML file(s) separately.';
+  } else {
+    const zip = new JSZip();
+    zip.file('README_read_this_first.md', bundle.report);
+    for (const f of bundle.files) zip.file('patches/' + f.name, f.text);
+    zip.generateAsync({ type: 'blob' }).then((blob) => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'acs_violation_fixes_' + tag + '.zip';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    });
+    $('fixViolMsg').textContent = bundle.files.length + ' YAML patch(es) drafted. Review them before applying.';
+  }
+  setTimeout(() => { $('fixViolMsg').textContent = ''; }, 8000);
+});
+
+$('violMode').addEventListener('change', () => {
+  let m;
+  try { m = resolveFixMode($('violMode').value); } catch (e) { m = 'report'; }
+  $('fixViolMsg').textContent = FIX_MODE_INFO[m].summary;
+});
+
 $('btnCatalogue').addEventListener('click', () => {
   const c = $('catalogue');
   c.classList.toggle('hidden');
@@ -798,201 +1017,6 @@ const DEMO = [
 $('btnDemo').addEventListener('click', () => loadItems([{ name: 'demo/workload.yaml', text: DEMO }]));
 
 /* ------------------------------------------------------- live cluster panel */
-
-document.querySelectorAll('.tab').forEach((tb) => tb.addEventListener('click', () => {
-  document.querySelectorAll('.tab').forEach((x) => x.classList.remove('on'));
-  tb.classList.add('on');
-  $('tab-acs').classList.toggle('hidden', tb.dataset.t !== 'acs');
-  $('tab-vuln').classList.toggle('hidden', tb.dataset.t !== 'vuln');
-  $('tab-ocp').classList.toggle('hidden', tb.dataset.t !== 'ocp');
-  $('liveOut').innerHTML = '';
-}));
-
-function showCmd(title, cmd) {
-  $('liveOut').innerHTML = '<div class="note" style="margin-top:12px"><strong>' + esc(title) + '</strong></div>' +
-    '<pre class="cmd">' + esc(cmd) + '</pre>';
-}
-function showErr(msg, cmd, cmdTitle) {
-  $('liveOut').innerHTML = '<div class="err"><strong>Could not reach the API.</strong><br>' + esc(msg) + '</div>' +
-    (cmd ? '<div class="note" style="margin-top:10px"><strong>' + esc(cmdTitle) + '</strong></div><pre class="cmd">' + esc(cmd) + '</pre>' : '');
-}
-
-$('btnAcsCmd').addEventListener('click', () =>
-  showCmd('Run this where ACS is reachable, then drop acs_alerts.json onto this page.',
-    acsFallbackCommand($('acsUrl').value, $('acsQuery').value)));
-$('btnOcpCmd').addEventListener('click', () =>
-  showCmd('Run this where the cluster is reachable, then drop the YAML onto this page.',
-    openshiftFallbackCommand($('ocpNs').value)));
-
-$('btnAcsConnect').addEventListener('click', async () => {
-  const url = $('acsUrl').value, tok = $('acsToken').value, q = $('acsQuery').value;
-  const hyd = $('acsHydrate').checked;
-  $('acsMsg').textContent = hyd ? 'Listing alerts, then fetching detail...' : 'Contacting Central...';
-  $('liveOut').innerHTML = '';
-  try {
-    const res = await fetchAcsAlerts(url, tok, { query: q, hydrate: hyd, platform: $('acsPlatform').value, violationState: $('acsState').value });
-    STATE.acs = res;
-    STATE.onlyInAcs = correlate(STATE.findings, res.imported).onlyInAcs;
-    $('acsMsg').textContent = res.total + ' violation(s) retrieved, ' + res.imported.length + ' mapped.';
-    // Say plainly what came back and what did not. An operator who sees rows with no detail
-    // and no explanation concludes the tool is broken; the real cause is the API shape.
-    let note = 'Connected. Query used: <code>' + esc(res.query || '(none)') + '</code>. ' +
-      'The token has been cleared from the form.';
-    note += '<br>' + res.user + ' on your workloads, ' + res.platform + ' on platform components' +
-      (res.platformFlagPresent ? '.' :
-        ' <em>(this ACS does not report the platform flag, so the split is a namespace heuristic)</em>.');
-    if (res.platformFallback) note += '<br>This Central rejected the Platform Component filter, ' +
-      'which means it predates ACS 4.6. The query was retried without it, so you have everything ' +
-      'Central returns by default.';
-    if (res.truncated) note += '<br><strong>The result hit the page limit, so this is not everything.</strong> ' +
-      'Narrow the query by namespace or severity, or raise the limit.';
-    if (hyd) {
-      note += '<br>Violation detail fetched for ' + (res.hydrated || 0) + ' alert(s).';
-      if (res.hydrateCapped) note += ' Capped at 200 to avoid hammering Central, so some rows still show only the policy description.';
-      if (res.hydrateFailures && res.hydrateFailures.length)
-        note += '<br>' + res.hydrateFailures.length + ' detail call(s) failed: ' + esc(res.hydrateFailures.slice(0, 3).join(' | '));
-    } else if (res.hydratable) {
-      note += '<br><strong>' + res.hydratable + ' alert(s) have no violation text</strong> because ' +
-        'GET /v1/alerts returns the slim ListAlert. Tick "Fetch violation detail" to get it from /v1/alerts/{id}.';
-    }
-    if (!res.total) note += '<br><strong>Zero alerts came back.</strong> That is a real answer, but check the ' +
-      'obvious causes first: the query defaults to active violations only, the token may be scoped to ' +
-      'namespaces you did not expect, and image CVEs never appear here at all. For CVEs use the ' +
-      'Vulnerabilities tab.';
-    $('liveOut').innerHTML = '<div class="note" style="margin-top:10px">' + note + '</div>';
-    render();
-  } catch (e) {
-    $('acsMsg').textContent = '';
-    showErr(e.message, acsFallbackCommand(url, q), 'Use this instead, it does not involve the browser:');
-  } finally {
-    // Clear the credential on EVERY path, not just success. This used to sit in the try
-    // block, so a 403, a blocked origin or a certificate error left the token sitting in
-    // a DOM input. Failure is the common case for this feature, which made the leak the
-    // default rather than the exception: the value then survives a screenshot, a screen
-    // share, a session restore, and any extension with content script access.
-    $('acsToken').value = '';
-  }
-});
-
-/* ------------------------------------------------------ vulnerability panel */
-
-$('btnVulnCmd').addEventListener('click', () =>
-  showCmd('Run this where ACS is reachable, then drop acs_vulns.ndjson onto this page.',
-    vulnFallbackCommand($('vulnUrl').value, { namespace: $('vulnNs').value })));
-
-$('btnVulnConnect').addEventListener('click', async () => {
-  const url = $('vulnUrl').value, tok = $('vulnToken').value, ns = $('vulnNs').value;
-  $('vulnMsg').textContent = 'Streaming the vulnerability export, this can take a while...';
-  $('liveOut').innerHTML = '';
-  try {
-    const res = await fetchVulnWorkloads(url, tok, { namespace: ns, onlyFixable: $('vulnFixOnly').checked });
-    STATE.vulns = res;
-    STATE.vulnCorr = correlateVulns(STATE.files, res);
-    const s = summarizeVulns(res);
-    $('vulnMsg').textContent = res.rows.length + ' CVE(s) across ' + res.images.length + ' image(s).';
-    let note = 'Pulled ' + res.workloads + ' workload(s), ' + res.images.length + ' image(s), ' +
-      res.rows.length + ' distinct CVE(s). ' + s.critical + ' critical, ' + s.kev +
-      ' known exploited, ' + s.fixable + ' fixable now. The token has been cleared from the form.';
-    if (res.parseErrors && res.parseErrors.length)
-      note += '<br>' + res.parseErrors.length + ' line(s) of the export could not be parsed and were ' +
-        'skipped rather than guessed at: ' + esc(res.parseErrors.slice(0, 2).join(' | '));
-    if (!res.rows.length) note += '<br><strong>The export returned no CVEs.</strong> Most often that means ' +
-      'the images have not been scanned yet, the token cannot read Image, or the namespace filter matched ' +
-      'nothing. An image with no scan data is not an image with no vulnerabilities.';
-    $('liveOut').innerHTML = '<div class="note" style="margin-top:10px">' + note + '</div>';
-    render();
-  } catch (e) {
-    $('vulnMsg').textContent = '';
-    showErr(e.message, vulnFallbackCommand(url, { namespace: ns }),
-      'Use this instead, it does not involve the browser:');
-  } finally {
-    // Clear the credential on EVERY path, not just success. This used to sit in the try
-    // block, so a 403, a blocked origin or a certificate error left the token sitting in
-    // a DOM input. Failure is the common case for this feature, which made the leak the
-    // default rather than the exception: the value then survives a screenshot, a screen
-    // share, a session restore, and any extension with content script access.
-    $('vulnToken').value = '';
-  }
-});
-
-['vFixOnly', 'vKevOnly', 'vRunOnly', 'vShowAccepted'].forEach((id) =>
-  $(id).addEventListener('change', renderVulns));
-
-document.querySelectorAll('#vtable th.sortable').forEach((th) => th.addEventListener('click', () => {
-  const k = th.dataset.vkey;
-  if (VSORT.key === k) VSORT.dir *= -1; else { VSORT.key = k; VSORT.dir = 1; }
-  renderVulns();
-}));
-
-$('btnFixViolations').addEventListener('click', async () => {
-  if (!STATE.acs) return;
-  /* Objects whose manifest we already have are fixed in the YAML on the remediation
-     page, not patched blind. Tell the bundle which those are so it does not emit a
-     patch that competes with a real edit. */
-  const filesByObj = {};
-  for (const f of STATE.files) for (const d of f.docs) filesByObj[nameOf(d)] = f.name;
-  const mode = $('violMode').value;
-  const b = buildViolationFixBundle(STATE.acs, { filesByObj: filesByObj, mode: mode });
-  if (!b.files.length && !b.inplace.length) {
-    $('fixViolMsg').textContent = 'Nothing here can be auto fixed. See the report for why.';
-  }
-  const zip = new JSZip();
-  for (const f of b.files) zip.file(f.name, f.text);
-  zip.file('FIXING_VIOLATIONS.md', b.report);
-  download(stamp() + '_acs_violations_' + mode + '.zip', await zip.generateAsync({ type: 'blob' }));
-  const warn = b.files.filter((f) => f.needsContainerName).length;
-  $('fixViolMsg').textContent = b.suppressed
-    ? 'Report only: ' + b.suppressed + ' patch(es) were deliberately not written. The report lists them.'
-    : b.files.length + ' patch file(s), ' + b.skipped.length +
-      ' not fixable' + (b.inplace.length ? ', ' + b.inplace.length + ' fixed in your YAML instead' : '') +
-      (warn ? '. ' + warn + ' need a container name filled in.' : '.');
-  setTimeout(() => { $('fixViolMsg').textContent = ''; }, 12000);
-});
-
-$('btnVulnWorklist').addEventListener('click', () => {
-  if (!STATE.vulns) return;
-  download(stamp() + '_image_worklist.md', buildVulnWorklist(STATE.vulns, STATE.vulnCorr), 'text/markdown');
-});
-$('btnVulnJson').addEventListener('click', () => {
-  if (!STATE.vulns) return;
-  // The token is not in here. Neither is the URL. Only the findings.
-  const s = summarizeVulns(STATE.vulns);
-  download(stamp() + '_cves.json', JSON.stringify({
-    tool: ACS_TOOL,
-    generated: new Date().toISOString(),
-    source: 'ACS /v1/export/vuln-mgmt/workloads',
-    priorityScale: { min: 0, max: PRIORITY_MAX, note: 'CVSS plus named bounded adjustments. Not a CVSS score.' },
-    summary: s,
-    images: STATE.vulns.images,
-    cves: STATE.vulns.rows,
-    manifestCorrelation: STATE.vulnCorr,
-  }, null, 2), 'application/json');
-});
-
-$('btnOcpConnect').addEventListener('click', async () => {
-  const url = $('ocpUrl').value, tok = $('ocpToken').value, ns = $('ocpNs').value;
-  $('ocpMsg').textContent = 'Pulling workloads...';
-  $('liveOut').innerHTML = '';
-  try {
-    const res = await fetchOpenShiftWorkloads(url, tok, ns);
-    if (!res.count && res.errors.length) throw new Error(res.errors.join(' | '));
-    loadItems(res.files);
-    $('ocpMsg').textContent = res.count + ' live workload(s) pulled and audited.';
-    $('liveOut').innerHTML = '<div class="note" style="margin-top:10px">Pulled ' + res.count +
-      ' object(s). Server side fields were stripped, so the YAML here is safe to commit. The token has been cleared from the form.' +
-      (res.errors.length ? '<br>Some kinds could not be listed: ' + esc(res.errors.join(' | ')) : '') + '</div>';
-  } catch (e) {
-    $('ocpMsg').textContent = '';
-    showErr(e.message, openshiftFallbackCommand(ns), 'Use this instead, it does not involve the browser:');
-  } finally {
-    // Clear the credential on EVERY path, not just success. This used to sit in the try
-    // block, so a 403, a blocked origin or a certificate error left the token sitting in
-    // a DOM input. Failure is the common case for this feature, which made the leak the
-    // default rather than the exception: the value then survives a screenshot, a screen
-    // share, a session restore, and any extension with content script access.
-    $('ocpToken').value = '';
-  }
-});
 
 const themeBtn = $('themeBtn');
 function applyTheme(t) {

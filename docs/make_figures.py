@@ -118,47 +118,85 @@ render("fig1_auditor_overview","\n".join(p),W,H)
 W,H=1160,600
 p=[f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" font-family="{FONT}">',
    f'<rect width="{W}" height="{H}" fill="{BG}"/>',
-   hdr(W,"Connecting to a live cluster","Pull violations from ACS Central, or pull the running workloads from the OpenShift API")]
-p.append(f'<rect x="24" y="80" width="{W-48}" height="300" rx="9" fill="{PANEL}" stroke="{BORDER}"/>')
-p.append(f'<text x="42" y="103" font-size="11" font-weight="bold" fill="{ACC}">OR PULL STRAIGHT FROM YOUR CLUSTER</text>')
-for i,(lbl,on) in enumerate([("ACS Central",True),("OpenShift API",False)]):
-    xx=42+i*118; wdt=104
-    p.append(f'<rect x="{xx}" y="115" width="{wdt}" height="24" rx="6" fill="{PANEL2}" stroke="{ACC if on else BORDER}"/>')
-    p.append(f'<text x="{xx+wdt/2}" y="131" font-size="11" fill="{ACC if on else TEXT}" font-weight="{"bold" if on else "normal"}" text-anchor="middle">{esc(lbl)}</text>')
-fields=[("ACS CENTRAL URL","https://central-stackrox.apps.example.com",42),
-        ("API TOKEN","••••••••••••••••••••••••",412),
-        ("FILTER (OPTIONAL ACS QUERY)","Severity:CRITICAL_SEVERITY",782)]
-for lbl,val,xx in fields:
-    p.append(f'<text x="{xx}" y="167" font-size="8.5" fill="{MUTED}">{lbl}</text>')
-    p.append(f'<rect x="{xx}" y="174" width="336" height="28" rx="6" fill="{PANEL2}" stroke="{BORDER}"/>')
-    p.append(f'<text x="{xx+10}" y="193" font-size="10.5" fill="{TEXT}">{esc(val)}</text>')
-p.append(f'<rect x="42" y="216" width="126" height="26" rx="6" fill="#1f6feb"/>')
-p.append(f'<text x="105" y="233" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">Fetch violations</text>')
-p.append(f'<rect x="122" y="216" width="228" height="26" rx="6" fill="{PANEL2}" stroke="{BORDER}"/>')
-p.append(f'<text x="290" y="233" font-size="11" fill="{TEXT}" text-anchor="middle">Show the offline command instead</text>')
-p.append(callout(430,229,"1","Use this when the browser is blocked",0))
-p.append(f'<rect x="42" y="258" width="{W-84}" height="72" rx="7" fill="{PANEL2}"/>')
-p.append(f'<rect x="42" y="258" width="3" height="72" fill="{MED}"/>')
-p.append(f'<text x="58" y="278" font-size="11" font-weight="bold" fill="{TEXT}">How your token is handled.</text>')
+   hdr(W,"Getting the data out of ACS","The scripts run where the cluster is reachable. The page reads what they write.")]
+# why the browser is not in this picture
+p.append(f'<rect x="24" y="80" width="{W-48}" height="128" rx="9" fill="{PANEL}" stroke="{BORDER}"/>')
+p.append(f'<rect x="24" y="80" width="3" height="128" fill="{MED}"/>')
+p.append(f'<text x="44" y="106" font-size="12" font-weight="bold" fill="{TEXT}">The pages do not connect to anything, and that is deliberate.</text>')
 for i,line in enumerate([
-  "It stays in a variable in this tab for the duration of the request, then the field is cleared.",
-  "It is never written to storage, never logged, and never included in any file you download.",
-  "Use a short lived, read only, least privileged token regardless."]):
-    p.append(f'<text x="58" y="{296+i*15}" font-size="10.5" fill="{MUTED}">{esc(line)}</text>')
-p.append(callout(40,352,"2","Read only. Nothing is ever written back to the cluster",0))
-# CORS explainer
-p.append(f'<rect x="24" y="398" width="{W-48}" height="186" rx="9" fill="{PANEL}" stroke="{BORDER}"/>')
-p.append(f'<text x="42" y="421" font-size="11" font-weight="bold" fill="{ACC}">IF THE BROWSER BLOCKS THE CALL</text>')
-p.append(f'<text x="42" y="443" font-size="11" fill="{TEXT}">A page opened from a file:// URL has a null origin. Neither ACS Central nor the OpenShift API sends a CORS header that allows it,</text>')
-p.append(f'<text x="42" y="460" font-size="11" fill="{TEXT}">so the browser blocks the response before the page sees it. That is the browser protecting you, not a defect. Two ways forward:</text>')
-p.append(f'<text x="52" y="486" font-size="11" fill="{LOW}">A.  Serve the page from an allowed origin</text>')
-p.append(f'<text x="70" y="503" font-size="10.5" fill="{MUTED}">OpenShift: add it to spec.additionalCORSAllowedOrigins on the APIServer resource.</text>')
-p.append(f'<text x="70" y="519" font-size="10.5" fill="{MUTED}">ACS: serve the page from Central\'s own route, or put both behind one reverse proxy.</text>')
-p.append(f'<text x="52" y="543" font-size="11" fill="{LOW}">B.  Use the offline route, which never involves the browser</text>')
-p.append(f'<rect x="70" y="551" width="1000" height="22" rx="5" fill="{PANEL2}" stroke="{BORDER}"/>')
-p.append(f'<text x="80" y="566" font-size="10" font-family="monospace" fill="{TEXT}">curl -sk -H "Authorization: Bearer $ROX_API_TOKEN" "https://central.../v1/alerts" -o acs_alerts.json   # then drop the file on the page</text>')
+  "A page opened from a file has a null origin. Neither ACS Central nor the OpenShift API sends a header that permits it, so the browser",
+  "blocks the response before the page ever sees it. An in browser connector could not work from here no matter how it was written.",
+  "Building one anyway meant asking you to paste a live ACS API token into a browser tab in exchange for a request that then failed.",
+  "The token risk was real and the benefit was zero, so the connectors were removed rather than mitigated."]):
+    p.append(f'<text x="44" y="{130+i*18}" font-size="11" fill="{MUTED}">{esc(line)}</text>')
+
+# the three steps
+def stepbox(x,y,w,h,n,title,lines,accent=ACC):
+    o=[f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="9" fill="{PANEL}" stroke="{BORDER}"/>',
+       f'<circle cx="{x+26}" cy="{y+28}" r="13" fill="{accent}"/>',
+       f'<text x="{x+26}" y="{y+33}" font-size="13" font-weight="bold" fill="#fff" text-anchor="middle">{n}</text>',
+       f'<text x="{x+48}" y="{y+33}" font-size="13" font-weight="bold" fill="{TEXT}">{esc(title)}</text>']
+    for i,l in enumerate(lines):
+        mono = l.startswith("$")
+        fam = ' font-family="monospace"' if mono else ''
+        col = TEXT if mono else MUTED
+        o.append(f'<text x="{x+18}" y="{y+58+i*17}" font-size="10.5" fill="{col}"{fam}>{esc(l)}</text>')
+    return "".join(o)
+
+p.append(stepbox(24,228,352,214,"1","Run the preflight",[
+  "$ ./scripts/acs_preflight.sh",
+  "",
+  "Checks the endpoint is reachable, the token",
+  "is valid, TLS verifies, and the token can",
+  "actually read Alert, Image and Deployment.",
+  "",
+  "A token scoped only to Alert returns 403 on",
+  "the vulnerability export while violations keep",
+  "working, which is a confusing way to see",
+  "nothing. This catches it in one line."]))
+
+p.append(stepbox(404,228,352,214,"2","Pull everything",[
+  "$ ./scripts/acs_pull_all.sh"]))
+files=[("00_auth_status.json","who the token is"),
+       ("01_alerts_list.json","every violation"),
+       ("02_alerts_full.json","with the violation text"),
+       ("03_vuln_workloads.ndjson","running images"),
+       ("04_all_images.ndjson","deployed or not"),
+       ("05_nodes.ndjson","node CVEs"),
+       ("06_snoozed.ndjson","what was deferred")]
+for i,(fn,desc) in enumerate(files):
+    yy=303+i*17
+    p.append(f'<text x="422" y="{yy}" font-size="9.5" font-family="monospace" fill="{TEXT}">{esc(fn)}</text>')
+    p.append(f'<text x="606" y="{yy}" font-size="9.5" fill="{MUTED}">{esc(desc)}</text>')
+
+p.append(stepbox(784,228,352,214,"3","Drop them on the page",[
+  "All of them at once, in any order.",
+  "",
+  "They accumulate rather than replace each",
+  "other. A violation that arrives twice, once",
+  "slim from the list and once hydrated from",
+  "the detail endpoint, is deduplicated and",
+  "the hydrated copy is kept.",
+  "",
+  "Nothing is uploaded. The file is read in",
+  "the tab and never leaves the machine."],LOW))
+
+for xx in (386,766):
+    p.append(f'<path d="M{xx} 335 l14 0" stroke="{MUTED}" stroke-width="2"/>')
+    p.append(f'<path d="M{xx+14} 335 l-6 -5 l0 10 z" fill="{MUTED}"/>')
+
+# token handling in the shell
+p.append(f'<rect x="24" y="462" width="{W-48}" height="122" rx="9" fill="{PANEL}" stroke="{BORDER}"/>')
+p.append(f'<text x="44" y="488" font-size="11" font-weight="bold" fill="{ACC}">WHY THE SHELL IS THE SAFER PLACE FOR THE TOKEN</text>')
+for i,line in enumerate([
+  "The scripts read the token from the environment or prompt for it without echo. It is never passed as an argument, so it does not appear in ps",
+  "output where any other user on the box could read it, and it does not land in your shell history. TLS is verified by default and --cacert is",
+  "supported for a private CA. Every call is a GET. There is no code path in any script that writes to a cluster.",
+  "PowerShell equivalents are in scripts/acs_pull_all.ps1, and scripts/acs_pull_over_ssh.ps1 runs the pull on a jump host when Central is not",
+  "reachable from your workstation at all."]):
+    p.append(f'<text x="44" y="{510+i*17}" font-size="10.5" fill="{MUTED}">{esc(line)}</text>')
 p.append('</svg>')
-render("fig2_live_connect","\n".join(p),W,H)
+render("fig2_pull_workflow","\n".join(p),W,H)
 
 # ---------------------------------------------------------------- Figure 3
 W,H=1160,700
@@ -259,3 +297,102 @@ for i,line in enumerate([
     p.append(f'<text x="52" y="{442+i*15}" font-size="10.5" fill="{MUTED}">{esc(line)}</text>')
 p.append('</svg>')
 render("fig4_outputs","\n".join(p),W,H)
+
+# ---------------------------------------------------------------- Figure 8
+W,H=1160,800
+p=[f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" font-family="{FONT}">',
+   f'<rect width="{W}" height="{H}" fill="{BG}"/>',
+   hdr(W,"Violations from ACS","Every violation gets a row, and every row says what can be done about it")]
+
+p.append(f'<rect x="24" y="80" width="{W-48}" height="400" rx="9" fill="{PANEL}" stroke="{BORDER}"/>')
+p.append(f'<text x="42" y="104" font-size="11" font-weight="bold" fill="{ACC}">VIOLATIONS FROM ACS</text>')
+# filters
+filters=[("Your workloads",True),("Platform components",False),("Fixable only",False),
+         ("Matched to a policy",True),("Unmatched",False)]
+xx=42
+for lbl,on in filters:
+    wdt=len(lbl)*6.1+34
+    p.append(f'<rect x="{xx}" y="116" width="14" height="14" rx="3" fill="{ACC if on else PANEL2}" stroke="{ACC if on else BORDER}"/>')
+    if on: p.append(f'<path d="M{xx+3} {xx and 123} l3 3 l5 -6" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round"/>')
+    p.append(f'<text x="{xx+21}" y="127" font-size="10.5" fill="{MUTED}">{esc(lbl)}</text>')
+    xx+=wdt
+p.append(f'<text x="{xx+10}" y="127" font-size="10.5" fill="{MUTED}">showing 4 of 6 violation(s): 4 on your workloads, 2 on platform components</text>')
+
+cols=[("",42),("SEVERITY",70),("ACS POLICY",160),("OBJECT",396),("NAMESPACE",620),("STATE",744),("VIOLATION",820),("FIX",1020)]
+for lbl,cx in cols:
+    p.append(f'<text x="{cx}" y="156" font-size="9" fill="{MUTED}" letter-spacing="1">{lbl}</text>')
+p.append(f'<rect x="42" y="146" width="13" height="13" rx="3" fill="{PANEL2}" stroke="{ACC}"/>')
+p.append(f'<line x1="45" y1="152" x2="52" y2="152" stroke="{ACC}" stroke-width="2"/>')
+p.append(f'<line x1="42" y1="164" x2="{W-42}" y2="164" stroke="{BORDER}"/>')
+
+rows=[("CRITICAL","ACS.001  Privileged Container","Deployment/payments-api","prod","ACTIVE",
+       'Container "api" is privileged',"In your YAML",LOW),
+      ("HIGH","ACS.004  Host Network","Deployment/edge-proxy","prod","ACTIVE",
+       "Deployment uses the host network","Patch",ACC),
+      ("HIGH","ACS.007  Root User","StatefulSet/cache","data","ACTIVE",
+       "Container runs as root","Patch",ACC),
+      ("MEDIUM","ACS.012  No Resource Limits","CronJob/nightly-etl","batch","ACTIVE",
+       "No CPU or memory limit set","Need manifest",MED),
+      ("HIGH","ACS.001  Privileged Container","DaemonSet/ovnkube-node","openshift-ovn-kube","ACTIVE",
+       'Container "ovn-controller" is privileged',"Platform",CRIT)]
+y=186
+ticked={0:True,1:True,2:False,3:False}
+for ri,(sev,pol,obj,ns,st,det,fix,fc) in enumerate(rows):
+    if fix=="Platform":
+        # disabled: there is no fix route, so it cannot be chosen
+        p.append(f'<rect x="42" y="{y-9}" width="13" height="13" rx="3" fill="{BG}" stroke="{BORDER}"/>')
+        p.append(f'<line x1="44" y1="{y-7}" x2="53" y2="{y+2}" stroke="{BORDER}" stroke-width="1.2"/>')
+    else:
+        on=ticked.get(ri,False)
+        p.append(f'<rect x="42" y="{y-9}" width="13" height="13" rx="3" fill="{ACC if on else PANEL2}" stroke="{ACC if on else BORDER}"/>')
+        if on:
+            p.append(f'<path d="M45 {y-3} l3 3 l5 -6" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>')
+    p.append(sevchip(70,y,sev))
+    pid,pname=pol.split("  ",1)
+    p.append(f'<text x="160" y="{y+1}" font-size="10.5" font-family="monospace" fill="{ACC}" font-weight="bold">{esc(pid)}</text>')
+    p.append(f'<text x="216" y="{y+1}" font-size="10.5" fill="{TEXT}">{esc(pname)}</text>')
+    p.append(f'<text x="396" y="{y+1}" font-size="10.5" fill="{TEXT}">{esc(obj)}</text>')
+    if fix=="Platform":
+        p.append(f'<rect x="556" y="{y-9}" width="56" height="13" rx="6" fill="none" stroke="{BORDER}"/>')
+        p.append(f'<text x="584" y="{y+1}" font-size="8" fill="{MUTED}" text-anchor="middle">PLATFORM</text>')
+    p.append(f'<text x="620" y="{y+1}" font-size="10.5" fill="{MUTED}">{esc(ns)}</text>')
+    p.append(f'<text x="744" y="{y+1}" font-size="10.5" fill="{MUTED}">{esc(st)}</text>')
+    p.append(f'<text x="820" y="{y+1}" font-size="9.5" fill="{MUTED}">{esc(det)}</text>')
+    wdt=len(fix)*6.2+18
+    p.append(f'<rect x="1020" y="{y-10}" width="{wdt}" height="15" rx="7" fill="none" stroke="{fc}"/>')
+    p.append(f'<text x="{1020+wdt/2}" y="{y+1}" font-size="9" fill="{fc}" text-anchor="middle">{esc(fix)}</text>')
+    p.append(f'<line x1="42" y1="{y+14}" x2="{W-42}" y2="{y+14}" stroke="{BORDER}"/>')
+    y+=38
+
+p.append(f'<text x="42" y="{y+16}" font-size="10.5" fill="{MUTED}">Click a row for the rationale, the standards it maps to, and the reasoning behind the fix route.</text>')
+p.append(callout(53,y+50,"1","Tick what you want to fix. Nothing is selected until you select it.",0))
+p.append(callout(53,y+80,"2","No route means no checkbox you can tick. Hover it for the reason.",0))
+
+# routes
+p.append(f'<rect x="24" y="500" width="{W-48}" height="152" rx="9" fill="{PANEL}" stroke="{BORDER}"/>')
+p.append(f'<text x="42" y="524" font-size="11" font-weight="bold" fill="{ACC}">WHAT EACH ROUTE MEANS</text>')
+routes=[("In your YAML",LOW,"The manifest is loaded, so the fix is applied to it directly and you download the corrected file."),
+        ("Patch",ACC,"No manifest for this object, so a strategic merge patch is drafted from the violation itself."),
+        ("Need manifest",MED,"Fixable in principle, but the violation does not carry enough to draft a patch safely."),
+        ("Human decision",MED,"The policy has no mechanical fix. Somebody has to decide."),
+        ("Platform",CRIT,"A platform component. Listed, never patched: the owning operator reverts manual edits."),
+        ("Not modelled",MED,"No policy in the catalogue matches. Reported rather than dropped.")]
+for i,(lbl,col,desc) in enumerate(routes):
+    yy=546+i*17
+    wdt=len(lbl)*6.2+18
+    p.append(f'<rect x="42" y="{yy-10}" width="{wdt}" height="14" rx="7" fill="none" stroke="{col}"/>')
+    p.append(f'<text x="{42+wdt/2}" y="{yy}" font-size="8.5" fill="{col}" text-anchor="middle">{esc(lbl)}</text>')
+    p.append(f'<text x="{42+wdt+14}" y="{yy}" font-size="10.5" fill="{MUTED}">{esc(desc)}</text>')
+
+# the output
+p.append(f'<rect x="24" y="670" width="{W-48}" height="100" rx="9" fill="{PANEL}" stroke="{BORDER}"/>')
+p.append(f'<rect x="24" y="670" width="3" height="100" fill="{LOW}"/>')
+p.append(f'<text x="44" y="694" font-size="12" font-weight="bold" fill="{TEXT}">What "fix" produces: a YAML file for the ones you ticked, and nothing else.</text>')
+for i,line in enumerate([
+  "No command is run and no cluster is touched, on any surface, in any mode. Each drafted file names the object, the namespace and the policies",
+  "it covers, and states on its face that it was built from a violation rather than from a manifest and therefore needs verifying. Test it against a",
+  "namespace you do not care about, then apply it yourself. Report mode, the default, writes the written account and no YAML at all.",
+  "The report states how many of the imported violations were in scope, so a document covering a subset cannot be mistaken for one covering the cluster."]):
+    p.append(f'<text x="44" y="{716+i*17}" font-size="10.5" fill="{MUTED}">{esc(line)}</text>')
+p.append('</svg>')
+render("fig8_violations_panel","\n".join(p),W,H)

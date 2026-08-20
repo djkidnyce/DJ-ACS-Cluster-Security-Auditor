@@ -90,6 +90,12 @@ OUTPUT
 
 FIXING  (all of these require --mode manual or --mode auto)
   --patches             Emit one strategic merge patch per changed object.
+  --list-violations     Print every imported violation with its key and fix route, then
+                        stop. Use it to decide what to pass to --select.
+  --select <k,...>      Only act on these violations. Takes alert ids, or an object name
+                        such as Deployment/payments-api, or a policy id such as ACS.001.
+                        Comma separated, repeatable. Without it every violation is in
+                        scope, which matches how the tool behaved before this existed.
   --violation-fixes     Emit patches for ACS violations whose manifest you do not
                         have locally, plus a written account of what could not be
                         fixed and why. In report mode the account is still written,
@@ -149,6 +155,11 @@ function parseArgs(argv) {
       case '--in-place': o.inPlace = true; break;
       case '--patches': o.patches = true; break;
       case '--violation-fixes': o.violationFixes = true; break;
+      case '--list-violations': o.listViolations = true; break;
+      case '--select':
+        o.select = (o.select || []).concat(String(next()).split(',')
+          .map(function (x) { return x.trim(); }).filter(Boolean));
+        break;
       case '--only': o.only = String(next() || '').split(',').map(function (x) { return x.trim().toUpperCase(); }).filter(Boolean); break;
       case '--skip': o.skip = String(next() || '').split(',').map(function (x) { return x.trim().toUpperCase(); }).filter(Boolean); break;
       case '--dry-run': o.dryRun = true; break;
@@ -164,9 +175,20 @@ function parseArgs(argv) {
 }
 
 const opts = parseArgs(process.argv.slice(2));
-// --workloads is a complete input on its own: you may be auditing what is running with
-// no repository checked out at all.
-if (!opts.path && !opts.workloads) { console.log(USAGE); process.exit(2); }
+/* Any one of these is a complete input on its own.
+ *
+ *   --path       a repository of manifests
+ *   --workloads  what is actually running, from oc get -o json
+ *   --alerts     ACS violations, with no repository checked out at all
+ *   --vulns      an ACS CVE export
+ *
+ * Requiring --path meant that somebody holding a violation export and nothing else got
+ * the usage screen, which is precisely the case where drafting patches from the violation
+ * is the only route available to them. */
+if (!opts.path && !opts.workloads && !opts.alerts && !opts.vulns) {
+  console.log(USAGE);
+  process.exit(2);
+}
 
 /* ------------------------------------------------------------------- mode */
 
@@ -329,9 +351,14 @@ if (opts.workloads) {
   liveCount = imported.count;
 }
 
-if (!files.length) {
+/* No manifests is only an error when there is nothing else to work with. An alerts or CVE
+   export on its own is a legitimate run: it is the case where patches drafted from the
+   violation are the only route available, so refusing here would block exactly the
+   workflow that needs the tool most. */
+if (!files.length && !opts.alerts && !opts.vulns) {
   console.error('Nothing to scan. No YAML under ' + (ROOT || '(no --path)') +
     (opts.workloads ? ' and no objects in ' + opts.workloads : ''));
+  console.error('Supply one of: --path, --workloads, --alerts, --vulns.');
   process.exit(2);
 }
 files.sort(function (a, b) { return a.name.localeCompare(b.name); });
@@ -390,7 +417,15 @@ if (acs) log(C.dim('  acs      ') + acs.total + ' violation(s) imported, ' + acs
 if (vulns) log(C.dim('  cves     ') + vulns.rows.length + ' distinct across ' + vulns.images.length + ' image(s)');
 log('');
 
+/* A posture score computed over zero manifests is 100/100 grade A, which is a lie of
+   exactly the kind this tool is supposed to prevent: it reads as "clean" when the truth
+   is "nothing was examined". Say the second thing. */
 const counts = before.counts;
+if (!files.length) {
+  log(C.yel('  No manifests were scanned, so there is no posture score.'));
+  log(C.dim('  A score over nothing would read as 100 out of 100, which is not the same'));
+  log(C.dim('  as clean. Pass --path or --workloads to get one.'));
+} else {
 log(C.bold('  Posture ' + before.score + '/100  grade ' + before.grade));
 log('  ' + C.red(counts.Critical + ' critical') + '   ' + C.yel(counts.High + ' high') + '   ' +
   counts.Medium + ' medium   ' + counts.Low + ' low');
@@ -398,6 +433,7 @@ log('  ' + C.red(counts.Critical + ' critical') + '   ' + C.yel(counts.High + ' 
 const autoable = findings.filter(function (f) { return f.fixKind !== 'manual'; });
 const manual = findings.filter(function (f) { return f.fixKind === 'manual'; });
 log('  ' + autoable.length + ' automatically fixable, ' + manual.length + ' need a human decision');
+}
 
 if (vulns) {
   const vs = E.summarizeVulns(vulns);
@@ -503,8 +539,10 @@ if (E.modeAllows(MODE, 'writes')) {
     if (after !== originals[f.name]) patched[f.name] = after;
   }
 
-  log(C.bold('  Fixes') + C.dim('  [' + MODE + ']'));
-  if (MODE === 'manual') {
+  if (!files.length) { /* nothing to fix in manifests we do not have */ }
+  else log(C.bold('  Fixes') + C.dim('  [' + MODE + ']'));
+  if (!files.length) { /* no manifest fixes to report */ }
+  else if (MODE === 'manual') {
     log('  ' + applied.length + ' fix(es) computed across ' + Object.keys(patched).length + ' file(s).');
     log('  Emitted as patches. Nothing was modified and no corrected YAML was written.');
   } else {
@@ -540,6 +578,38 @@ if (opts.worklist) {
   else written.push(writeOut('image_worklist.md', E.buildVulnWorklist(vulns, vulnCorr)));
 }
 
+function pad(x, n) { x = String(x); return x.length >= n ? x : x + " ".repeat(n - x.length); }
+
+/* --list-violations prints the menu that --select reads from, then stops. It writes
+   nothing, so it is safe to run in any mode and against production data. */
+if (opts.listViolations) {
+  if (!acs) {
+    console.error(C.yel('  --list-violations needs --alerts.'));
+    process.exit(2);
+  }
+  const filesByObj = {};
+  for (const f of files) for (const d of f.docs) filesByObj[E.nameOf(d)] = f.name;
+  const all = acs.imported.concat(acs.unmatched);
+  log('');
+  log(C.bold('  ' + all.length + ' violation(s). Pass any KEY, OBJECT or POLICY to --select.'));
+  log('');
+  log(C.dim('  KEY                    SEVERITY  POLICY     OBJECT                          FIX'));
+  for (const r of all) {
+    const fx = E.violationFixability(r, !!filesByObj[r.obj]);
+    const sev = String(r.acsSeverity || '').replace('_SEVERITY', '');
+    log('  ' + pad(E.violationKey(r), 22) + ' ' + pad(sev, 9) + ' ' +
+        pad((r.policy && r.policy.id) || '(none)', 10) + ' ' +
+        pad(r.obj + ' [' + r.namespace + ']', 31) + ' ' +
+        (fx.fixable ? fx.kind : C.dim(fx.kind)));
+  }
+  log('');
+  log(C.dim('  Selecting nothing selects everything. That is the one place this tool is'));
+  log(C.dim('  permissive, and it is only because it matches how it behaved before --select'));
+  log(C.dim('  existed. If you want a subset, say so explicitly.'));
+  log('');
+  process.exit(0);
+}
+
 if (opts.sarif) written.push(writeOut('acs_findings.sarif', JSON.stringify(buildSarif(), null, 2)));
 
 if (opts.violationFixes) {
@@ -548,10 +618,48 @@ if (opts.violationFixes) {
   } else {
     const filesByObj = {};
     for (const f of files) for (const d of f.docs) filesByObj[E.nameOf(d)] = f.name;
-    const b = E.buildViolationFixBundle(acs, { filesByObj: filesByObj, mode: MODE });
+
+    /* --select is the command line equivalent of the checkboxes in the page. It takes
+       whichever of the three identifiers a person actually has to hand: the alert id from
+       the export, the object they are trying to fix, or the policy they are clearing.
+       Anything that matches nothing is an error rather than a silent no op, because a
+       typo that quietly widens the scope to everything is exactly the failure this option
+       exists to prevent. */
+    let selected;
+    if (opts.select && opts.select.length) {
+      const all = acs.imported.concat(acs.unmatched);
+      selected = new Set();
+      const unmatchedTerms = [];
+      for (const term of opts.select) {
+        const lc = term.toLowerCase();
+        const hits = all.filter(function (r) {
+          return String(r.acsAlertId || '').toLowerCase() === lc ||
+                 String(r.obj || '').toLowerCase() === lc ||
+                 (r.policy && String(r.policy.id || '').toLowerCase() === lc) ||
+                 String(r.acsPolicyName || '').toLowerCase() === lc;
+        });
+        if (!hits.length) unmatchedTerms.push(term);
+        for (const h of hits) selected.add(E.violationKey(h));
+      }
+      if (unmatchedTerms.length) {
+        console.error(C.red('  --select matched nothing for: ' + unmatchedTerms.join(', ')));
+        console.error('  Run --list-violations to see the ids, objects and policies available.');
+        console.error('  Refusing rather than guessing: a typo here would widen the scope, not narrow it.');
+        process.exit(2);
+      }
+      log(C.dim('  --select matched ' + selected.size + ' of ' + all.length + ' violation(s)'));
+    }
+
+    const b = E.buildViolationFixBundle(acs,
+      { filesByObj: filesByObj, mode: MODE, selected: selected });
     for (const f of b.files) written.push(writeOut(f.name, f.text));
     written.push(writeOut('FIXING_VIOLATIONS.md', b.report));
     log(C.bold('  ACS violation fixes') + C.dim('  [' + MODE + ']'));
+    if (b.deselected) {
+      log(C.yel('  Scope: ' + b.selected + ' of ' + b.total + ' violation(s). ' + b.deselected +
+        ' were not selected'));
+      log(C.yel('  and are not described in the report. It covers the selection, not the cluster.'));
+    }
     if (b.suppressed) {
       log(C.yel('  ' + b.suppressed + ' patch(es) NOT written: this run is in report mode.'));
       log(C.yel('  The account of what could be fixed is in FIXING_VIOLATIONS.md.'));
@@ -733,7 +841,13 @@ function buildSarif() {
 
 if (written.length) {
   log(C.bold('  Written'));
-  for (const w of written.slice(0, 40)) log('  ' + path.relative(process.cwd(), w));
+  /* Print whichever form is actually usable. A relative path is easier to read when the
+     output landed under the current directory, and turns into ../../../../.. noise when it
+     did not, which is not something anyone can copy into the next command. */
+  for (const w of written.slice(0, 40)) {
+    const rel = path.relative(process.cwd(), w);
+    log('  ' + (rel.indexOf('..') === 0 ? w : rel));
+  }
   if (written.length > 40) log(C.dim('  ...and ' + (written.length - 40) + ' more'));
   log('');
 } else if (MODE === 'report') {

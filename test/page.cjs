@@ -68,10 +68,26 @@ const REC = { result: { deployment: { name: 'webapp', namespace: 'prod', type: '
       { name: 'openssl', version: '3.0.7', vulns: [
         V('CVE-2026-1000', 'CRITICAL_VULNERABILITY_SEVERITY', 9.8, '3.0.14', { cisaKev: true, epss: { epssProbability: 0.62 } }),
         V('CVE-2026-1001', 'IMPORTANT_VULNERABILITY_SEVERITY', 7.5, '')] }] } }] } };
-const ALERTS = { alerts: [{ id: 'a1', state: 'ACTIVE',
+/* Two alerts, because real exports always carry both: one on a workload you own and one
+   on a platform component you do not. The platform one must be visible and must be
+   refused, and you only catch a regression in that if the fixture contains one. */
+const ALERTS = { alerts: [{ id: 'a1', state: 'ACTIVE', platformComponent: false,
   policy: { name: 'Privileged Container', severity: 'HIGH_SEVERITY', description: 'd' },
   deployment: { name: 'webapp', deploymentType: 'Deployment' },
-  commonEntityInfo: { namespace: 'prod', clusterName: 'ocp-prod' } }] };
+  violations: [{ message: 'Container "app" is privileged' }],
+  commonEntityInfo: { namespace: 'prod', clusterName: 'ocp-prod' } },
+  { id: 'a2', state: 'ACTIVE', platformComponent: true,
+  policy: { name: 'Privileged Container', severity: 'HIGH_SEVERITY', description: 'd' },
+  deployment: { name: 'ovnkube-node', deploymentType: 'DaemonSet' },
+  violations: [{ message: 'Container "ovn-controller" is privileged' }],
+  commonEntityInfo: { namespace: 'openshift-ovn-kubernetes', clusterName: 'ocp-prod' } }] };
+/* A violation on an object this tool has never seen a manifest for. ACS watches the
+   cluster and you drop in a repo, so this is the normal case rather than the edge one. */
+const ORPHAN = { alerts: [{ id: 'a9', state: 'ACTIVE', platformComponent: false,
+  policy: { name: 'Privileged Container', severity: 'HIGH_SEVERITY', description: 'd' },
+  deployment: { name: 'batch-runner', deploymentType: 'Deployment' },
+  violations: [{ message: 'Container "runner" is privileged' }],
+  commonEntityInfo: { namespace: 'batch', clusterName: 'ocp-prod' } }] };
 const MANIFEST = ['apiVersion: apps/v1', 'kind: Deployment', 'metadata:', '  name: webapp', '  namespace: prod',
   'spec:', '  template:', '    spec:', '      containers:', '      - name: web',
   '        image: quay.io/acme/webapp:1.4.2', '        securityContext:', '          privileged: true'].join('\n');
@@ -83,9 +99,10 @@ async function auditor() {
   const S = () => w.__STATE();
 
   console.log('\nAuditor page');
-  t('the vulnerabilities tab exists', !!$('tab-vuln'));
-  t('three live connect tabs', w.document.querySelectorAll('.tabs .tab').length === 3);
   t('the CVE panel starts hidden', $('vulnPanel').classList.contains('hidden'));
+  t('the violations panel starts hidden', $('violPanel').classList.contains('hidden'));
+  t('there is no live connect UI left', w.document.querySelectorAll('.tabs .tab').length === 0);
+  t('and no credential field to type into', !w.document.querySelector('input[type=password]'));
 
   w.__items = [{ name: 'app/deployment.yaml', text: DRIFT_MANIFEST }, { name: 'v.ndjson', text: JSON.stringify(REC) }];
   w.__load(w.__items);
@@ -130,7 +147,7 @@ async function auditor() {
 
   w.__items2 = [{ name: 'acs_alerts.json', text: JSON.stringify(ALERTS) }];
   w.__load(w.__items2);
-  t('a JSON alert export is recognised as alerts', !!S().acs && S().acs.total === 1);
+  t('a JSON alert export is recognised as alerts', !!S().acs && S().acs.total === 2);
   t('namespace resolves from commonEntityInfo in the page', S().acs.imported[0].namespace === 'prod');
   t('the ACS cross check panel unhides', !$('acsPanel').classList.contains('hidden'));
 
@@ -145,11 +162,135 @@ async function auditor() {
   t('manual mode emits the patches', bundleManual.files.length > 0);
   t('the mode is recorded in the report itself', /Mode: manual/.test(bundleManual.report));
 
-  $('vulnUrl').value = 'https://central.example.com';
-  $('btnVulnCmd').click();
-  t('the offline CVE command uses the export endpoint', /v1\/export\/vuln-mgmt\/workloads/.test($('liveOut').textContent));
-  $('btnAcsCmd').click();
-  t('the offline alert command includes the per id detail call', /v1\/alerts\/\$id/.test($('liveOut').textContent));
+  /* The panel that replaced the connectors has to say where the data comes from,
+     otherwise removing them just leaves a dead end. */
+  const bodyText = w.document.body.textContent;
+  t('the page points at the pull script instead of connecting itself',
+    /acs_pull_all\.sh/.test(bodyText));
+  t('and explains why the browser cannot do it',
+    /null origin/i.test(bodyText) && /blocks|blocked/i.test(bodyText));
+
+  /* Violations render as rows you can act on, which is the whole point of the panel. */
+  console.log('\n  Violations are visible and actionable, not just counted');
+  t('the violations panel unhid once ACS data loaded',
+    !$('violPanel').classList.contains('hidden'));
+  const vrows = () => Array.from($('vtbl').querySelectorAll('tbody tr.frow'));
+  t('both alerts were imported', S().acs.total === 2);
+  t('a row exists per violation shown, not a single count',
+    vrows().length === 1 && S().acs.user === 1 && S().acs.platform === 1);
+  t('the count line says what the filters are hiding',
+    /1 of 2/.test($('violCount').textContent));
+  const cells = vrows()[0].querySelectorAll('td');
+  t('each row carries a checkbox, severity, policy, object, namespace, state, detail and fix',
+    cells.length === 8);
+  t('the fix column is filled in for every row',
+    vrows().every((r) => r.querySelectorAll('td')[7].textContent.trim().length > 0));
+  t('the detail column shows the violation text, not a placeholder',
+    /privileged/i.test(vrows()[0].querySelectorAll('td')[6].textContent));
+
+  const before = vrows().length;
+  $('vfUser').checked = false; $('vfUser').dispatchEvent(new w.Event('change'));
+  t('unticking your workloads removes them', vrows().length < before);
+  $('vfPlatform').checked = true; $('vfPlatform').dispatchEvent(new w.Event('change'));
+  t('and ticking platform components brings those in',
+    vrows().some((r) => /openshift-/.test(r.textContent)));
+  $('vfUser').checked = true; $('vfUser').dispatchEvent(new w.Event('change'));
+
+  vrows()[0].click();
+  const detail = $('vtbl').querySelector('tbody tr.vdet');
+  t('clicking a row opens the reasoning behind its fix route',
+    !!detail && detail.textContent.length > 40);
+
+  /* ---- selection is held by violation, not by row position ------------- */
+  console.log('\n  Choosing which violations to act on');
+  const boxes = () => Array.from(w.document.querySelectorAll('#vtbl input.vsel'));
+  const checkedKeys = () => boxes().filter((b) => b.checked).map((b) => b.dataset.vkey);
+
+  t('nothing is selected when the table first renders', checkedKeys().length === 0);
+  t('and the draft button is disabled until something is', $('btnFixViolations').disabled);
+  t('the page says so rather than leaving a dead button',
+    /Nothing selected/.test($('violSelCount').textContent));
+
+  $('vfPlatform').checked = true; $('vfPlatform').dispatchEvent(new w.Event('change'));
+  t('a violation with no fix route gets a disabled checkbox, not a missing one',
+    w.document.querySelectorAll('#vtbl input[type=checkbox][disabled]').length === 1);
+  t('and the disabled box explains itself on hover',
+    /operator|platform/i.test(w.document.querySelector('#vtbl input[type=checkbox][disabled]').title));
+  t('so the header box can only ever select what is actually fixable', boxes().length === 1);
+
+  $('vSelAll').click();
+  t('the header box selects every fixable violation shown',
+    checkedKeys().length === 1 && checkedKeys()[0] === 'a1');
+  t('the button names the count so you know what you are about to act on',
+    /1 selected/.test($('btnFixViolations').textContent));
+  t('and is now enabled', $('btnFixViolations').disabled === false);
+
+  /* Filtering it out of view, then back. It has to be the same tick on the same violation. */
+  $('vfUser').checked = false; $('vfUser').dispatchEvent(new w.Event('change'));
+  t('filtering the selected violation out of view does not silently clear it',
+    /1 selected/.test($('btnFixViolations').textContent));
+  t('and the page says it is hidden rather than pretending it is gone',
+    /hidden by the current filters/.test($('violSelCount').textContent));
+  $('vfUser').checked = true; $('vfUser').dispatchEvent(new w.Event('change'));
+  t('bringing it back restores the tick on the same violation',
+    checkedKeys().length === 1 && checkedKeys()[0] === 'a1');
+
+  w.document.querySelector('#vtbl th[data-vk="obj"]').click();
+  t('sorting does not move the tick to whatever is now in that row',
+    checkedKeys().length === 1 && checkedKeys()[0] === 'a1');
+  w.document.querySelector('#vtbl th[data-vk="sev"]').click();
+
+  $('vSelAll').click();
+  t('the header box clears when everything shown is already selected',
+    checkedKeys().length === 0 && $('btnFixViolations').disabled);
+  $('vSelAll').click();
+  $('vfPlatform').checked = false; $('vfPlatform').dispatchEvent(new w.Event('change'));
+
+  /* ---- drafting -------------------------------------------------------- */
+  console.log('\n  Drafting the selection writes YAML and nothing else');
+  const got = [];
+  w.download = (n, c) => got.push({ name: n, text: c });
+  delete w.JSZip;
+
+  $('violMode').value = 'report';
+  $('btnFixViolations').click();
+  await new Promise((r) => setTimeout(r, 200));
+  t('report mode writes the account and no YAML',
+    got.length === 1 && /\.md$/.test(got[0].name));
+  t('the file name records the mode it ran in', /_report\.md$/.test(got[0].name));
+
+  /* webapp's manifest is loaded, so its honest route is the in place fix rather than a
+     patch, and the message has to say which one it took. */
+  got.length = 0;
+  $('violMode').value = 'manual';
+  $('btnFixViolations').click();
+  await new Promise((r) => setTimeout(r, 400));
+  t('a violation whose manifest is loaded is routed to the in place fix, not a patch',
+    /fixed directly in a manifest you loaded/.test($('fixViolMsg').textContent));
+  t('and is not reported as unfixable', !/[Nn]othing was/.test($('fixViolMsg').textContent));
+
+  /* An object with no manifest is the case a patch exists for. */
+  got.length = 0;
+  w.__load([{ name: 'acs_alerts_more.json', text: JSON.stringify(ORPHAN) }]);
+  t('a newly imported violation does not inherit an earlier selection',
+    checkedKeys().length < boxes().length);
+  $('vSelAll').click();
+  $('btnFixViolations').click();
+  await new Promise((r) => setTimeout(r, 400));
+  const yamls = got.filter((g) => /\.ya?ml$/.test(g.name));
+  t('manual mode writes YAML for the object with no manifest', yamls.length > 0);
+  t('every drafted file parses as YAML',
+    yamls.every((g) => { try { w.jsyaml.load(g.text.replace(/^#.*$/gm, '')); return true; }
+                         catch (e) { return false; } }));
+  t('none of them is a command',
+    yamls.every((g) => !/^\s*(kubectl|oc|curl|bash)\b/m.test(g.text)));
+  t('the platform violation was not drafted a patch',
+    yamls.every((g) => !/ovnkube/.test(g.name)));
+
+  /* Deselect and draft again: the report must cover the selection, not the cluster. */
+  got.length = 0;
+  boxes().forEach((b) => { if (b.checked) b.click(); });
+  t('clearing the selection disables the button again', $('btnFixViolations').disabled);
   cleanup();
 }
 
@@ -159,8 +300,9 @@ async function remediation() {
   const S = () => w.__STATE();
 
   console.log('\nRemediation page');
-  t('the vulnerabilities tab exists', !!$('tab-vuln'));
-  t('the violation detail checkbox exists and defaults on', !!$('acsHydrate') && $('acsHydrate').checked);
+  t('there is no live connect UI left', w.document.querySelectorAll('.tabs .tab').length === 0);
+  t('and no credential field to type into', !w.document.querySelector('input[type=password]'));
+  t('the violations panel exists on the page that does the fixing', !!$('violPanel'));
 
   w.__items = [{ name: 'app/deployment.yaml', text: MANIFEST }, { name: 'v.ndjson', text: JSON.stringify(REC) }];
   w.__load(w.__items);
@@ -192,6 +334,77 @@ async function remediation() {
   t('the image replace dialog does not even open in report mode',
     !/Replace this image reference/.test($('modalHost').textContent));
   t('and nothing was modified', S().files[0].docs[0].spec.template.spec.containers[0].image === beforeImg);
+
+  /* ---- violations, on the page whose job is fixing them ---------------- */
+  console.log('\n  Violations are visible and drafted to YAML here too');
+  w.__load([{ name: 'acs_alerts.json', text: JSON.stringify(ALERTS) }]);
+  t('the violations panel unhides once ACS data loads',
+    !$('violPanel').classList.contains('hidden'));
+  const rrows = () => Array.from($('vtbl').querySelectorAll('tbody tr.frow'));
+  t('a row exists per violation shown', rrows().length === 1);
+  t('the fix route is stated on the row',
+    rrows()[0].querySelectorAll('td')[6].textContent.trim().length > 0);
+  $('vfPlatform').checked = true; $('vfPlatform').dispatchEvent(new w.Event('change'));
+  t('the platform violation is visible, not hidden from you',
+    rrows().some((r) => /ovnkube/.test(r.textContent)));
+  t('and it is marked as platform owned rather than offered a fix',
+    rrows().find((r) => /ovnkube/.test(r.textContent)).textContent.indexOf('Platform') !== -1);
+
+  const rgot = [];
+  w.download = (n, c) => rgot.push({ name: n, text: c });
+  delete w.JSZip;
+
+  /* This panel takes its permission from the page mode rather than owning a second one.
+     A separate selector here is how one surface ends up writing while the other refuses. */
+  t('the page is still in report mode', $('fixMode').value === 'report');
+  t('the draft button is disabled while nothing is selected', $('btnFixViolations').disabled);
+  $('vSelAll').click();
+  $('btnFixViolations').click();
+  await new Promise((r) => setTimeout(r, 200));
+  t('report mode drafts no YAML from this panel either',
+    rgot.length === 1 && /\.md$/.test(rgot[0].name));
+
+  /* webapp's manifest is loaded, so the honest route for it is the in place fix flow, not
+     a patch. The message has to say that. It used to say "nothing was fixable", which is
+     false and sends you hunting for a defect that is not there. */
+  rgot.length = 0;
+  $('fixMode').value = 'manual';
+  $('fixMode').dispatchEvent(new w.Event('change'));
+  $('btnFixViolations').click();
+  await new Promise((r) => setTimeout(r, 400));
+  t('a violation whose manifest is loaded is routed to the in place fix, not a patch',
+    /fixed in the manifest you already loaded/.test($('fixViolMsg').textContent));
+  t('and the tool does not claim it was unfixable',
+    !/[Nn]othing was/.test($('fixViolMsg').textContent));
+
+  /* Now a violation on an object no manifest was loaded for. That is the case a patch
+     exists to cover, and it is the common one: ACS watches the cluster, you have the repo. */
+  rgot.length = 0;
+  w.__load([{ name: 'acs_alerts_more.json', text: JSON.stringify(ORPHAN) }]);
+  /* A violation that arrives after a selection was made is NOT selected. New findings do
+     not inherit consent given for earlier ones. */
+  t('a newly imported violation does not arrive pre selected',
+    w.document.querySelectorAll('#vtbl input.vsel:checked').length <
+    w.document.querySelectorAll('#vtbl input.vsel').length);
+  $('vSelAll').click();
+  $('btnFixViolations').click();
+  await new Promise((r) => setTimeout(r, 400));
+  const ryaml = rgot.filter((g) => /\.ya?ml$/.test(g.name));
+  t('manual mode drafts YAML for the object with no manifest', ryaml.length > 0);
+  t('the draft names that object and its namespace',
+    ryaml.every((g) => {
+      try { const d = w.jsyaml.load(g.text.replace(/^#.*$/gm, ''));
+            return d && d.metadata && d.metadata.name === 'batch-runner' &&
+                   d.metadata.namespace === 'batch'; }
+      catch (e) { return false; } }));
+  t('it says on its face that it was not applied',
+    ryaml.every((g) => /This file is data, not a command/.test(g.text)));
+  t('the platform component was still refused a patch',
+    ryaml.every((g) => !/ovnkube/.test(g.name)));
+  t('and nothing on disk or in the cluster was touched to produce any of it',
+    S().history.length === beforeHist);
+  $('fixMode').value = 'report';
+  $('fixMode').dispatchEvent(new w.Event('change'));
 
   console.log('\n  Manual mode: one at a time, apply all stays shut');
   $('fixMode').value = 'manual';
