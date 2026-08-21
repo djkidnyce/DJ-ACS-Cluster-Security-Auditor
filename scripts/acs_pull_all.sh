@@ -70,7 +70,16 @@ ROX_ENDPOINT="${ROX_ENDPOINT%/}"
 # bearer token that is, in effect, read access to your entire security posture.
 # --insecure disables verification and turns any host on the path into a position
 # from which that token can be stolen. Prefer --cacert with your internal CA.
-if [ -n "$CACERT" ]; then CURL_TLS="--cacert $CACERT"; fi
+# The preflight reads ROX_CA from the environment. Accept the same variable here so a
+# CA is exported once and both scripts use it. An explicit --cacert still wins.
+if [ -z "$CACERT" ] && [ -n "${ROX_CA:-}" ]; then CACERT="$ROX_CA"; fi
+if [ -n "$CACERT" ]; then
+  if [ ! -r "$CACERT" ]; then
+    echo "ERROR: CA bundle not readable: $CACERT" >&2
+    exit 2
+  fi
+  CURL_TLS="--cacert $CACERT"
+fi
 if [ "$CURL_TLS" = "-k" ]; then
   echo "WARNING: TLS verification disabled. Your API token is exposed to anyone who can" >&2
   echo "         intercept this connection. Use --cacert <file> instead where you can." >&2
@@ -122,6 +131,46 @@ SCOPE_ENC="$(urlenc "$SCOPE")"
 say() { printf '%s\n' "$*"; }
 hr()  { printf '%s\n' "----------------------------------------------------------------"; }
 
+# curl exit 60 on an OpenShift cluster is almost always the same thing: Central sits
+# behind an .apps route whose wildcard certificate is signed by the cluster's own
+# ingress CA, and your workstation has no reason to trust that CA. The answer is to
+# obtain the CA over a channel you already trust, which is your authenticated oc
+# session, and NOT to turn verification off on a request carrying a bearer token.
+ca_help() {
+  say "  TLS verification failed: the CA presenting this certificate is not trusted here."
+  say ""
+  say "  Do NOT reach for --insecure. This request carries a token that reads your whole"
+  say "  security posture, and disabling verification hands it to anyone on the path."
+  say ""
+  say "  Find out which CA is actually presenting, so you fetch the right one:"
+  say ""
+  say "    openssl s_client -connect ${ROX_ENDPOINT#https://}:443 -showcerts </dev/null 2>/dev/null \\"
+  say "      | openssl x509 -noout -issuer -subject"
+  say ""
+  say "  Then get that CA from your authenticated oc session, not from the handshake."
+  say ""
+  say "  If Central is behind a normal .apps route, which is the usual case:"
+  say ""
+  say "    oc -n openshift-config-managed get configmap default-ingress-cert \\"
+  say "      -o jsonpath='{.data.ca-bundle\\.crt}' > ~/ocp-ingress-ca.pem"
+  say ""
+  say "  If the route is passthrough and Central presents its own certificate:"
+  say ""
+  say "    oc -n stackrox get secret central-tls \\"
+  say "      -o jsonpath='{.data.ca\\.pem}' | base64 -d > ~/central-ca.pem"
+  say ""
+  say "  Then set it once and re-run. Both scripts read this variable:"
+  say ""
+  say "    export ROX_CA=~/ocp-ingress-ca.pem"
+  say "    ./acs_preflight.sh \"$ROX_ENDPOINT\""
+  say "    ./acs_pull_all.sh"
+  say ""
+  say "  Verify it worked before trusting the output:"
+  say ""
+  say "    curl --cacert \"\$ROX_CA\" -sS -o /dev/null -w '%{http_code}\\n' \\"
+  say "      \"$ROX_ENDPOINT/v1/metadata\""
+}
+
 say "ACS full findings sweep"
 say "  endpoint : $ROX_ENDPOINT"
 say "  scope    : ${SCOPE:-<everything, no filter>}"
@@ -135,7 +184,12 @@ if ! $CURL "$ROX_ENDPOINT/v1/auth/status" -o "$OUTDIR/00_auth_status.json" 2>"$O
   say ""
   say "  401 means the token is wrong or expired."
   say "  403 means it authenticated but lacks a role."
-  say "  A connection error usually means an untrusted internal CA. Use --cacert."
+  say ""
+  if grep -qiE "certificate|SSL|self.signed|unable to get local issuer" "$OUTDIR/00_auth_status.err" 2>/dev/null; then
+    ca_help
+  else
+    say "  A connection error usually means an untrusted internal CA. Use --cacert."
+  fi
   exit 1
 fi
 say "  ok"
@@ -330,5 +384,11 @@ hr
 say "Written to $OUTDIR:"
 ls -1 "$OUTDIR" | sed 's/^/  /'
 say ""
-say "Drop 02_alerts_full.json and 03_vuln_workloads.ndjson onto dj_acs_auditor.html."
-say "Use 02, not 01. The list form has no violation text in it."
+say "Next: open dj_acs_auditor.html in a browser and drop these files on it."
+say "Drop all of them at once. They merge rather than replacing each other."
+say ""
+say "Use 02_alerts_full.json, not 01. The list form has no violation text in it,"
+say "which is a limit of the ACS API rather than of this script."
+say ""
+say "The pages need no runtime, no package manager and no server. Open the file."
+say "acs_cli.js is the same engine headless, and that one does need Node."

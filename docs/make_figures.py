@@ -299,7 +299,7 @@ p.append('</svg>')
 render("fig4_outputs","\n".join(p),W,H)
 
 # ---------------------------------------------------------------- Figure 8
-W,H=1160,800
+W,H=1160,912
 p=[f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" font-family="{FONT}">',
    f'<rect width="{W}" height="{H}" fill="{BG}"/>',
    hdr(W,"Violations from ACS","Every violation gets a row, and every row says what can be done about it")]
@@ -318,7 +318,7 @@ for lbl,on in filters:
     xx+=wdt
 p.append(f'<text x="{xx+10}" y="127" font-size="10.5" fill="{MUTED}">showing 4 of 6 violation(s): 4 on your workloads, 2 on platform components</text>')
 
-cols=[("",42),("SEVERITY",70),("ACS POLICY",160),("OBJECT",396),("NAMESPACE",620),("STATE",744),("VIOLATION",820),("FIX",1020)]
+cols=[("",42),("SEVERITY",70),("ACS POLICY",160),("OBJECT",396),("NAMESPACE",620),("STATE",744),("VIOLATION",820),("FIX",985)]
 for lbl,cx in cols:
     p.append(f'<text x="{cx}" y="156" font-size="9" fill="{MUTED}" letter-spacing="1">{lbl}</text>')
 p.append(f'<rect x="42" y="146" width="13" height="13" rx="3" fill="{PANEL2}" stroke="{ACC}"/>')
@@ -357,16 +357,20 @@ for ri,(sev,pol,obj,ns,st,det,fix,fc) in enumerate(rows):
         p.append(f'<text x="584" y="{y+1}" font-size="8" fill="{MUTED}" text-anchor="middle">PLATFORM</text>')
     p.append(f'<text x="620" y="{y+1}" font-size="10.5" fill="{MUTED}">{esc(ns)}</text>')
     p.append(f'<text x="744" y="{y+1}" font-size="10.5" fill="{MUTED}">{esc(st)}</text>')
-    p.append(f'<text x="820" y="{y+1}" font-size="9.5" fill="{MUTED}">{esc(det)}</text>')
+    p.append(f'<text x="820" y="{y+1}" font-size="9" fill="{MUTED}">{esc(det[:29])}</text>')
     wdt=len(fix)*6.2+18
-    p.append(f'<rect x="1020" y="{y-10}" width="{wdt}" height="15" rx="7" fill="none" stroke="{fc}"/>')
-    p.append(f'<text x="{1020+wdt/2}" y="{y+1}" font-size="9" fill="{fc}" text-anchor="middle">{esc(fix)}</text>')
+    p.append(f'<rect x="985" y="{y-10}" width="{wdt}" height="15" rx="7" fill="none" stroke="{fc}"/>')
+    p.append(f'<text x="{985+wdt/2}" y="{y+1}" font-size="9" fill="{fc}" text-anchor="middle">{esc(fix)}</text>')
+    if fix=="Platform":
+        ox=985+wdt+6
+        p.append(f'<rect x="{ox}" y="{y-10}" width="52" height="15" rx="7" fill="none" stroke="{MUTED}" stroke-dasharray="2 2"/>')
+        p.append(f'<text x="{ox+26}" y="{y+1}" font-size="8" fill="{MUTED}" text-anchor="middle">override</text>')
     p.append(f'<line x1="42" y1="{y+14}" x2="{W-42}" y2="{y+14}" stroke="{BORDER}"/>')
     y+=38
 
 p.append(f'<text x="42" y="{y+16}" font-size="10.5" fill="{MUTED}">Click a row for the rationale, the standards it maps to, and the reasoning behind the fix route.</text>')
 p.append(callout(53,y+50,"1","Tick what you want to fix. Nothing is selected until you select it.",0))
-p.append(callout(53,y+80,"2","No route means no checkbox you can tick. Hover it for the reason.",0))
+p.append(callout(53,y+80,"2","No route means no checkbox. Override the refusal if the object is yours.",0))
 
 # routes
 p.append(f'<rect x="24" y="500" width="{W-48}" height="152" rx="9" fill="{PANEL}" stroke="{BORDER}"/>')
@@ -375,7 +379,7 @@ routes=[("In your YAML",LOW,"The manifest is loaded, so the fix is applied to it
         ("Patch",ACC,"No manifest for this object, so a strategic merge patch is drafted from the violation itself."),
         ("Need manifest",MED,"Fixable in principle, but the violation does not carry enough to draft a patch safely."),
         ("Human decision",MED,"The policy has no mechanical fix. Somebody has to decide."),
-        ("Platform",CRIT,"A platform component. Listed, never patched: the owning operator reverts manual edits."),
+        ("Platform",CRIT,"Listed, refused by default. Override per object if you own it: see below."),
         ("Not modelled",MED,"No policy in the catalogue matches. Reported rather than dropped.")]
 for i,(lbl,col,desc) in enumerate(routes):
     yy=546+i*17
@@ -385,14 +389,24 @@ for i,(lbl,col,desc) in enumerate(routes):
     p.append(f'<text x="{42+wdt+14}" y="{yy}" font-size="10.5" fill="{MUTED}">{esc(desc)}</text>')
 
 # the output
-p.append(f'<rect x="24" y="670" width="{W-48}" height="100" rx="9" fill="{PANEL}" stroke="{BORDER}"/>')
-p.append(f'<rect x="24" y="670" width="3" height="100" fill="{LOW}"/>')
-p.append(f'<text x="44" y="694" font-size="12" font-weight="bold" fill="{TEXT}">What "fix" produces: a YAML file for the ones you ticked, and nothing else.</text>')
+# platform is sometimes a guess, and the row says which
+p.append(f'<rect x="24" y="670" width="{W-48}" height="96" rx="9" fill="{PANEL}" stroke="{BORDER}"/>')
+p.append(f'<rect x="24" y="670" width="3" height="96" fill="{MED}"/>')
+p.append(f'<text x="44" y="694" font-size="12" font-weight="bold" fill="{TEXT}">Platform is sometimes a guess, and the row tells you which</text>')
 for i,line in enumerate([
-  "No command is run and no cluster is touched, on any surface, in any mode. Each drafted file names the object, the namespace and the policies",
-  "it covers, and states on its face that it was built from a violation rather than from a manifest and therefore needs verifying. Test it against a",
-  "namespace you do not care about, then apply it yourself. Report mode, the default, writes the written account and no YAML at all.",
-  "The report states how many of the imported violations were in scope, so a document covering a subset cannot be mistaken for one covering the cluster."]):
+  "ACS said so: the platformComponent field. Authoritative, because ACS knows what the cluster operators own. Overriding asks you to confirm first.",
+  "Guessed from namespace: ACS did not send the field, so the namespace was matched instead. That guess is wrong in both directions, and your own",
+  "workload in openshift-operators would be refused forever. Override it and the normal fix routes apply, per object, never globally."]):
     p.append(f'<text x="44" y="{716+i*17}" font-size="10.5" fill="{MUTED}">{esc(line)}</text>')
+
+p.append(f'<rect x="24" y="784" width="{W-48}" height="104" rx="9" fill="{PANEL}" stroke="{BORDER}"/>')
+p.append(f'<rect x="24" y="784" width="3" height="104" fill="{LOW}"/>')
+p.append(f'<text x="44" y="808" font-size="12" font-weight="bold" fill="{TEXT}">What "fix" produces: a YAML file for the ones you ticked, and nothing else.</text>')
+for i,line in enumerate([
+  "No command is run and no cluster is touched, on any surface, in any mode. Each drafted file names the object, the namespace and the policies it",
+  "covers, and states on its face that it was built from a violation rather than from a manifest, so it needs verifying. An overridden one says that too.",
+  "Test it against a namespace you do not care about, then apply it yourself. Report mode, the default, writes the account and no YAML at all.",
+  "The report states how many of the imported violations were in scope, so a document covering a subset cannot be mistaken for one covering the cluster."]):
+    p.append(f'<text x="44" y="{830+i*17}" font-size="10.5" fill="{MUTED}">{esc(line)}</text>')
 p.append('</svg>')
 render("fig8_violations_panel","\n".join(p),W,H)

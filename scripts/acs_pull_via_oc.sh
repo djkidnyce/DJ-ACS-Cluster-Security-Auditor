@@ -271,4 +271,7 @@ say "Written to $OUT:"
 ls -1 "$OUT" | grep -v '^\.' | sed 's/^/  /'
 say ""
 say "Next:"
+say "  open dj_acs_auditor.html and drop $OUT/vuln_workloads.ndjson on it"
+say ""
+say "  Or, if Node is available here:"
 say "  node acs_cli.js --path ./manifests --vulns $OUT/vuln_workloads.ndjson --report --worklist"

@@ -86,6 +86,9 @@ code{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;background:var
 .pill.manual{color:var(--med);border-color:var(--med)}
 .pill.gen{color:var(--accent);border-color:var(--accent)}
 .pill.acs{color:var(--crit);border-color:var(--crit)}
+button.ovr{font-size:10px;padding:1px 7px;border-radius:9px;margin-left:4px;background:transparent;border:1px dashed var(--border);color:var(--muted)}
+button.ovr:hover{border-color:var(--accent);color:var(--accent)}
+button.ovr.on{border-style:solid;border-color:var(--med);color:var(--med)}
 .pill.fixed{color:var(--low);border-color:var(--low);background:var(--add)}
 .acsid{font-family:ui-monospace,Consolas,monospace;color:var(--accent);font-weight:600;white-space:nowrap}
 pre.diff{background:var(--code);border:1px solid var(--border);border-radius:8px;padding:0;overflow-x:auto;font-family:ui-monospace,Consolas,monospace;font-size:12px;line-height:1.55;margin:0}
@@ -472,7 +475,7 @@ function violRows() {
 
   let rows = all.map((r) => ({
     rec: r,
-    fx: violationFixability(r, !!filesByObj[r.obj]),
+    fx: fixabilityFor(r, !!filesByObj[r.obj]),
     file: filesByObj[r.obj] || '',
   }));
   rows = rows.filter((x) => {
@@ -562,6 +565,35 @@ function bindSelection(tb) {
   }));
 }
 
+/* Platform classifications the operator has taken responsibility for.
+ *
+ * Refusing to patch an operator managed object is right: the operator reverts you and the
+ * drift is then harder to spot than the original finding. But the classification is not
+ * always ACS's. When ACS does not send platformComponent, the tool falls back to matching
+ * the namespace, and that guess is wrong in both directions. A team's own workload in
+ * openshift-operators gets refused forever, and the operator never sees a fix because the
+ * tool decided on their behalf that it was not theirs.
+ *
+ * So the refusal is the default and it is overridable per finding, never globally.
+ */
+const OVERRIDDEN = new Set();
+
+function fixabilityFor(rec, loaded) {
+  return violationFixability(rec, loaded, { overridePlatform: OVERRIDDEN.has(violationKey(rec)) });
+}
+
+function toggleOverride(key, authoritative) {
+  if (OVERRIDDEN.has(key)) { OVERRIDDEN.delete(key); SELECTED.delete(key); renderViolations(); return; }
+  if (authoritative && !confirm(
+      'ACS reports this object as a platform component, which is authoritative: ACS knows ' +
+      'what the cluster operators own.\n\n' +
+      'If that is right, the operator will revert whatever you apply, and the drift will ' +
+      'look like a deliberate change to whoever reviews it later.\n\n' +
+      'Override only if you are certain you own this object.')) return;
+  OVERRIDDEN.add(key);
+  renderViolations();
+}
+
 function renderViolations() {
   const p = $('violPanel');
   if (!STATE.acs || !STATE.acs.total) { p.classList.add('hidden'); return; }
@@ -589,7 +621,16 @@ function renderViolations() {
       '<td>' + esc(r.namespace) + '</td>' +
       '<td>' + esc(r.state || '') + '</td>' +
       '<td class="note" style="margin:0">' + esc((r.detail || '').slice(0, 140)) + '</td>' +
-      '<td><span class="pill ' + pill[0] + '">' + esc(pill[1]) + '</span></td>' +
+      '<td><span class="pill ' + pill[0] + '">' + esc(pill[1]) + '</span>' +
+        (x.fx.kind === 'platform' && x.fx.overridable
+          ? ' <button class="ovr" data-ovk="' + esc(violationKey(r)) + '"' +
+            ' data-auth="' + (x.fx.platformSource === 'acs' ? '1' : '0') + '"' +
+            ' title="' + esc(x.fx.why) + '">override</button>'
+          : (OVERRIDDEN.has(violationKey(r))
+             ? ' <button class="ovr on" data-ovk="' + esc(violationKey(r)) + '" data-auth="0"' +
+               ' title="Overridden. Click to put the platform refusal back.">overridden</button>'
+             : '')) +
+      '</td>' +
       '</tr><tr class="vdet hidden"><td colspan="8" style="background:var(--panel2)">' +
       '<div class="kv">' +
       (r.policy ? '<div class="k">Why it matters</div><div>' + esc(r.policy.rationale) + '</div>' +
@@ -610,6 +651,10 @@ function renderViolations() {
   tb.querySelectorAll('tr.frow').forEach((tr) => tr.addEventListener('click', () => {
     const d = tr.nextElementSibling;
     if (d) d.classList.toggle('hidden');
+  }));
+  tb.querySelectorAll('button.ovr').forEach((b) => b.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    toggleOverride(b.dataset.ovk, b.dataset.auth === '1');
   }));
   bindSelection(tb);
   syncSelectionUi();
@@ -656,7 +701,7 @@ $('btnFixViolations').addEventListener('click', () => {
   }
   const mode = currentMode();
   const bundle = buildViolationFixBundle(STATE.acs,
-    { filesByObj: violFilesByObj(), mode: mode, selected: SELECTED });
+    { filesByObj: violFilesByObj(), mode: mode, selected: SELECTED, overridden: OVERRIDDEN });
   const tag = stamp() + '_' + mode;
 
   if (!bundle.files.length) {
@@ -717,7 +762,23 @@ function render() {
   if (!has) return;
   renderVulnPanel();
   renderViolations();
-  if (!STATE.files.length) { $('cards').innerHTML = ''; return; }
+  /* No manifests means no posture, and saying so is better than an empty space.
+     A score over zero files computes to 100 out of 100, Grade A, which is not clean,
+     it is unmeasured. The auditor page had exactly that defect. */
+  if (!STATE.files.length) {
+    $('cards').innerHTML =
+      '<div class="card" style="grid-column:1/-1;border-color:var(--med)">' +
+      '<div style="font-weight:600;margin-bottom:4px">No posture score: no manifests are loaded</div>' +
+      '<div class="lbl" style="text-transform:none;letter-spacing:0;font-size:12px;line-height:1.5">' +
+      'Scoring nothing produces 100 out of 100, which means unmeasured rather than clean, ' +
+      'so no number is shown. ' +
+      (STATE.acs && STATE.acs.total
+        ? 'Your ' + STATE.acs.total + ' ACS violation(s) are listed below and can be worked without a score. '
+        : '') +
+      'Drop in the YAML for these workloads to fix them in place and get a posture number.' +
+      '</div></div>';
+    return;
+  }
 
   const open = STATE.findings.filter((f) => !f.applied);
   const posture = computePosture(STATE.files, open, false);

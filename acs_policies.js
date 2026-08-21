@@ -921,7 +921,20 @@ function importAcsViolations(json) {
     if (m) imported.push(rec); else unmatched.push(rec);
   }
   const all = imported.concat(unmatched);
-  for (const r of all) r.isPlatform = looksPlatform(r);
+  for (const r of all) {
+    r.isPlatform = looksPlatform(r);
+    /* Record which signal decided it. These are not the same claim.
+     *
+     * platformComponent from ACS is authoritative: ACS knows what it installed and what
+     * the cluster operators own. The namespace pattern is a guess made when the field is
+     * absent, and it is wrong in both directions: a team can deploy their own workload
+     * into openshift-operators, and a genuine platform component can sit somewhere the
+     * pattern does not match.
+     *
+     * Refusing to fix on the strength of a guess, without saying it was a guess, is how
+     * a real finding on a workload you own gets quietly parked forever. */
+    r.platformSource = rec_platform_source(r);
+  }
   const hydratable = all.filter((r) => !r.hydrated && r.acsAlertId).length;
   const platform = all.filter((r) => r.isPlatform).length;
   /* If nothing in the set reports the flag, say so rather than letting the caller assume
@@ -1121,6 +1134,12 @@ function buildAlertQuery(opts) {
    still separate the two rather than presenting one undifferentiated pile.
    This is a heuristic and is labelled as one wherever it is used. */
 const PLATFORM_NS_RE = /^(openshift|kube|stackrox|rhacs|open-cluster-management|multicluster-engine|hive|assisted-installer)(-|$)/;
+
+function rec_platform_source(rec) {
+  if (rec.platformComponent === true) return 'acs';
+  if (rec.platformComponent === false) return 'acs';
+  return rec.isPlatform ? 'namespace' : 'namespace';
+}
 
 function looksPlatform(rec) {
   if (rec.platformComponent === true) return true;
@@ -2301,10 +2320,24 @@ const VIOLATION_PATCHES = {
   'ACS.016': { level: 'pod', apply: (p) => { p.automountServiceAccountToken = false; } },
 };
 
-function violationFixability(rec, filesLoaded) {
-  if (rec.isPlatform) {
-    return { fixable: false, kind: 'platform',
-      why: 'Platform component. The owning operator reverts manual edits, so a patch here changes nothing except how hard the drift is to see. Raise an ACS policy exception with an expiry, change the cluster configuration through the supported path, or open a case with Red Hat.' };
+function violationFixability(rec, filesLoaded, opts) {
+  const o = opts || {};
+  if (rec.isPlatform && !o.overridePlatform) {
+    const guessed = rec.platformSource !== 'acs';
+    return { fixable: false, kind: 'platform', platformSource: rec.platformSource,
+      overridable: true,
+      why: guessed
+        ? 'Treated as a platform component because the namespace "' + rec.namespace +
+          '" matches the platform pattern. ACS did not send the platformComponent field, ' +
+          'so this is a guess rather than something ACS told us. If you own this workload, ' +
+          'override it and the normal fix routes apply. If it really is platform, patching ' +
+          'it changes nothing except how hard the drift is to see, because the owning ' +
+          'operator reverts manual edits.'
+        : 'ACS reports this as a platform component, which is authoritative: ACS knows what ' +
+          'the cluster operators own. The owning operator reverts manual edits, so a patch ' +
+          'here changes nothing except how hard the drift is to find. The supported routes ' +
+          'are a policy exception with an expiry, a configuration change through whatever ' +
+          'the operator exposes, or a case with Red Hat.' };
   }
   if (!rec.matched || !rec.policy) {
     return { fixable: false, kind: 'unmatched',
@@ -2314,21 +2347,29 @@ function violationFixability(rec, filesLoaded) {
   if (p.fixKind === 'manual') {
     return { fixable: false, kind: 'manual', why: p.remediation };
   }
+  const overrideNote = (rec.isPlatform && o.overridePlatform)
+    ? ' You have overridden the platform classification for this one. If the object really ' +
+      'is operator managed, the operator will revert whatever you apply, and the change will ' +
+      'look deliberate to whoever reviews the drift later.'
+    : '';
   if (filesLoaded) {
-    return { fixable: true, kind: 'inplace',
-      why: 'The manifest is loaded, so this is fixed in your YAML with a diff and a confirmation.' };
+    return { fixable: true, kind: 'inplace', overridden: !!overrideNote,
+      why: 'The manifest is loaded, so this is fixed in your YAML with a diff and a confirmation.' + overrideNote };
   }
   if (!VIOLATION_PATCHES[p.id]) {
     return { fixable: false, kind: 'needs-manifest',
       why: 'This fix needs to see the original manifest. Load the file, or pull the workload with oc get -o json, then it becomes fixable.' };
   }
-  return { fixable: true, kind: 'patch',
-    why: 'Emitted as a strategic merge patch built from the violation. Apply it through GitOps.' };
+  return { fixable: true, kind: 'patch', overridden: !!overrideNote,
+    why: 'Emitted as a strategic merge patch built from the violation. Apply it through GitOps.' + overrideNote };
 }
 
 /* Build a strategic merge patch for one violation, with no manifest required. */
-function buildViolationPatch(rec) {
-  const f = violationFixability(rec, false);
+function buildViolationPatch(rec, opts) {
+  /* Pass the caller's options through. Re-deriving fixability here WITHOUT them meant an
+     overridden platform record was re-judged as platform, refused, and silently produced
+     no patch, so the override appeared to do nothing at all. */
+  const f = violationFixability(rec, false, opts || {});
   if (!f.fixable || f.kind !== 'patch') return null;
   const spec = VIOLATION_PATCHES[rec.policy.id];
   const parts = String(rec.obj || '').split('/');
@@ -2401,12 +2442,19 @@ function buildViolationFixBundle(acs, opts) {
   const inplace = [];
   const seen = {};
 
+  /* Platform classifications the operator has explicitly overridden, by violation key.
+     A Set rather than a boolean: overriding is a per finding judgement about one object
+     you claim to own, not a global "ignore the platform rule" switch. */
+  const over = o.overridden == null ? null
+    : (o.overridden instanceof Set ? o.overridden : new Set(Array.from(o.overridden)));
+  const isOver = (rec) => !!(over && over.has(violationKey(rec)));
+
   for (const rec of recs) {
     const loaded = !!filesByObj[rec.obj];
-    const f = violationFixability(rec, loaded);
+    const f = violationFixability(rec, loaded, { overridePlatform: isOver(rec) });
     if (f.kind === 'inplace') { inplace.push({ rec: rec, why: f.why }); continue; }
     if (!f.fixable) { skipped.push({ rec: rec, kind: f.kind, why: f.why }); continue; }
-    const built = buildViolationPatch(rec);
+    const built = buildViolationPatch(rec, { overridePlatform: isOver(rec) });
     if (!built) { skipped.push({ rec: rec, kind: 'nopatch', why: 'No patch template for ' + rec.policy.id }); continue; }
     const key = rec.namespace + '|' + rec.obj + '|' + rec.policy.id;
     if (seen[key]) continue;
@@ -2419,7 +2467,8 @@ function buildViolationFixBundle(acs, opts) {
   const byObj = {};
   for (const b of patches) {
     const key = b.rec.namespace + '|' + b.rec.obj;
-    if (!byObj[key]) byObj[key] = { rec: b.rec, patch: b.patch, policies: [], needsContainerName: false };
+    if (!byObj[key]) byObj[key] = { rec: b.rec, patch: b.patch, policies: [],
+                                    needsContainerName: false, overridden: isOver(b.rec) };
     else byObj[key].patch = mergePatchObjects(byObj[key].patch, b.patch);
     byObj[key].policies.push(b.policy.id);
     if (b.needsContainerName) byObj[key].needsContainerName = true;
@@ -2436,6 +2485,13 @@ function buildViolationFixBundle(acs, opts) {
       '# Covers:   ' + g.policies.sort().join(', '),
       '# This file is data, not a command. Nothing here has been applied.',
     ];
+    if (g.overridden) {
+      header.push('#');
+      header.push('# OVERRIDE: this object was classified as a platform component and you chose');
+      header.push('# to patch it anyway. If it is operator managed, the operator will revert');
+      header.push('# this, and the resulting drift will look like a deliberate change to whoever');
+      header.push('# reviews it. Confirm you own this object before applying.');
+    }
     if (g.needsContainerName) {
       header.push('#');
       header.push('# WARNING: the container name could not be read from the violation text, so');

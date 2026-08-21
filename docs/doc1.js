@@ -276,11 +276,20 @@ push([Tbl(['Route', 'What it means', 'What you do'], [
   ['Not modelled', 'No policy in the catalogue matches this one.', 'Add it to the catalogue, or handle it in ACS.'],
 ], [1700, 4200, 3400])]);
 body.push(P('', { spacing: { after: 140 } }));
-H2('Why platform components are never patched');
-push(Note('warn', 'A patch here changes nothing except how hard the drift is to find', [
-  'Objects in openshift-, kube- and redhat- namespaces are reconciled by an operator. Edit one and the operator reverts it, usually within seconds and without telling you.',
-  'The edit does not fix the violation. It does add drift between what is declared and what is running, and that drift is now harder to see because somebody has made a change that looks deliberate.',
-  'The supported routes are a policy exception in ACS with an expiry on it, a configuration change through whatever path the operator exposes, or a case with Red Hat. All three leave a record. A silent manual edit does not.']));
+H2('Platform components, and when the tool is guessing');
+T('A violation on a platform component is listed and refused by default. That default is right: objects reconciled by an operator get reverted, usually within seconds and without telling you, so the edit does not fix the violation and does add drift that is now harder to see because somebody made a change that looks deliberate.');
+T('But the classification is not always ACS\'s, and the difference matters:');
+push([Tbl(['The row says', 'What that means', 'How much to trust it'], [
+  ['ACS said so', 'ACS sent platformComponent on the alert.', 'Authoritative. ACS knows what the cluster operators own.'],
+  ['guessed from namespace', 'ACS did not send the field, so the namespace was matched against a platform pattern instead.', 'A guess, and wrong in both directions. Your own workload in openshift-operators matches it. A platform component elsewhere does not.'],
+], [2200, 3900, 3200])]);
+body.push(P('', { spacing: { after: 140 } }));
+push(Note('warn', 'Every platform refusal can be overridden, per object', [
+  'Press override on the row. If the classification was a guess, the normal fix routes apply immediately. If ACS itself reported it as platform, you are asked to confirm first, because that claim is authoritative and you are contradicting it.',
+  'It is never global. Overriding one object does not release the others, and it does not bypass the mode gate: report mode still writes no YAML.',
+  'The drafted file says on its face that it was overridden and that an operator may revert it, so the next person to read that patch knows what they are holding.',
+  'From the command line: --override-platform Deployment/cert-manager-webhook, taking the same identifiers as --select.']));
+T('This exists because the earlier behaviour produced a dead end. A privilege escalation finding on a workload a team owned, sitting in a namespace that happened to match the pattern, was refused forever with no way to say "this one is mine". The tool had decided on their behalf, and had not mentioned that it was guessing.');
 H2('Choosing which ones to fix');
 T('Each row carries a checkbox. Nothing is ticked when the table first renders, and the draft button stays disabled until something is, which is the same reasoning as report mode being the default: the state you get by doing nothing is the state that does nothing.');
 push([Bul('The box in the table header ticks or clears every fixable violation currently shown. Currently shown, not everything imported. Selecting rows you have filtered out of view is how somebody ends up drafting a patch for a namespace they had deliberately excluded.'),
@@ -374,6 +383,10 @@ T('Each patch carries only the fields that actually changed, and container array
 
 // ---------------- 10
 H1('13. How the score is calculated');
+push(Note('crit', 'When there is no score at all, and why that is the correct answer', [
+  'The denominator comes from what was scanned, never from what was found. That is what makes the projected score comparable to a real rescan.',
+  'It also means scoring zero manifests returns 100 out of 100, Grade A. That is arithmetically correct and completely misleading: nothing was scanned, so nothing was found. If you load an ACS export and no YAML, the pages and the CLI refuse to show a number and say why.',
+  'Unmeasured is not the same as clean. A green A on a cluster nobody has looked at is the worst output a security tool can produce, and this one used to produce it. Your violations and CVEs remain fully usable without a score.']));
 T('Every applicable pairing of a policy and an object counts as one check. Checks are weighted by severity, and your score is the percentage of the total available weight that you pass.');
 push([Tbl(['Severity', 'Weight', 'Grade band', 'Score'], [
   ['Critical', '18', 'A', '90 and above'],
@@ -434,6 +447,8 @@ push([Tbl(['Symptom', 'Cause and fix'], [
   ['Dropped six files and only one appeared', 'Fixed. Imports now accumulate and deduplicate rather than replacing each other. If you are on an older copy, that is the symptom, and updating is the fix.'],
   ['A file is rejected with "expected Kubernetes or OpenShift objects"', 'The page now says what the file actually is instead. The most common case is dropping the tool\'s own findings export back in: that is a record of a previous run, not an input, and it has no manifests in it to rescan.'],
   ['Violations import but there is nothing to click', 'You are on an older copy. Violations are rows with a fix route on each one. See section 9.'],
+  ['Posture shows 100 and grade A with ACS data loaded', 'Fixed. That was a score over zero manifests: an empty denominator reads as perfect. Both pages now refuse the number and say so. If you still see it, you are on an older copy.'],
+  ['A privilege escalation finding shows Platform and offers no fix', 'Check whether the row says ACS said so or guessed from namespace. If it is a guess and you own the object, press override. See section 9.'],
   ['ACS violations import but nothing is marked live', 'Policy names did not match. Check the unmatched list. If a name in your ACS version is missing from the alias table, it belongs in acs_policies.js. See the administration guide.'],
   ['Alerts come back with a policy name but no explanation', 'You fetched the list without the detail. GET /v1/alerts returns ListAlert, which has no violations array. Tick Fetch violation detail. See section 6.'],
   ['Zero alerts returned and the cluster is clearly not clean', 'Three usual causes: the query defaults to active violations only, the token is scoped to fewer namespaces than you think, or you are looking for CVEs, which never appear here at all. Use the Vulnerabilities tab.'],

@@ -17,7 +17,7 @@ Audit Kubernetes and OpenShift manifests against Red Hat Advanced Cluster Securi
 | `scripts/acs_pull_all.sh` and `.ps1` | Pull every finding ACS has, all severities and states, from outside the browser |
 | `scripts/acs_pull_via_oc.sh` | Same, but reaches Central through your existing `oc` session |
 | `scripts/acs_pull_over_ssh.ps1` | PowerShell, when only a bastion can reach the cluster |
-| `test/run_tests.js` | 694 tests against the real engine, pages and CLI |
+| `test/run_tests.js` | 774 tests against the real engine, pages and CLI |
 
 Open either HTML file directly. There is nothing to install and no server to run.
 
@@ -65,7 +65,17 @@ Each row has a checkbox. Nothing is selected until you select it, and the draft 
 
 Drafted fixes are YAML files and nothing else. No command is run and no cluster is touched, on any surface, in any mode. Each file carries a header naming the object, the namespace, the policies it covers, and the fact that it was built from a violation rather than from a manifest and therefore needs verifying. Test it against a namespace you do not care about, then apply it yourself.
 
-Violations on platform components are always listed and never patched. The owning operator reverts manual edits, so a patch there changes nothing except how hard the drift is to find. Raise a policy exception with an expiry, change the cluster configuration through the supported path, or open a case with Red Hat.
+### Platform components
+
+Violations on platform components are listed and refused by default, because the owning operator reverts manual edits and the resulting drift is harder to find than the original finding.
+
+But that classification is not always ACS's. When ACS does not send `platformComponent`, the tool falls back to matching the namespace, and that guess is wrong in both directions: your own workload in `openshift-operators` gets refused forever, and the operator never sees the fix because the tool decided on their behalf that it was not theirs.
+
+So the tool now says which signal decided, `ACS said so` or `guessed from namespace`, and every refusal carries an **override**. Overriding a guess applies the normal fix routes. Overriding something ACS itself flagged asks for confirmation first. It is per object, never global, it does not bypass the mode gate, and the drafted YAML says on its face that it was overridden and that an operator may revert it.
+
+From the CLI: `--override-platform Deployment/cert-manager-webhook`.
+
+Violations on platform components are never patched without that explicit override. The owning operator reverts manual edits, so a patch there changes nothing except how hard the drift is to find. Raise a policy exception with an expiry, change the cluster configuration through the supported path, or open a case with Red Hat.
 
 From the CLI:
 
@@ -296,6 +306,71 @@ This is static analysis of manifest text plus whatever ACS hands you. It does no
 
 STIG references are mapping aids. Verify them against the current DISA release before citing them in an accreditation package.
 
+## What needs what
+
+Nothing in the audit path needs a package manager, and the part most people actually use needs no runtime at all.
+
+| To do this | You need | Node? |
+|---|---|---|
+| Read, score, cross check, see violations, draft fixes | A browser. Open `dj_acs_auditor.html` from disk | **No** |
+| Apply fixes with preview, confirm and undo | A browser. Open `dj_acs_remediation.html` from disk | **No** |
+| Pull data out of ACS | `bash`, `curl`, `jq` | **No** |
+| Pull via an `oc` port forward | The above plus `oc` | **No** |
+| Pull from PowerShell or over SSH | PowerShell 5.1 or newer, no extra modules | **No** |
+| Run the same audit headless, in a pipeline | `acs_cli.js` | Yes, Node 18+ |
+| Run the test suite | `test/run_tests.js` | Yes, Node 18+ |
+| Rebuild the Word guides and figures | `docs/` generators | Yes, plus Python |
+
+The pages load `vendor/js-yaml.min.js` and `vendor/jszip.min.js` with plain `<script src>` tags from the folder they sit in. No server, no build step, no install. If Node cannot be installed on the machine you audit from, you lose the headless CLI and the tests, and nothing else.
+
+## When the pull script fails on TLS
+
+`curl (60) SSL certificate problem: self-signed certificate in certificate chain` means Central sits behind a route whose certificate is signed by a CA your machine has no reason to trust. On OpenShift that is usually the cluster's own ingress CA, which signs the wildcard for `.apps`.
+
+Do not reach for `--insecure`. That request carries a token that reads your entire security posture, and disabling verification hands it to anyone on the path.
+
+Get the CA over a channel you already trust, which is your authenticated `oc` session rather than the handshake that just failed:
+
+```bash
+# see which CA is actually presenting
+openssl s_client -connect central.apps.example.com:443 -showcerts </dev/null 2>/dev/null \
+  | openssl x509 -noout -issuer -subject -dates
+
+# usual case: Central behind an .apps route signed by the cluster ingress CA
+oc -n openshift-config-managed get configmap default-ingress-cert \
+  -o jsonpath='{.data.ca-bundle\.crt}' > ~/ocp-ingress-ca.pem
+
+# OpenShift older than 4.8, where default-ingress-cert does not exist yet
+oc -n openshift-ingress-operator get secret router-ca \
+  -o jsonpath='{.data.tls\.crt}' | base64 -d > ~/ocp-ingress-ca.pem
+
+# passthrough route, Central presenting its own certificate
+oc -n stackrox get secret central-tls \
+  -o jsonpath='{.data.ca\.pem}' | base64 -d > ~/central-ca.pem
+```
+
+Then set it once. Both scripts read `ROX_CA`, and `acs_pull_all.sh` also takes `--cacert`:
+
+```bash
+export ROX_CA=~/ocp-ingress-ca.pem
+./scripts/acs_preflight.sh https://central.apps.example.com
+./scripts/acs_pull_all.sh -o findings
+```
+
+The ingress operator publishes its default certificate as the `default-ingress-cert` ConfigMap in `openshift-config-managed` on OpenShift 4.8 and newer; it superseded `router-ca` ([OpenShift enhancement](https://github.com/openshift/enhancements/blob/master/enhancements/ingress/default-ingress-cert-configmap.md), [certificate types](https://docs.redhat.com/en/documentation/openshift_container_platform/4.8/html/security_and_compliance/certificate-types-and-descriptions)).
+
+If your organisation already publishes a CA bundle, use that instead of extracting one. A bundle from your PKI team is a better answer than a bundle from the cluster you are auditing.
+
+Both scripts now detect this failure and print these commands rather than the word `--cacert`. A CA path that does not exist is refused with a non zero exit rather than quietly falling back to no verification.
+
+## The posture score, and when there isn't one
+
+The denominator comes from what was scanned, never from what was found. That is what makes the projected score comparable to a real rescan.
+
+It also means scoring zero manifests returns 100 out of 100, Grade A. That is arithmetically correct and completely misleading: nothing was scanned, so nothing was found. If you load an ACS export and no YAML, both pages and the CLI refuse to show a number and say why. Unmeasured is not the same as clean, and a green A on a cluster you have not looked at is the worst output a security tool can give you.
+
+Your violations and CVEs are fully usable without a score.
+
 ## Tests
 
 ```bash
@@ -305,7 +380,7 @@ node test/run_tests.js
 npm install jsdom && node test/run_tests.js
 ```
 
-580 engine and CLI tests, no install required, plus 114 whole page tests that need jsdom and skip without it. 694 in total.
+636 engine, CLI and script tests, no install required, plus 138 whole page tests that need jsdom and skip without it. 774 in total.
 
 They cover the policy catalogue, scanning and scoring, fix application and YAML validity, diff correctness, merge patch minimality, ACS import across every export shape the pull script writes plus renamed policy matching, the full remediation flow including that preview mutates nothing and undo restores byte for byte, and the vulnerability path end to end: NDJSON parsing, CVE deduplication, priority reasoning, manifest correlation and drift.
 

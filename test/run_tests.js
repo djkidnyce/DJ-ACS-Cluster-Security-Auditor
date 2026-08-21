@@ -28,6 +28,8 @@ const SUITES = [
   ['platform.cjs', 'platform violations, all states, and fixing without a manifest'],
   ['exports.cjs', 'loading all six acs_pull_all.sh outputs, merging, violation fix routes'],
   ['cli_violations.cjs', 'the CLI drafting violation fixes to YAML, run end to end'],
+  ['scripts.cjs', 'the shell scripts agree with each other about trust and credentials'],
+  ['posture_platform.cjs', 'no score over zero manifests, and the platform override'],
   ['page.cjs', 'whole page wiring in a real DOM (needs jsdom, skips without it)'],
 ];
 

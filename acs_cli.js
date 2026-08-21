@@ -96,6 +96,11 @@ FIXING  (all of these require --mode manual or --mode auto)
                         such as Deployment/payments-api, or a policy id such as ACS.001.
                         Comma separated, repeatable. Without it every violation is in
                         scope, which matches how the tool behaved before this existed.
+  --override-platform <k,...>
+                        Take responsibility for objects the tool classified as platform
+                        and patch them anyway. Same identifiers as --select. Per object,
+                        never global. Use when ACS did not send platformComponent and the
+                        namespace guess was wrong about a workload you own.
   --violation-fixes     Emit patches for ACS violations whose manifest you do not
                         have locally, plus a written account of what could not be
                         fixed and why. In report mode the account is still written,
@@ -156,6 +161,10 @@ function parseArgs(argv) {
       case '--patches': o.patches = true; break;
       case '--violation-fixes': o.violationFixes = true; break;
       case '--list-violations': o.listViolations = true; break;
+      case '--override-platform':
+        o.overridePlatform = (o.overridePlatform || []).concat(String(next()).split(',')
+          .map(function (x) { return x.trim(); }).filter(Boolean));
+        break;
       case '--select':
         o.select = (o.select || []).concat(String(next()).split(',')
           .map(function (x) { return x.trim(); }).filter(Boolean));
@@ -597,10 +606,13 @@ if (opts.listViolations) {
   for (const r of all) {
     const fx = E.violationFixability(r, !!filesByObj[r.obj]);
     const sev = String(r.acsSeverity || '').replace('_SEVERITY', '');
+    let route = fx.fixable ? fx.kind : C.dim(fx.kind);
+    if (fx.kind === 'platform') {
+      route += C.dim(r.platformSource === 'acs' ? '  (ACS said so)' : '  (guessed from namespace)');
+    }
     log('  ' + pad(E.violationKey(r), 22) + ' ' + pad(sev, 9) + ' ' +
         pad((r.policy && r.policy.id) || '(none)', 10) + ' ' +
-        pad(r.obj + ' [' + r.namespace + ']', 31) + ' ' +
-        (fx.fixable ? fx.kind : C.dim(fx.kind)));
+        pad(r.obj + ' [' + r.namespace + ']', 31) + ' ' + route);
   }
   log('');
   log(C.dim('  Selecting nothing selects everything. That is the one place this tool is'));
@@ -650,8 +662,40 @@ if (opts.violationFixes) {
       log(C.dim('  --select matched ' + selected.size + ' of ' + all.length + ' violation(s)'));
     }
 
+    let overridden;
+    if (opts.overridePlatform && opts.overridePlatform.length) {
+      const all = acs.imported.concat(acs.unmatched);
+      overridden = new Set();
+      const missed = [];
+      for (const term of opts.overridePlatform) {
+        const lc = term.toLowerCase();
+        const hits = all.filter(function (r) {
+          return String(r.acsAlertId || '').toLowerCase() === lc ||
+                 String(r.obj || '').toLowerCase() === lc ||
+                 (r.policy && String(r.policy.id || '').toLowerCase() === lc) ||
+                 String(r.acsPolicyName || '').toLowerCase() === lc;
+        });
+        if (!hits.length) missed.push(term);
+        for (const h of hits) overridden.add(E.violationKey(h));
+      }
+      if (missed.length) {
+        console.error(C.red('  --override-platform matched nothing for: ' + missed.join(', ')));
+        console.error('  Run --list-violations to see what is there.');
+        process.exit(2);
+      }
+      const auth = all.filter(function (r) {
+        return overridden.has(E.violationKey(r)) && r.platformSource === 'acs';
+      }).length;
+      log(C.yel('  --override-platform: ' + overridden.size + ' object(s) will be patched despite'));
+      log(C.yel('  the platform classification. You are asserting that you own them.'));
+      if (auth) {
+        log(C.red('  ' + auth + ' of those were reported as platform by ACS itself, which is'));
+        log(C.red('  authoritative. If that is right, the operator will revert your change.'));
+      }
+    }
+
     const b = E.buildViolationFixBundle(acs,
-      { filesByObj: filesByObj, mode: MODE, selected: selected });
+      { filesByObj: filesByObj, mode: MODE, selected: selected, overridden: overridden });
     for (const f of b.files) written.push(writeOut(f.name, f.text));
     written.push(writeOut('FIXING_VIOLATIONS.md', b.report));
     log(C.bold('  ACS violation fixes') + C.dim('  [' + MODE + ']'));

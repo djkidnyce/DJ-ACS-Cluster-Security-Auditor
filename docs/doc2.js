@@ -188,6 +188,8 @@ push([Tbl(['Suite', 'Count', 'Covers'], [
   ['kubejson.cjs', '38', 'oc get -o json in every shape it comes in, and that server side fields are stripped before scanning.'],
   ['platform.cjs', '60', 'Platform detection, all alert states, and fixing a violation with no manifest in hand.'],
   ['exports.cjs', '50', 'All six files acs_pull_all.sh writes, merging rather than overwriting, and that an unloadable file is told what it is.'],
+  ['scripts.cjs', '21', 'The shell scripts agree with each other: same trust source, no token over an unverified connection, insecure never the default.'],
+  ['posture_platform.cjs', '35', 'No posture score over zero manifests, and the per object platform override.'],
   ['cli_violations.cjs', '29', 'The CLI run as a real process, inspecting what lands on disk. Chiefly that report mode leaves nothing applyable behind.'],
 ], [1900, 900, 6500])]);
 body.push(P('', { spacing: { after: 140 } }));
@@ -356,7 +358,22 @@ push(Note('warn', 'macOS ships bash 3.2, and that is not going to change', [
   'Test release scripts on the oldest shell any maintainer might have, or invoke a modern bash explicitly. Do not assume the shell on your machine is the shell on theirs.']));
 
 // 11
-H1('13. Security posture of the tooling itself');
+H1('13. Two defects worth keeping in mind');
+T('Both were found by a user rather than by the suite, and both are the kind of thing a maintainer can reintroduce without noticing.');
+H2('A score with an empty denominator');
+push(Note('crit', 'The tool reported 100 out of 100, Grade A, on a cluster it had not measured', [
+  'The posture denominator comes from what was scanned. Load an ACS export and no YAML and that denominator is empty, so the arithmetic returns a perfect score.',
+  'The CLI already refused to print it. Neither page did, so an operator working in the browser saw a green A. That is the most misleading output this tool is capable of, and it existed for several releases.',
+  'The guard is now in all three surfaces, and test/posture_platform.cjs asserts it runs BEFORE the score is computed rather than after. When you add a fourth surface, add the guard with it.',
+  'The first version of the guard returned early and hid the violations panel along with the score, which turned "refuse to show a meaningless number" into "hide what the operator came for". The page tests caught that one.']));
+H2('A refusal built on a guess that did not say it was guessing');
+T('Violations on platform components are refused, which is correct: the owning operator reverts manual edits. But when ACS does not send platformComponent, the classification falls back to matching the namespace, and that guess is wrong in both directions.');
+T('A privilege escalation finding on a workload a team owned, in a namespace that happened to match, was refused permanently with no way to say otherwise. The policy existed, was auto fixable and had a patch template. Nothing was missing except an admission that the tool was guessing.');
+push([Bul('rec.platformSource records which signal decided: acs or namespace. Preserve it if you touch the import.'),
+      Bul('violationFixability takes an options object with overridePlatform. buildViolationPatch re-derives fixability, so it must be passed the same options: not doing so was a real bug in which the override silently produced nothing.'),
+      Bul('An override is a Set of violation keys, never a boolean. Per object, never global.')]);
+
+H1('14. Security posture of the tooling itself');
 T('A security tool is a target and a trust anchor. These are the properties that have been verified, and the ones you must not regress.');
 push([Tbl(['Property', 'How it is enforced'], [
   ['No remediation ever executes a command', 'No exec, eval, or Function constructor exists in any shipped ACS file. Verified by grep. Fixes are pure text edits to YAML.'],
@@ -379,7 +396,7 @@ push([Bul('Untrusted input is the YAML and the ACS export a user loads. Both are
       Bul('The most realistic failure is not an attack. It is a wrong finding trusted without review, or a stale policy set that quietly stops catching something. That is what sections 6 and 8 exist to prevent.')]);
 
 // 12
-H1('14. Maintainer troubleshooting');
+H1('15. Maintainer troubleshooting');
 push([Tbl(['Symptom', 'Diagnosis'], [
   ['mapfile: command not found', 'bash 3.2 on macOS. See section 10.'],
   ['A test passes against known broken code', 'The fixture cancels the error out. Rebuild it so the defect is observable, then confirm the test fails against the old code.'],
@@ -398,7 +415,7 @@ push([Tbl(['Symptom', 'Diagnosis'], [
 ], [3200, 6100])]);
 
 // 13
-H1('15. Ownership and escalation');
+H1('16. Ownership and escalation');
 T('Both toolsets are maintained by DJ. Issues, policy suggestions, and pull requests: github.com/djkidnyce');
 H2('What to include in a report');
 push([Bul('For a scoring or matching problem: the manifest set, and the ACS export if you can share it. A match failure cannot be reproduced without both.'),

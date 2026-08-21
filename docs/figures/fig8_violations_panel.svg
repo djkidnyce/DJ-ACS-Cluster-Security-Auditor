@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="800" viewBox="0 0 1160 800" font-family="DejaVu Sans, Segoe UI, Arial, sans-serif">
-<rect width="1160" height="800" fill="#0d1117"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="912" viewBox="0 0 1160 912" font-family="DejaVu Sans, Segoe UI, Arial, sans-serif">
+<rect width="1160" height="912" fill="#0d1117"/>
 <rect x="0" y="0" width="1160" height="62" fill="#1f6feb"/><path d="M26 12 l17 6 v13 c0 10 -7 17 -17 22 c-10 -5 -17 -12 -17 -22 v-13 z" fill="#fff" opacity=".95"/><path d="M19 30 l6 6 l11 -12" stroke="#1f6feb" stroke-width="3.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><text x="56" y="27" font-size="17" font-weight="bold" fill="#fff">Violations from ACS</text><text x="56" y="47" font-size="11.5" fill="#cfe1ff">Every violation gets a row, and every row says what can be done about it</text>
 <rect x="24" y="80" width="1112" height="400" rx="9" fill="#161b22" stroke="#30363d"/>
 <text x="42" y="104" font-size="11" font-weight="bold" fill="#58a6ff">VIOLATIONS FROM ACS</text>
@@ -23,7 +23,7 @@
 <text x="620" y="156" font-size="9" fill="#8b949e" letter-spacing="1">NAMESPACE</text>
 <text x="744" y="156" font-size="9" fill="#8b949e" letter-spacing="1">STATE</text>
 <text x="820" y="156" font-size="9" fill="#8b949e" letter-spacing="1">VIOLATION</text>
-<text x="1020" y="156" font-size="9" fill="#8b949e" letter-spacing="1">FIX</text>
+<text x="985" y="156" font-size="9" fill="#8b949e" letter-spacing="1">FIX</text>
 <rect x="42" y="146" width="13" height="13" rx="3" fill="#1c2330" stroke="#58a6ff"/>
 <line x1="45" y1="152" x2="52" y2="152" stroke="#58a6ff" stroke-width="2"/>
 <line x1="42" y1="164" x2="1118" y2="164" stroke="#30363d"/>
@@ -35,9 +35,9 @@
 <text x="396" y="187" font-size="10.5" fill="#e6edf3">Deployment/payments-api</text>
 <text x="620" y="187" font-size="10.5" fill="#8b949e">prod</text>
 <text x="744" y="187" font-size="10.5" fill="#8b949e">ACTIVE</text>
-<text x="820" y="187" font-size="9.5" fill="#8b949e">Container "api" is privileged</text>
-<rect x="1020" y="176" width="92.4" height="15" rx="7" fill="none" stroke="#3fb950"/>
-<text x="1066.2" y="187" font-size="9" fill="#3fb950" text-anchor="middle">In your YAML</text>
+<text x="820" y="187" font-size="9" fill="#8b949e">Container "api" is privileged</text>
+<rect x="985" y="176" width="92.4" height="15" rx="7" fill="none" stroke="#3fb950"/>
+<text x="1031.2" y="187" font-size="9" fill="#3fb950" text-anchor="middle">In your YAML</text>
 <line x1="42" y1="200" x2="1118" y2="200" stroke="#30363d"/>
 <rect x="42" y="215" width="13" height="13" rx="3" fill="#58a6ff" stroke="#58a6ff"/>
 <path d="M45 221 l3 3 l5 -6" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
@@ -47,9 +47,9 @@
 <text x="396" y="225" font-size="10.5" fill="#e6edf3">Deployment/edge-proxy</text>
 <text x="620" y="225" font-size="10.5" fill="#8b949e">prod</text>
 <text x="744" y="225" font-size="10.5" fill="#8b949e">ACTIVE</text>
-<text x="820" y="225" font-size="9.5" fill="#8b949e">Deployment uses the host network</text>
-<rect x="1020" y="214" width="49.0" height="15" rx="7" fill="none" stroke="#58a6ff"/>
-<text x="1044.5" y="225" font-size="9" fill="#58a6ff" text-anchor="middle">Patch</text>
+<text x="820" y="225" font-size="9" fill="#8b949e">Deployment uses the host netw</text>
+<rect x="985" y="214" width="49.0" height="15" rx="7" fill="none" stroke="#58a6ff"/>
+<text x="1009.5" y="225" font-size="9" fill="#58a6ff" text-anchor="middle">Patch</text>
 <line x1="42" y1="238" x2="1118" y2="238" stroke="#30363d"/>
 <rect x="42" y="253" width="13" height="13" rx="3" fill="#1c2330" stroke="#30363d"/>
 <rect x="70" y="252" width="41.6" height="15" rx="7" fill="#5a2d0c"/><text x="90.8" y="263" font-size="8.5" font-weight="bold" fill="#ffc999" text-anchor="middle">HIGH</text>
@@ -58,9 +58,9 @@
 <text x="396" y="263" font-size="10.5" fill="#e6edf3">StatefulSet/cache</text>
 <text x="620" y="263" font-size="10.5" fill="#8b949e">data</text>
 <text x="744" y="263" font-size="10.5" fill="#8b949e">ACTIVE</text>
-<text x="820" y="263" font-size="9.5" fill="#8b949e">Container runs as root</text>
-<rect x="1020" y="252" width="49.0" height="15" rx="7" fill="none" stroke="#58a6ff"/>
-<text x="1044.5" y="263" font-size="9" fill="#58a6ff" text-anchor="middle">Patch</text>
+<text x="820" y="263" font-size="9" fill="#8b949e">Container runs as root</text>
+<rect x="985" y="252" width="49.0" height="15" rx="7" fill="none" stroke="#58a6ff"/>
+<text x="1009.5" y="263" font-size="9" fill="#58a6ff" text-anchor="middle">Patch</text>
 <line x1="42" y1="276" x2="1118" y2="276" stroke="#30363d"/>
 <rect x="42" y="291" width="13" height="13" rx="3" fill="#1c2330" stroke="#30363d"/>
 <rect x="70" y="290" width="54.400000000000006" height="15" rx="7" fill="#4d3800"/><text x="97.2" y="301" font-size="8.5" font-weight="bold" fill="#f2d24b" text-anchor="middle">MEDIUM</text>
@@ -69,9 +69,9 @@
 <text x="396" y="301" font-size="10.5" fill="#e6edf3">CronJob/nightly-etl</text>
 <text x="620" y="301" font-size="10.5" fill="#8b949e">batch</text>
 <text x="744" y="301" font-size="10.5" fill="#8b949e">ACTIVE</text>
-<text x="820" y="301" font-size="9.5" fill="#8b949e">No CPU or memory limit set</text>
-<rect x="1020" y="290" width="98.60000000000001" height="15" rx="7" fill="none" stroke="#d4a72c"/>
-<text x="1069.3" y="301" font-size="9" fill="#d4a72c" text-anchor="middle">Need manifest</text>
+<text x="820" y="301" font-size="9" fill="#8b949e">No CPU or memory limit set</text>
+<rect x="985" y="290" width="98.60000000000001" height="15" rx="7" fill="none" stroke="#d4a72c"/>
+<text x="1034.3" y="301" font-size="9" fill="#d4a72c" text-anchor="middle">Need manifest</text>
 <line x1="42" y1="314" x2="1118" y2="314" stroke="#30363d"/>
 <rect x="42" y="329" width="13" height="13" rx="3" fill="#0d1117" stroke="#30363d"/>
 <line x1="44" y1="331" x2="53" y2="340" stroke="#30363d" stroke-width="1.2"/>
@@ -83,13 +83,15 @@
 <text x="584" y="339" font-size="8" fill="#8b949e" text-anchor="middle">PLATFORM</text>
 <text x="620" y="339" font-size="10.5" fill="#8b949e">openshift-ovn-kube</text>
 <text x="744" y="339" font-size="10.5" fill="#8b949e">ACTIVE</text>
-<text x="820" y="339" font-size="9.5" fill="#8b949e">Container "ovn-controller" is privileged</text>
-<rect x="1020" y="328" width="67.6" height="15" rx="7" fill="none" stroke="#f85149"/>
-<text x="1053.8" y="339" font-size="9" fill="#f85149" text-anchor="middle">Platform</text>
+<text x="820" y="339" font-size="9" fill="#8b949e">Container "ovn-controller" is</text>
+<rect x="985" y="328" width="67.6" height="15" rx="7" fill="none" stroke="#f85149"/>
+<text x="1018.8" y="339" font-size="9" fill="#f85149" text-anchor="middle">Platform</text>
+<rect x="1058.6" y="328" width="52" height="15" rx="7" fill="none" stroke="#8b949e" stroke-dasharray="2 2"/>
+<text x="1084.6" y="339" font-size="8" fill="#8b949e" text-anchor="middle">override</text>
 <line x1="42" y1="352" x2="1118" y2="352" stroke="#30363d"/>
 <text x="42" y="392" font-size="10.5" fill="#8b949e">Click a row for the rationale, the standards it maps to, and the reasoning behind the fix route.</text>
 <circle cx="53" cy="426" r="11" fill="#58a6ff"/><text x="53" y="430" font-size="12" font-weight="bold" fill="#fff" text-anchor="middle">1</text><text x="71" y="430" font-size="11.5" fill="#e6edf3">Tick what you want to fix. Nothing is selected until you select it.</text>
-<circle cx="53" cy="456" r="11" fill="#58a6ff"/><text x="53" y="460" font-size="12" font-weight="bold" fill="#fff" text-anchor="middle">2</text><text x="71" y="460" font-size="11.5" fill="#e6edf3">No route means no checkbox you can tick. Hover it for the reason.</text>
+<circle cx="53" cy="456" r="11" fill="#58a6ff"/><text x="53" y="460" font-size="12" font-weight="bold" fill="#fff" text-anchor="middle">2</text><text x="71" y="460" font-size="11.5" fill="#e6edf3">No route means no checkbox. Override the refusal if the object is yours.</text>
 <rect x="24" y="500" width="1112" height="152" rx="9" fill="#161b22" stroke="#30363d"/>
 <text x="42" y="524" font-size="11" font-weight="bold" fill="#58a6ff">WHAT EACH ROUTE MEANS</text>
 <rect x="42" y="536" width="92.4" height="14" rx="7" fill="none" stroke="#3fb950"/>
@@ -106,15 +108,21 @@
 <text x="160.8" y="597" font-size="10.5" fill="#8b949e">The policy has no mechanical fix. Somebody has to decide.</text>
 <rect x="42" y="604" width="67.6" height="14" rx="7" fill="none" stroke="#f85149"/>
 <text x="75.8" y="614" font-size="8.5" fill="#f85149" text-anchor="middle">Platform</text>
-<text x="123.6" y="614" font-size="10.5" fill="#8b949e">A platform component. Listed, never patched: the owning operator reverts manual edits.</text>
+<text x="123.6" y="614" font-size="10.5" fill="#8b949e">Listed, refused by default. Override per object if you own it: see below.</text>
 <rect x="42" y="621" width="92.4" height="14" rx="7" fill="none" stroke="#d4a72c"/>
 <text x="88.2" y="631" font-size="8.5" fill="#d4a72c" text-anchor="middle">Not modelled</text>
 <text x="148.4" y="631" font-size="10.5" fill="#8b949e">No policy in the catalogue matches. Reported rather than dropped.</text>
-<rect x="24" y="670" width="1112" height="100" rx="9" fill="#161b22" stroke="#30363d"/>
-<rect x="24" y="670" width="3" height="100" fill="#3fb950"/>
-<text x="44" y="694" font-size="12" font-weight="bold" fill="#e6edf3">What "fix" produces: a YAML file for the ones you ticked, and nothing else.</text>
-<text x="44" y="716" font-size="10.5" fill="#8b949e">No command is run and no cluster is touched, on any surface, in any mode. Each drafted file names the object, the namespace and the policies</text>
-<text x="44" y="733" font-size="10.5" fill="#8b949e">it covers, and states on its face that it was built from a violation rather than from a manifest and therefore needs verifying. Test it against a</text>
-<text x="44" y="750" font-size="10.5" fill="#8b949e">namespace you do not care about, then apply it yourself. Report mode, the default, writes the written account and no YAML at all.</text>
-<text x="44" y="767" font-size="10.5" fill="#8b949e">The report states how many of the imported violations were in scope, so a document covering a subset cannot be mistaken for one covering the cluster.</text>
+<rect x="24" y="670" width="1112" height="96" rx="9" fill="#161b22" stroke="#30363d"/>
+<rect x="24" y="670" width="3" height="96" fill="#d4a72c"/>
+<text x="44" y="694" font-size="12" font-weight="bold" fill="#e6edf3">Platform is sometimes a guess, and the row tells you which</text>
+<text x="44" y="716" font-size="10.5" fill="#8b949e">ACS said so: the platformComponent field. Authoritative, because ACS knows what the cluster operators own. Overriding asks you to confirm first.</text>
+<text x="44" y="733" font-size="10.5" fill="#8b949e">Guessed from namespace: ACS did not send the field, so the namespace was matched instead. That guess is wrong in both directions, and your own</text>
+<text x="44" y="750" font-size="10.5" fill="#8b949e">workload in openshift-operators would be refused forever. Override it and the normal fix routes apply, per object, never globally.</text>
+<rect x="24" y="784" width="1112" height="104" rx="9" fill="#161b22" stroke="#30363d"/>
+<rect x="24" y="784" width="3" height="104" fill="#3fb950"/>
+<text x="44" y="808" font-size="12" font-weight="bold" fill="#e6edf3">What "fix" produces: a YAML file for the ones you ticked, and nothing else.</text>
+<text x="44" y="830" font-size="10.5" fill="#8b949e">No command is run and no cluster is touched, on any surface, in any mode. Each drafted file names the object, the namespace and the policies it</text>
+<text x="44" y="847" font-size="10.5" fill="#8b949e">covers, and states on its face that it was built from a violation rather than from a manifest, so it needs verifying. An overridden one says that too.</text>
+<text x="44" y="864" font-size="10.5" fill="#8b949e">Test it against a namespace you do not care about, then apply it yourself. Report mode, the default, writes the account and no YAML at all.</text>
+<text x="44" y="881" font-size="10.5" fill="#8b949e">The report states how many of the imported violations were in scope, so a document covering a subset cannot be mistaken for one covering the cluster.</text>
 </svg>

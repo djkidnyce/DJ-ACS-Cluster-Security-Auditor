@@ -28,7 +28,18 @@ URL="${1:-${ROX_ENDPOINT:-}}"
 TOKEN="${ROX_API_TOKEN:-}"
 CURL_TLS=""
 [ "${2:-}" = "--insecure" ] && CURL_TLS="-k"
-[ -n "${ROX_CA:-}" ] && CURL_TLS="--cacert $ROX_CA"
+# A CA path that does not resolve must be an error. Letting it through means curl
+# falls back to the system trust store, and a run that the operator believes is
+# verifying against their internal CA is verifying against something else entirely.
+if [ -n "${ROX_CA:-}" ]; then
+  if [ ! -r "$ROX_CA" ]; then
+    echo "ERROR: ROX_CA is set but not readable: $ROX_CA" >&2
+    echo "  Refusing rather than falling back to the system trust store, which would" >&2
+    echo "  verify against a different set of CAs than you asked for." >&2
+    exit 2
+  fi
+  CURL_TLS="--cacert $ROX_CA"
+fi
 
 if [ -z "$URL" ]; then
   echo "usage: ROX_API_TOKEN=... ./acs_preflight.sh <url> [--insecure]" >&2
@@ -90,6 +101,47 @@ elif [ "$K8S_CODE" = "200" ] || [ "$K8S_CODE" = "401" ] || [ "$K8S_CODE" = "403"
   KIND="kubernetes"
 fi
 
+# Getting the CA is the step people stall on, so print the actual commands rather
+# than the word "cacert". The CA must come from an already trusted channel, which is
+# your authenticated oc session, not from the TLS handshake that just failed.
+ca_help() {
+  HOSTPORT=$(echo "$URL" | sed -e 's|^https\{0,1\}://||' -e 's|/.*$||')
+  case "$HOSTPORT" in *:*) : ;; *) HOSTPORT="$HOSTPORT:443" ;; esac
+  echo ""
+  echo "  TLS verification failed: nothing here trusts the CA that signed that certificate."
+  echo ""
+  echo "  Do NOT use --insecure. This request carries a token that reads your entire"
+  echo "  security posture, and turning verification off hands it to anyone on the path."
+  echo ""
+  echo "  1. See which CA is actually presenting:"
+  echo ""
+  echo "     openssl s_client -connect $HOSTPORT -showcerts </dev/null 2>/dev/null \\"
+  echo "       | openssl x509 -noout -issuer -subject -dates"
+  echo ""
+  echo "  2. Fetch that CA through your oc session. Usual case, Central behind an"
+  echo "     .apps route signed by the cluster ingress CA:"
+  echo ""
+  echo "     oc -n openshift-config-managed get configmap default-ingress-cert \\"
+  echo "       -o jsonpath='{.data.ca-bundle\\.crt}' > ~/ocp-ingress-ca.pem"
+  echo ""
+  echo "     On OpenShift older than 4.8 that configmap does not exist. Use instead:"
+  echo "     oc -n openshift-ingress-operator get secret router-ca \\"
+  echo "       -o jsonpath='{.data.tls\\.crt}' | base64 -d > ~/ocp-ingress-ca.pem"
+  echo ""
+  echo "     Passthrough route, Central presenting its own certificate:"
+  echo ""
+  echo "     oc -n stackrox get secret central-tls \\"
+  echo "       -o jsonpath='{.data.ca\\.pem}' | base64 -d > ~/central-ca.pem"
+  echo ""
+  echo "  3. Point both scripts at it and re-run:"
+  echo ""
+  echo "     export ROX_CA=~/ocp-ingress-ca.pem"
+  echo "     ./acs_preflight.sh $URL"
+  echo ""
+  echo "  If your organisation ships a CA bundle already, use that instead of extracting"
+  echo "  one. A bundle from your PKI team is a better answer than a bundle from a cluster."
+}
+
 case "$KIND" in
   acs)
     echo "  This is ACS Central. Correct server for vulnerability data."
@@ -122,9 +174,13 @@ case "$KIND" in
     echo "  Nothing answered at $URL."
     [ -s "$TMP.err" ] && echo "  curl said: $(head -c 200 "$TMP.err")"
     echo ""
-    echo "  Connection refused, DNS failure, or a TLS handshake the client rejected."
-    echo "  If it is the certificate, export ROX_CA=/path/to/ca.pem and rerun rather"
-    echo "  than reaching for --insecure, which exposes your token on the wire."
+    if grep -qiE "certificate|SSL|self.signed|unable to get local issuer" "$TMP.err" 2>/dev/null; then
+      ca_help
+    else
+      echo "  Connection refused, DNS failure, or a TLS handshake the client rejected."
+      echo "  If it is the certificate, export ROX_CA=/path/to/ca.pem and rerun rather"
+      echo "  than reaching for --insecure, which exposes your token on the wire."
+    fi
     exit 1
     ;;
   *)
@@ -133,9 +189,12 @@ case "$KIND" in
     echo "  A proxy or ingress in front of the real endpoint would look like this."
     [ -s "$TMP.err" ] && echo "  curl said: $(head -c 200 "$TMP.err")"
     echo ""
-    echo "  A connection error here is usually an untrusted internal CA."
-    echo "  Export ROX_CA=/path/to/ca.pem and rerun, rather than reaching for --insecure:"
-    echo "  that flag exposes your token to anyone on the network path."
+    if grep -qiE "certificate|SSL|self.signed|unable to get local issuer" "$TMP.err" 2>/dev/null; then
+      ca_help
+    else
+      echo "  A connection error here is usually an untrusted internal CA."
+      echo "  Export ROX_CA=/path/to/ca.pem and rerun, rather than reaching for --insecure."
+    fi
     exit 1
     ;;
 esac
@@ -206,7 +265,11 @@ Two terms, Namespace AND Cluster:
 
   "\$ROX_ENDPOINT/v1/export/vuln-mgmt/workloads?query=Namespace%3Aprod%2BCluster%3Aocp-prod&timeout=600"
 
-Then feed it in:
+Then read it. The browser path needs nothing installed at all:
+
+  open dj_acs_auditor.html and drop the file on it
+
+Or, only if Node happens to be available on this machine:
 
   node acs_cli.js --path ./manifests --vulns acs_vulns.ndjson --report --worklist
 EOF

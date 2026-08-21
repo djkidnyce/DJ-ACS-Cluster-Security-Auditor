@@ -2,6 +2,57 @@
 
 ## Unreleased
 
+### Fixed
+
+- **The pages reported a posture of 100 out of 100, Grade A, when no manifests had been
+  scanned.** The score's denominator comes from what was scanned. Load an ACS export and
+  no YAML and that denominator is empty, so the arithmetic returns a perfect score. An
+  operator reading it would see a green A on a cluster the tool had not measured, which is
+  the most misleading output this tool could produce. The CLI already refused to print a
+  score in that case; neither page did. Both now say so and explain that scoring nothing
+  means unmeasured rather than clean, and the violations stay fully usable without a score.
+- **Privilege escalation findings dead ended at "Platform" with no fix offered.** The
+  policy (ACS.003) exists, is auto fixable and has a patch template, so nothing was missing
+  from the policy side. The refusal came entirely from the platform classification, which
+  is sometimes a guess: when ACS does not send `platformComponent`, the tool falls back to
+  matching the namespace. A workload you own sitting in `openshift-operators` was refused
+  forever with no way to say so. See Added below.
+- `buildViolationPatch` re-derived fixability without the caller's options, so an
+  overridden platform record was re-judged as platform and silently produced no patch. The
+  override appeared to do nothing at all.
+- The first version of the posture guard returned early and hid the violations panel along
+  with the score, turning "refuse to show a meaningless number" into "hide what you came
+  for". Caught by the page tests.
+- `acs_preflight.sh` accepted a `ROX_CA` pointing at a file that does not exist and fell
+  back to the system trust store, so a run believed to be pinned to an internal CA was
+  verifying against a different set of CAs. Now exits 2. `acs_pull_all.sh` had the same
+  gap for `--cacert`.
+- `acs_pull_all.sh` did not read `ROX_CA`, which `acs_preflight.sh` has always read. Two
+  scripts meant to run back to back disagreed about where trust comes from.
+- The scripts ended by telling you to run the Node CLI, which is not installable
+  everywhere. They now lead with the browser, which needs no runtime at all.
+
+### Added
+
+- **The platform classification records how it was reached, and can be overridden per
+  finding.** `platformComponent` from ACS is authoritative; a namespace match is a guess.
+  Rows and `--list-violations` now say which (`ACS said so` or `guessed from namespace`),
+  because they are different claims and should not look identical. Every platform refusal
+  carries an override control. Overriding a guess applies the normal fix routes; overriding
+  something ACS itself flagged asks for confirmation first. It is per object, never global,
+  it does not bypass the mode gate, and the drafted YAML carries the warning in its header.
+- `--override-platform` on the CLI, taking the same identifiers as `--select`.
+- A TLS failure in either script now prints the commands to obtain the CA, rather than the
+  word `--cacert`: `openssl s_client` to identify the issuer, then `default-ingress-cert`,
+  `router-ca` or the `central-tls` secret depending on how Central is exposed.
+- `test/scripts.cjs`, which asserts the shell scripts agree with each other: same trust
+  source, no token over an unverified connection, insecure never the default, credentials
+  by header file rather than argv, and a TLS failure that names a real command. It found
+  the unreadable-CA gap on its first run.
+- `test/posture_platform.cjs`, covering both defects above.
+- A "what needs what" table in the README. The audit path is browser only and needs no
+  runtime; Node is required for the headless CLI and the tests, and nothing else.
+
 ### Removed
 
 - **The in browser connect panels, on both pages.** A page opened from a file has a null

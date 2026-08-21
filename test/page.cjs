@@ -201,6 +201,28 @@ async function auditor() {
   t('clicking a row opens the reasoning behind its fix route',
     !!detail && detail.textContent.length > 40);
 
+  /* ---- a platform refusal is overridable from the row ------------------ */
+  console.log('\n  Platform refusals are overridable, per finding');
+  $('vfPlatform').checked = true; $('vfPlatform').dispatchEvent(new w.Event('change'));
+  const ovrBtn = () => w.document.querySelector('#vtbl button.ovr');
+  t('a platform row offers an override control', !!ovrBtn());
+  t('and it explains itself on hover', /platform|operator/i.test(ovrBtn().title));
+  const platRowKey = ovrBtn().dataset.ovk;
+  t('the row has no usable checkbox before the override',
+    w.document.querySelectorAll('#vtbl input[type=checkbox][disabled]').length === 1);
+
+  w.confirm = () => true;
+  ovrBtn().click();
+  t('after overriding, that violation becomes selectable',
+    Array.from(w.document.querySelectorAll('#vtbl input.vsel'))
+      .some((b) => b.dataset.vkey === platRowKey));
+  t('and the control flips to a way back', !!w.document.querySelector('#vtbl button.ovr.on'));
+  w.document.querySelector('#vtbl button.ovr.on').click();
+  t('clicking it again restores the platform refusal',
+    !Array.from(w.document.querySelectorAll('#vtbl input.vsel'))
+      .some((b) => b.dataset.vkey === platRowKey));
+  $('vfPlatform').checked = false; $('vfPlatform').dispatchEvent(new w.Event('change'));
+
   /* ---- selection is held by violation, not by row position ------------- */
   console.log('\n  Choosing which violations to act on');
   const boxes = () => Array.from(w.document.querySelectorAll('#vtbl input.vsel'));
@@ -291,6 +313,36 @@ async function auditor() {
   got.length = 0;
   boxes().forEach((b) => { if (b.checked) b.click(); });
   t('clearing the selection disables the button again', $('btnFixViolations').disabled);
+  cleanup();
+}
+
+/* Loading ACS data and no manifests at all.
+ *
+ * The denominator for the posture score comes from what was scanned. Scan nothing and it
+ * is empty, and the arithmetic returns 100 out of 100, Grade A. A user reported exactly
+ * this: a green A on a cluster they had not measured. Both pages must refuse the number
+ * and say why, while leaving the violations fully usable.
+ */
+async function noManifests(page) {
+  const { w, $, cleanup } = await open(page,
+    'window.__STATE=()=>STATE;window.__load=(i)=>loadItems(i);');
+  console.log('\n' + page + ', ACS data only, no manifests');
+  w.__load([{ name: 'acs_only.json', text: JSON.stringify(ALERTS) }]);
+  t('  the page is visible on ACS data alone', !$('app').classList.contains('hidden'));
+  t('  no manifests were loaded', w.__STATE().files.length === 0);
+  const cards = $('cards').textContent;
+  t('  no score card is rendered at all',
+    $('cards').querySelectorAll('.card .num').length === 0);
+  t('  so there is no number a reader could mistake for a grade',
+    !/Posture, grade/.test(cards));
+  t('  it says there is no posture score', /No posture score/.test(cards));
+  t('  and why, in terms of what that number would mean',
+    /not the same as|unmeasured/.test(cards));
+  t('  and how to get a real one', /oc get deployment|Drop in the YAML/.test(cards));
+  t('  the violations panel still works without a score',
+    !$('violPanel').classList.contains('hidden'));
+  t('  and still lists the violations',
+    $('vtbl').querySelectorAll('tbody tr.frow').length > 0);
   cleanup();
 }
 
@@ -456,7 +508,12 @@ async function remediation() {
 }
 
 (async () => {
-  try { await auditor(); await remediation(); }
+  try {
+    await auditor();
+    await remediation();
+    await noManifests('dj_acs_auditor.html');
+    await noManifests('dj_acs_remediation.html');
+  }
   catch (e) { console.log('  FAIL  ' + e.message); F++; }
   console.log('\n' + P + ' passed, ' + F + ' failed');
   process.exit(F ? 1 : 0);
