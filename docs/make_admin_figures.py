@@ -53,10 +53,10 @@ p.append(box(310,84,540,62,"acs_policies.js   THE ENGINE",
 for x in (170,470,770,1010):
     p.append(arrow(580,148,x if x!=580 else 580,196,"","#4b5563"))
 
-surfaces=[(24,"dj_acs_auditor.html",["Read only. Scan, score,","cross check, violations","panel, export the report"]),
-          (318,"dj_acs_remediation.html",["Preview, confirm, step","through, undo. Produces","YAML you download"]),
+surfaces=[(24,"dj_acs_auditor.html  Audit tab",["Read only. Scan, score,","cross check, violations,","CVEs, export the report"]),
+          (318,"dj_acs_auditor.html  Remediate tab",["Same file. Preview, confirm,","step through, undo. Produces","YAML you download"]),
           (612,"acs_cli.js",["Headless. Same output,","for a pipeline. acs.sh,","acs.ps1, acs.cmd wrap it"]),
-          (906,"test/*.cjs",["694 assertions against","the same engine every","surface loads"])]
+          (906,"test/*.cjs",["786 assertions against","the same engine every","surface loads"])]
 for x,t,l in surfaces:
     p.append(box(x,196,230,110,t,l,PUR if t.startswith("test") else ACC))
 

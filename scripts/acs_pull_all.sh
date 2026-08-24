@@ -30,11 +30,24 @@
 # USAGE
 #   export ROX_ENDPOINT=https://central-stackrox.apps.example.com
 #   export ROX_API_TOKEN=...        # never pass this as an argument
-#   ./acs_pull_all.sh [-o OUTDIR] [-n NAMESPACE] [-c CLUSTER] [-j JOBS] [--insecure]
+#   ./acs_pull_all.sh [-o PARENT_DIR] [-n NAMESPACE] [-c CLUSTER] [-j JOBS]
+#                     [--no-timestamp] [--cacert FILE] [--insecure]
+#
+#   -o names the parent. Each run lands in PARENT/acs_findings_<timestamp>/ so
+#   runs never overwrite each other. --no-timestamp writes straight into -o.
 #
 set -u
 
-OUTDIR="acs_findings_$(date +%Y%m%d_%H%M%S)"
+# Where the run goes.
+#
+# -o names the PARENT. Each run gets its own timestamped directory inside it, so a second
+# run never overwrites the first and you keep a history you can diff. An export you cannot
+# compare against last week's is worth much less than one you can.
+#
+# --no-timestamp writes straight into -o instead, for a pipeline that wants a fixed path.
+OUTPARENT="."
+RUNDIR="acs_findings_$(date +%Y%m%d_%H%M%S)"
+NO_TS=0
 NAMESPACE=""
 CLUSTER=""
 JOBS=4
@@ -45,7 +58,8 @@ CACERT=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    -o) OUTDIR="$2"; shift 2 ;;
+    -o) OUTPARENT="$2"; shift 2 ;;
+    --no-timestamp) NO_TS=1; shift ;;
     -n) NAMESPACE="$2"; shift 2 ;;
     -c) CLUSTER="$2"; shift 2 ;;
     -j) JOBS="$2"; shift 2 ;;
@@ -85,6 +99,7 @@ if [ "$CURL_TLS" = "-k" ]; then
   echo "         intercept this connection. Use --cacert <file> instead where you can." >&2
 fi
 
+if [ "$NO_TS" = "1" ]; then OUTDIR="$OUTPARENT"; else OUTDIR="$OUTPARENT/$RUNDIR"; fi
 mkdir -p "$OUTDIR"
 
 # Token goes in a header file, mode 600, not on the command line. Arguments are
@@ -390,5 +405,18 @@ say ""
 say "Use 02_alerts_full.json, not 01. The list form has no violation text in it,"
 say "which is a limit of the ACS API rather than of this script."
 say ""
-say "The pages need no runtime, no package manager and no server. Open the file."
-say "acs_cli.js is the same engine headless, and that one does need Node."
+say "The page needs no runtime, no package manager and no server. Open the file."
+say ""
+if command -v node >/dev/null 2>&1; then
+  say "Or headless, same engine:"
+  say "  node acs_cli.js --alerts $OUTDIR/02_alerts_full.json --vulns $OUTDIR/03_vuln_workloads.ndjson --report"
+else
+  say "Node is not on this machine, so acs_cli.js is unavailable here. For a summary you"
+  say "can read or hand over without leaving the shell, jq is enough:"
+  say ""
+  say "  ./scripts/acs_summary.sh $OUTDIR -o findings.md"
+  say ""
+  say "That counts what ACS reported. It is not a posture score and does not draft fixes,"
+  say "because both need the policy engine. For those, open the page on any machine and"
+  say "drop this directory on it."
+fi

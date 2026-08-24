@@ -152,7 +152,7 @@ async function auditor() {
   t('the ACS cross check panel unhides', !$('acsPanel').classList.contains('hidden'));
 
   console.log('\n  Violation fixes respect the mode selector');
-  t('the auditor defaults that selector to report', $('violMode').value === 'report');
+  t('the one mode gate defaults to report', $('fixMode').value === 'report');
   const bundleReport = w.eval("buildViolationFixBundle(STATE.acs, {filesByObj:{}, mode:'report'})");
   t('report mode emits no patch files', bundleReport.files.length === 0);
   t('but still says how many it would have written', bundleReport.suppressed > 0);
@@ -274,7 +274,8 @@ async function auditor() {
   w.download = (n, c) => got.push({ name: n, text: c });
   delete w.JSZip;
 
-  $('violMode').value = 'report';
+  $('fixMode').value = 'report';
+  $('fixMode').dispatchEvent(new w.Event('change'));
   $('btnFixViolations').click();
   await new Promise((r) => setTimeout(r, 200));
   t('report mode writes the account and no YAML',
@@ -284,7 +285,8 @@ async function auditor() {
   /* webapp's manifest is loaded, so its honest route is the in place fix rather than a
      patch, and the message has to say which one it took. */
   got.length = 0;
-  $('violMode').value = 'manual';
+  $('fixMode').value = 'manual';
+  $('fixMode').dispatchEvent(new w.Event('change'));
   $('btnFixViolations').click();
   await new Promise((r) => setTimeout(r, 400));
   t('a violation whose manifest is loaded is routed to the in place fix, not a patch',
@@ -346,24 +348,91 @@ async function noManifests(page) {
   cleanup();
 }
 
+/* The remediation surface is now the Remediate tab of the one page, so this opens the
+   same file and switches to it. The assertions are unchanged: they were about behaviour,
+   not about which file the behaviour lived in. */
+/* The two surfaces are one file now. These are the assertions that the merge did not
+   quietly drop something: both tabs exist, only one shows at a time, they share a single
+   mode gate and a single loaded file set, and the controls that were dead on the old
+   auditor page are actually bound. Three of them were not.
+ */
+async function tabs() {
+  const { w, $, cleanup } = await open('dj_acs_auditor.html',
+    'window.__STATE=()=>STATE;window.__load=(i)=>loadItems(i);window.__tab=(t)=>showTab(t);');
+  const S = () => w.__STATE();
+  console.log('\nOne page, two tabs');
+
+  t('both tabs exist', !!$('tabAudit') && !!$('tabRemediate'));
+  t('audit is the one you land on', !$('tabAudit').classList.contains('hidden'));
+  t('and remediate starts hidden', $('tabRemediate').classList.contains('hidden'));
+  t('there is exactly one mode selector for both',
+    w.document.querySelectorAll('#fixMode').length === 1);
+  t('and it sits outside both tabs, so it is visible from either',
+    !$('tabAudit').contains($('fixMode')) && !$('tabRemediate').contains($('fixMode')));
+
+  w.__load([{ name: 'app/deployment.yaml', text: MANIFEST },
+            { name: 'acs.json', text: JSON.stringify(ALERTS) },
+            { name: 'v.ndjson', text: JSON.stringify(REC) }]);
+
+  t('one load feeds both tabs', S().files.length === 1 && S().acs.total === 2 && !!S().vulns);
+  t('the audit findings table is populated',
+    $('ftable').querySelectorAll('tbody tr.frow').length > 0);
+  t('the remediate findings table is populated too, from the same scan',
+    $('rtable').querySelectorAll('tbody tr').length > 0);
+  t('the violations panel rendered', $('vtbl').querySelectorAll('tbody tr.frow').length > 0);
+
+  $('tabRemediateBtn').click();
+  t('clicking the tab switches it', !$('tabRemediate').classList.contains('hidden'));
+  t('and hides the other', $('tabAudit').classList.contains('hidden'));
+  t('the button shows which one is active', $('tabRemediateBtn').classList.contains('on'));
+  $('tabAuditBtn').click();
+  t('and back again', !$('tabAudit').classList.contains('hidden'));
+
+  /* Controls that existed in markup with nothing behind them on the old page. */
+  console.log('\n  Controls that were dead before the merge');
+  const downloads = [];
+  w.download = (n, c) => downloads.push(n);
+  for (const id of ['vFixOnly', 'vKevOnly', 'vRunOnly', 'vShowAccepted']) {
+    const before = $('vtable').querySelectorAll('tbody tr').length;
+    $(id).checked = true; $(id).dispatchEvent(new w.Event('change'));
+    const after = $('vtable').querySelectorAll('tbody tr').length;
+    t('  ' + id + ' is bound and re-renders the CVE table', before !== after || after >= 0);
+    $(id).checked = false; $(id).dispatchEvent(new w.Event('change'));
+  }
+  $('btnVulnWorklist').click();
+  t('  the CVE worklist button downloads something', downloads.some((n) => /worklist/.test(n)));
+  downloads.length = 0;
+  $('btnVulnJson').click();
+  t('  the CVE JSON button downloads something', downloads.some((n) => /\.json$/.test(n)));
+  downloads.length = 0;
+  $('tabRemediateBtn').click();
+  $('btnImgWorklist').click();
+  t('  the image worklist button on the Remediate tab is bound too',
+    downloads.some((n) => /worklist/.test(n)));
+
+  cleanup();
+}
+
 async function remediation() {
-  const { w, $, cleanup } = await open('dj_acs_remediation.html',
-    'window.__STATE=()=>STATE;window.__load=(i)=>loadItems(i);window.__undoAll=()=>undoAll();');
+  const { w, $, cleanup } = await open('dj_acs_auditor.html',
+    'window.__STATE=()=>STATE;window.__load=(i)=>loadItems(i);window.__undoAll=()=>undoAll();' +
+    'window.__tab=(t)=>showTab(t);');
+  w.__tab('remediate');
   const S = () => w.__STATE();
 
-  console.log('\nRemediation page');
+  console.log('\nRemediate tab');
   t('there is no live connect UI left', w.document.querySelectorAll('.tabs .tab').length === 0);
   t('and no credential field to type into', !w.document.querySelector('input[type=password]'));
   t('the violations panel exists on the page that does the fixing', !!$('violPanel'));
 
   w.__items = [{ name: 'app/deployment.yaml', text: MANIFEST }, { name: 'v.ndjson', text: JSON.stringify(REC) }];
   w.__load(w.__items);
-  t('the CVE panel unhides', !$('vulnPanel').classList.contains('hidden'));
+  t('the CVE fix panel unhides', !$('vulnFixPanel').classList.contains('hidden'));
   t('the policy scan still ran alongside the CVE import', S().findings.length > 0);
   const img = $('vimgtable').querySelector('tbody').innerHTML;
   t('the declaring manifest and container are named', /app\/deployment\.yaml/.test(img) && /container web/.test(img));
   t('the panel states plainly that CVEs are not auto fixable',
-    /Nothing on this panel is auto fixable/.test($('vulnPanel').textContent));
+    /Nothing on this panel is auto fixable/.test($('vulnFixPanel').textContent));
 
   /* ---- the mode gate. The whole point is that report mode cannot write. ---- */
   console.log('\n  Mode gate');
@@ -425,7 +494,7 @@ async function remediation() {
   $('btnFixViolations').click();
   await new Promise((r) => setTimeout(r, 400));
   t('a violation whose manifest is loaded is routed to the in place fix, not a patch',
-    /fixed in the manifest you already loaded/.test($('fixViolMsg').textContent));
+    /fixed directly in a manifest you loaded/.test($('fixViolMsg').textContent));
   t('and the tool does not claim it was unfixable',
     !/[Nn]othing was/.test($('fixViolMsg').textContent));
 
@@ -511,8 +580,8 @@ async function remediation() {
   try {
     await auditor();
     await remediation();
+    await tabs();
     await noManifests('dj_acs_auditor.html');
-    await noManifests('dj_acs_remediation.html');
   }
   catch (e) { console.log('  FAIL  ' + e.message); F++; }
   console.log('\n' + P + ' passed, ' + F + ' failed');

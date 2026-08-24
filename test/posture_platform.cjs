@@ -29,7 +29,7 @@ t('the engine still computes 100 over nothing, which is why callers must guard',
   empty.score === 100 && empty.grade === 'A');
 
 const ROOT = path.join(__dirname, '..');
-for (const page of ['dj_acs_auditor.html', 'dj_acs_remediation.html']) {
+for (const page of ['dj_acs_auditor.html']) {
   const src = fs.readFileSync(path.join(ROOT, page), 'utf8');
   /* The guard must come BEFORE the score is computed and rendered, not after. */
   const guard = src.indexOf("if (!STATE.files.length)");

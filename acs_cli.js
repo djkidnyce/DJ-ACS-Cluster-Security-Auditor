@@ -2,13 +2,13 @@
 /*
  * DJ's ACS Auditor, command line.
  *
- * Produces exactly what the browser pages produce, from a terminal or a pipeline:
+ * Produces exactly what the browser page produces, from a terminal or a pipeline:
  * the audit report, the findings JSON, the patched YAML, strategic merge patches, the
  * change log and the CVE worklist.
  *
- * It loads acs_policies.js, the same engine the pages load. It does not reimplement a
+ * It loads acs_policies.js, the same engine the page loads. It does not reimplement a
  * single check. If the CLI and the GUI ever disagree about a manifest, that is a bug in
- * one file, not a discrepancy between two.
+ * one file, not a discrepancy between two surfaces.
  *
  * WHAT IT WILL NOT DO
  *   It never contacts a cluster. It never runs a command to remediate anything. Fixes
@@ -17,6 +17,12 @@
  *
  * REQUIREMENTS
  *   Node 18 or newer. Nothing else. js-yaml is vendored.
+ *
+ *   If Node cannot be installed on your machine, nothing here is lost: the page computes
+ *   the same posture, lists the same violations, routes the same fixes and drafts the same
+ *   YAML, and it needs only a browser. scripts/acs_summary.sh gives you a shell readable
+ *   summary of an ACS pull using jq alone. This file exists for pipelines, not because the
+ *   audit requires a runtime.
  */
 'use strict';
 

@@ -1,6 +1,83 @@
 # Changelog
 
-## Unreleased
+All notable changes to this project are documented here.
+
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
+version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The
+public interface for versioning purposes is the CLI flags, the exit codes, the shape of
+the JSON and SARIF exports, and the policy ids. A change to any of those is a minor bump
+at least; removing or renaming one is a major.
+
+Every release is tagged. `git tag -l` is the list, and the tag matches the version this
+tool stamps into every report and patch header it writes.
+
+## 1.2.0 - 2026-08-24
+
+### Added
+
+- **`scripts/acs_summary.sh`, so a machine without Node is not a dead end.** Node cannot be
+  installed everywhere, and a hardened host in a controlled enclave is exactly the machine
+  where curl and jq are all you get. This reads a pull directory and reports what ACS said:
+  violations by severity, policy and namespace, the split between your workloads and
+  platform components, how many arrived with no `platformComponent` field at all, CVEs by
+  Red Hat severity, how many have a published fix, and the images to rebuild ranked by
+  critical count. jq only.
+
+  It does not compute a posture score and does not draft fixes, and it says so in its own
+  output. Both need the policy engine. A score is measured over scanned manifests and this
+  script has neither manifests nor a scanner, so any number it printed would be invented,
+  which is the same defect as scoring an empty scan.
+
+- The wrapper scripts detect a missing Node and print the routes that do not need it: the
+  page, the summary script, and running the CLI in a container. Previously they said Node
+  was required and stopped.
+
+### Changed
+
+- **The auditor and remediation pages are now one file with two tabs.** `dj_acs_auditor.html`
+  is the whole browser surface: an **Audit** tab that reads, scores, cross checks and
+  exports, and a **Remediate** tab that edits the YAML you loaded with a diff, a
+  confirmation and undo. `dj_acs_remediation.html` is removed.
+
+  This was not cosmetic. Eighteen function names existed in both files, ten of them
+  byte identical, and they were kept in step by hand. That is how a fix reached one
+  surface and not the other, which happened more than once during development. There is
+  now one file list, one visibility gate, one violations table and one mode gate. The mode
+  selector sits above the tabs, because a control that decides whether the tool may write
+  has to be visible from wherever you are standing when you ask it to.
+
+- `-o` on `acs_pull_all.sh` now names the **parent**. Each run lands in
+  `PARENT/acs_findings_<timestamp>/`, so a second run never overwrites the first and you
+  keep a history you can diff. `--no-timestamp` writes straight into `-o` for a pipeline
+  that wants a fixed path.
+
+### Fixed
+
+- **The HTML report contained no ACS violations at all.** A run with a violation export and
+  no manifests produced about five kilobytes of headings and method notes while the page it
+  came from was listing dozens of findings. The report now carries every violation, split
+  into your workloads and platform components, each with its fix route and the reason the
+  platform split was drawn where it was. The report is the artifact that outlives the
+  session, so anything visible in the page has to reach it.
+- **The report also scored an empty scan as 100 out of 100, Grade A**, the same defect
+  fixed in the pages in 1.1.0 but left in the one output people file against a ticket.
+- **The file picker would not offer `.ndjson` files.** `accept` listed only
+  `.yaml,.yml,.json`, so three of the seven files `acs_pull_all.sh` writes were invisible
+  in the browse dialog. Drag and drop always worked, which is why it went unnoticed.
+- **Three controls existed in the markup with nothing bound to them.** The four CVE filter
+  checkboxes were read inside the render function but never wired to a change event, so
+  ticking one did nothing until an unrelated render happened to run. Both CVE download
+  buttons were referenced nowhere in the script at all. Found by merging the two files and
+  now covered by the page tests, which drive the controls rather than calling the render
+  function directly.
+- `buildHtmlReport` read `cats` before it was declared, a temporal dead zone that only
+  fired when manifests were present. The report worked on ACS only data and threw on a real
+  scan. The suite caught it, but as a crashed process rather than a failed assertion.
+- The test runner reported `TOTAL: N passed, 0 failed` when a suite crashed before printing
+  its summary, because a crashed suite contributes no numbers. It now names the crash in the
+  total line.
+
+## 1.1.0 - 2026-08-21
 
 ### Fixed
 
@@ -136,9 +213,31 @@
   toolset. A note describing the state of a local working folder was removed; it did not
   belong in a published repository.
 
-- 163 more tests. `test/exports.cjs` loads all six pull script outputs and asserts merging
+- 200 more tests. `test/exports.cjs` loads all six pull script outputs and asserts merging
   and deduplication. `test/cli_violations.cjs` runs the CLI as a real process and inspects
   what lands on disk, chiefly that report mode leaves nothing applyable behind, and that a
   selection is honoured on both surfaces.
 - Figure 2 in the user guide replaced with the pull workflow. Figure 8 added for the
   violations panel and the fix routes. Both Word guides updated throughout.
+
+## 1.0.0 - 2026-08-19
+
+Initial release.
+
+Audit Kubernetes and OpenShift manifests against Red Hat Advanced Cluster Security policy
+logic, score and rank every finding, and fix it in YAML with a preview and an explicit
+confirmation.
+
+- Explicit report, manual and auto modes. Report is the default everywhere and the mode is
+  never inferred, so nothing applyable is produced by accident.
+- Twenty ACS policy replicas with CIS, NIST 800-53, PSS and DISA STIG citations.
+- Weighted posture scoring whose denominator comes from what was scanned rather than what
+  was found, so the projection survives a rescan.
+- Policy violations and image CVEs read from the two separate ACS endpoints, including
+  platform components and every violation state.
+- Violations render as rows with a fix route each, and checkboxes decide which are acted on.
+- Fixes are drafted as YAML you review and apply yourself. No command is ever run to
+  remediate, on any surface, in any mode.
+- The pages contact nothing. The scripts do, GET only, from a shell where the token stays
+  out of `ps` and out of shell history.
+- No package manager and no network at rest. The browser path needs no runtime at all.

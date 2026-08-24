@@ -5,6 +5,12 @@ const { P, Rich, Code, Note, Fig, Tbl, Bul, BulRich, NumList, NUMBERING, pageSet
         ACC, DARK, MUT, LINE } = require('./common.js');
 const F = (n) => __dirname + '/figures/' + n;
 
+/* Read the version from the engine rather than typing it here. These two files shipped
+   claiming v1.0 while the tool stamped v1.1.0 into every report it wrote, which is the
+   drift test/version.cjs exists to catch. */
+globalThis.jsyaml = require('../vendor/js-yaml.min.js');
+const VERSION = require('../acs_policies.js').ACS_VERSION;
+
 const title = [
   new Paragraph({ spacing: { before: 2600, after: 0 },
     children: [new TextRun({ text: 'Administration Guide', bold: true, size: 60, color: DARK })] }),
@@ -13,7 +19,7 @@ const title = [
   new Paragraph({ spacing: { after: 400 },
     border: { bottom: { style: BorderStyle.SINGLE, size: 8, color: ACC } }, children: [new TextRun({ text: '' })] }),
   P('For maintainers, platform engineers, and anyone who owns these tools', { bold: true, size: 24 }),
-  P("Covers DJ's ACS Auditor v1.0", { size: 22, color: MUT }),
+  P("Covers DJ's ACS Auditor v" + VERSION, { size: 22, color: MUT }),
   P('Document date: 11 August 2026', { size: 22, color: MUT }),
   P('Author: DJ', { size: 22, color: MUT }),
   new Paragraph({ spacing: { before: 900 }, children: [new TextRun({ text: '' })] }),
@@ -48,15 +54,15 @@ const push = (a) => a.forEach((x) => body.push(x));
 
 // 1
 H1('1. What you are maintaining');
-T('One tool, in one repository, with three surfaces over a single engine. The auditor page reads and scores. The remediation page proposes and applies text edits to YAML. The command line does either, headless, for a pipeline. All three load acs_policies.js and none of them reimplements a check.');
-push([Tbl(['', "DJ's ACS Auditor v1.0"], [
+T('One tool, in one repository, with two surfaces over a single engine. The browser page reads, scores and applies text edits to YAML across two tabs. The command line does the same work headless, for a pipeline. Both load acs_policies.js and neither reimplements a check.');
+push([Tbl(['', "DJ's ACS Auditor v" + VERSION], [
   ['Judges against', 'Red Hat ACS default Deploy stage policies, with CIS, NIST 800-53 Rev 5, Pod Security Standards and DISA STIG carried as citations'],
   ['Policy ids', 'ACS.001 through ACS.020, a fixed set mirroring the ACS defaults'],
   ['Engine file', 'acs_policies.js, and only that file'],
-  ['Surfaces', 'Auditor page, remediation page, pull scripts, command line'],
-  ['Writes to disk', 'The pages hand you files to download. The CLI writes only where you point it, and only in manual or auto mode'],
-  ['Talks to a cluster', 'The pages never do. The scripts and the CLI issue GET only'],
-  ['Tests', '694 across the engine, the pages and the command line'],
+  ['Surfaces', 'One page with an Audit and a Remediate tab, pull scripts, command line'],
+  ['Writes to disk', 'The page hands you files to download. The CLI writes only where you point it, and only in manual or auto mode'],
+  ['Talks to a cluster', 'The page never does. The scripts and the CLI issue GET only'],
+  ['Tests', '823 across the engine, the page, the scripts and the command line'],
 ], [1900, 7400])]);
 body.push(P('', { spacing: { after: 140 } }));
 T('It is deliberately conservative, because it exists to be pointed at production manifests by people who may not have written them. That is the reason report is the default mode, the reason platform components are never patched, and the reason nothing it produces is ever applied on your behalf.');
@@ -69,13 +75,12 @@ push(Note('info', 'On DJ\'s KYSA, and the eventual merge', [
 H1('2. Repository layout');
 push([Tbl(['Path', 'Role'], [
   ['acs_policies.js', 'Engine. Twenty policies, alert import and matching, the vulnerability export parser and CVE model, violation fix routing and patch drafting, diff, and merge patch builder. Policy logic lives here and nowhere else, so the page, the CLI and the tests cannot disagree.'],
-  ['dj_acs_auditor.html', 'Read only audit surface.'],
-  ['dj_acs_remediation.html', 'Interactive fix surface with preview, confirm, step through, and undo.'],
+  ['dj_acs_auditor.html', 'The whole browser surface. An Audit tab that reads, scores and reports, and a Remediate tab that edits your YAML with preview, confirm, step through and undo. One mode gate governs both.'],
   ['vendor/', 'Identical js-yaml and JSZip builds.'],
   ['acs_cli.js', 'Headless runner. Same engine, same output, no cluster access.'],
   ['acs.sh, acs.ps1, acs.cmd', 'Wrappers so the switches are identical across Bash, PowerShell and Command Prompt.'],
   ['scripts/', 'The ACS pull scripts. Preflight, full pull, an oc port forward variant, and PowerShell and SSH equivalents.'],
-  ['test/*.cjs', 'smoke, fixes, import, flow, live, vuln, hardening, cli, kubejson, platform, exports, cli_violations. page.cjs needs jsdom and skips cleanly without it.'],
+  ['test/*.cjs', 'smoke, fixes, import, flow, live, vuln, hardening, cli, kubejson, platform, exports, cli_violations, scripts, posture_platform, version. page.cjs needs jsdom and skips cleanly without it.'],
   ['test/run_tests.js', 'Runner. Aggregates every suite and prints one total.'],
   ['docs/', 'Figure generators and the two Word documents.'],
 ], [3600, 5700])]);
@@ -92,6 +97,12 @@ H1('3. The one architectural rule');
 T('Policy logic lives in exactly one file. Every graphical surface, every command line entry point, and every test loads acs_policies.js. Nothing reimplements a check.');
 push(Fig(F('fig5_architecture.png'), 'Figure 5. One engine, with every surface reading from it.', 640));
 T('This is not a style preference. The failure mode it prevents is specific and expensive: the page reports a finding, the CLI in the pipeline does not, and nobody notices for months because the two were never compared against each other. When the engine is the only place a check exists, that disagreement cannot happen.');
+push(Note('warn', 'The merge of the two pages in 1.2.0, and what it was actually about', [
+  'Until 1.2.0 there were two HTML files. Eighteen function names existed in both, ten of them byte identical, kept in step by hand.',
+  'That is not a tidiness problem, it is a correctness one. A fix would land on one surface and not the other, and nothing in the suite could see it because each page was tested against its own copy. It happened more than once.',
+  'Merging them surfaced three controls that had markup and no listener: four CVE filter checkboxes read inside a render function but never bound to a change event, and two download buttons referenced nowhere in the script at all. Engine tests cannot catch that, because they call the render function directly, which is exactly the step a missing listener skips.',
+  'If you add a third surface, add it to test/page.cjs in the same commit, and drive the controls rather than calling the renderers.']));
+
 H2('The corollary for you');
 push([Bul('Never copy a check into a second file to make something work. If a surface cannot reach the engine, fix the loading, not the logic.'),
       Bul('The ACS engine is a dual mode module: it attaches to the browser global and exports through CommonJS. That is what lets the same file serve two HTML pages and five test suites. Preserve both paths when you edit it.'),
@@ -118,8 +129,8 @@ push(Note('crit', 'The invariants, and why each one exists', [
   'An unknown mode throws rather than defaulting. A typo that silently lands somebody in a writing mode is precisely the failure this control exists to prevent, so there is no permissive fall back anywhere in the resolution path.',
   'The mode is never inferred from another option. Asking for patches does not imply manual. If you find yourself writing code that upgrades the mode based on what was requested, stop: that is the control being dismantled from the inside.',
   'Every artifact carries modeBanner(). A reviewer holding a patch should never have to ask which path produced it.']));
-H2('Enforcement in the pages');
-T('Gate the handler, not only the button. A disabled attribute is a hint about state; it is trivially bypassed from a console and it is not a control. On the remediation page every write path calls requireMode() as its first statement, and test/page.cjs proves it by invoking startStepping() and reviewApplyAll() directly in report mode and asserting the history is unchanged.');
+H2('Enforcement on the page');
+T('Gate the handler, not only the button. A disabled attribute is a hint about state; it is trivially bypassed from a console and it is not a control. On the Remediate tab every write path calls requireMode() as its first statement, and test/page.cjs proves it by invoking startStepping() and reviewApplyAll() directly in report mode and asserting the history is unchanged.');
 push(Note('warn', 'A defect worth knowing about, because it will recur', [
   'render() and applyMode() both set the disabled property on the step and apply buttons, and render() ran last, so it silently undid the mode restriction. The handlers still refused, so nothing could actually be written, but the buttons looked live in report mode.',
   'A control that is enforced but not visible teaches people the wrong model of the tool, and the wrong model is what they act on under pressure. There is now one expression per button that combines both conditions. If you add a button, make one place own its enabled state.']));
@@ -344,7 +355,7 @@ push(NumList([
   'Confirm the version constant in the HTML matches package.json and the CHANGELOG entry.',
   'Confirm the vendored library hashes still match vendor/README.md.',
   'Grep the shipped files for exec, eval, and the Function constructor. There should be no matches.',
-  'Confirm report mode still produces nothing applyable, on both pages and the command line. This is the control most likely to be weakened by accident while adding a feature.',
+  'Confirm report mode still produces nothing applyable, on both tabs and the command line. This is the control most likely to be weakened by accident while adding a feature.',
   'Install jsdom and run the whole page tests. A page change that passes the engine tests and breaks the UI is invisible otherwise.',
   'Run the sample manifest set, apply all fixes, rescan, and confirm the projected posture equals the actual result.',
   'Update CHANGELOG.md.',
@@ -385,7 +396,7 @@ push([Tbl(['Property', 'How it is enforced'], [
   ['No CVE is ever auto remediated', 'ACS reports fixed package versions, not fixed image tags. applyImagePin only ever writes a value the operator typed, and it goes through the same preview, confirm and undo path as every other fix.'],
   ['Hydration is rate limited by construction', 'Alert detail is fetched sequentially and capped at 200. Central is a security control; a report is not worth destabilising it.'],
   ['No telemetry, no phone home', 'The browser pages make no outbound request at all. There is no fetch call in either of them.'],
-  ['No network at rest', 'Dependencies are vendored. The pages load nothing from a CDN.'],
+  ['No network at rest', 'Dependencies are vendored. The page loads nothing from a CDN.'],
   ['Live objects are sanitised', 'Server side fields, ownerReferences, status, and last applied configuration are stripped before an object is scanned or emitted.'],
 ], [3000, 6300])]);
 body.push(P('', { spacing: { after: 140 } }));
@@ -396,7 +407,23 @@ push([Bul('Untrusted input is the YAML and the ACS export a user loads. Both are
       Bul('The most realistic failure is not an attack. It is a wrong finding trusted without review, or a stale policy set that quietly stops catching something. That is what sections 6 and 8 exist to prevent.')]);
 
 // 12
-H1('15. Maintainer troubleshooting');
+H1('15. Running where Node cannot be installed');
+T('A hardened host in a controlled enclave often has curl and jq and no route to install anything else. That machine is a first class target for this tool, not an edge case, so the split is deliberate.');
+push([Tbl(['Surface', 'Needs', 'Covers'], [
+  ['dj_acs_auditor.html', 'A browser', 'Everything: posture, findings, violations, fix routes, drafted YAML, the HTML report and the JSON export'],
+  ['scripts/*.sh', 'bash, curl, jq', 'Getting data out of ACS'],
+  ['scripts/acs_summary.sh', 'jq', 'A markdown summary of what ACS reported. Counts only'],
+  ['acs_cli.js', 'Node 18+, or a container', 'The same engine headless, for CI'],
+], [2400, 2000, 4900])]);
+body.push(P('', { spacing: { after: 140 } }));
+H2('What acs_summary.sh deliberately does not do');
+T('It does not compute a posture score and it does not draft fixes. Both require the policy engine, which is acs_policies.js, which needs a JavaScript runtime.');
+T('The temptation when writing that script is to approximate: count violations by severity, weight them, print a number. Do not. A posture score in this tool is passed weight over total applicable weight, and the denominator is derived from what was scanned. A summary of an ACS export has no scanned manifests, so there is no denominator, and any number produced would be a different measurement wearing the same name. That is exactly the defect fixed in 1.1.0, where a score over an empty scan read as 100 out of 100, Grade A.');
+push(Note('crit', 'If you extend the summary script', [
+  'Keep it to counts of what ACS reported. Nothing inferred, nothing weighted, nothing called a score.',
+  'test/scripts.cjs asserts that its output contains no grade and no score, and that it states what it cannot tell you. Those assertions are the guard rail; do not relax them to make a nicer looking report.']));
+
+H1('16. Maintainer troubleshooting');
 push([Tbl(['Symptom', 'Diagnosis'], [
   ['mapfile: command not found', 'bash 3.2 on macOS. See section 10.'],
   ['A test passes against known broken code', 'The fixture cancels the error out. Rebuild it so the defect is observable, then confirm the test fails against the old code.'],
@@ -415,7 +442,7 @@ push([Tbl(['Symptom', 'Diagnosis'], [
 ], [3200, 6100])]);
 
 // 13
-H1('16. Ownership and escalation');
+H1('17. Ownership and escalation');
 T('Both toolsets are maintained by DJ. Issues, policy suggestions, and pull requests: github.com/djkidnyce');
 H2('What to include in a report');
 push([Bul('For a scoring or matching problem: the manifest set, and the ACS export if you can share it. A match failure cannot be reproduced without both.'),

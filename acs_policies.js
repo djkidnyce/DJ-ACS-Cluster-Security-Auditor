@@ -1,6 +1,6 @@
 /* DJ's ACS Auditor, policy engine.
  *
- * Shared by dj_acs_auditor.html and dj_acs_remediation.html, and importable under Node for
+ * Shared by dj_acs_auditor.html, which is the whole browser surface, and importable under Node for
  * the test suite. One copy of the rules, so the audit page and the remediation page can
  * never disagree about what is wrong with a manifest.
  *
@@ -22,7 +22,13 @@
  */
 'use strict';
 
-const ACS_TOOL = "DJ's ACS Auditor v1.0";
+/* One version string, stamped into every report, JSON export, SARIF run, patch header
+   and CLI banner. It is the only place a version is written down in code, and
+   test/version.cjs asserts it agrees with the newest CHANGELOG heading and with the git
+   tag when one is checked out. A tool whose banner disagrees with its tag cannot be used
+   as evidence, because you cannot tell which build produced a given report. */
+const ACS_VERSION = '1.2.0';
+const ACS_TOOL = "DJ's ACS Auditor v" + ACS_VERSION;
 
 /* ACS severity scale and the weight each carries in the posture score. A Critical costs
    nine times a Low, because averaging them evenly is how a scanner reports a comfortable
@@ -2181,6 +2187,108 @@ function buildHtmlReport(st) {
       '<br><b>Standards:</b> ' + citationsOf(f.policy).map(E).join(' | ') + '</td></tr>';
   }).join('');
 
+  /* Posture, but only when something was actually scanned.
+   *
+   * The denominator comes from what was scanned. Scan nothing and it is empty, so the
+   * score is 100 out of 100, Grade A. A report is the artifact that outlives the session
+   * and gets attached to a ticket, so a green A over an empty scan is the version of this
+   * defect that does the most damage. Say what happened instead. */
+  /* Declared before postureHtml, which reads it. Building the posture section earlier in
+     the function than this left a temporal dead zone that only fired when manifests were
+     actually present, so the report ran fine on ACS only data and threw on a real scan. */
+  const cats = [];
+  const seen = {};
+  Object.keys(before.catScores).concat(Object.keys(after.catScores)).forEach(function (c) {
+    if (!seen[c]) { seen[c] = 1; cats.push(c); }
+  });
+  cats.sort();
+
+  let postureHtml;
+  if (!files.length) {
+    postureHtml =
+      '<h2>Summary</h2>' +
+      '<div class="note"><b>No posture score: no manifests were scanned.</b><br>' +
+      'A score is passed weight over total applicable weight, and the denominator comes ' +
+      'from what was scanned. With nothing scanned it is empty, and the arithmetic returns ' +
+      '100 out of 100, Grade A. That would read as clean when it actually means unmeasured, ' +
+      'so no number is given.' +
+      (st.acs && st.acs.total
+        ? ' The ACS violations below are unaffected and stand on their own.'
+        : '') +
+      '<br>To score a posture, run this again with the YAML these workloads come from, or ' +
+      'with a workload export from <code>oc get deployment,daemonset,statefulset,cronjob ' +
+      '-A -o json</code>.</div>';
+  } else {
+    postureHtml =
+      '<h2>Summary</h2><div class="grid">' +
+      '<div class="cardx"><div class="muted">CURRENT POSTURE</div><div class="big">' + before.score + ' / 100</div><div>Grade ' + before.grade + '</div></div>' +
+      '<div class="cardx"><div class="muted">AFTER AUTO FIXES</div><div class="big">' + after.score + ' / 100</div><div>Grade ' + after.grade + ' (+' + (after.score - before.score) + ')</div></div>' +
+      '<div class="cardx"><div class="muted">FINDINGS</div><div class="big">' + findings.length + '</div><div>' +
+        before.counts.Critical + ' critical, ' + before.counts.High + ' high</div></div>' +
+      (st.acs ? '<div class="cardx"><div class="muted">CONFIRMED LIVE</div><div class="big">' +
+        findings.filter(function (f) { return f.confirmedByAcs; }).length + '</div><div>present in the cluster too</div></div>' : '') +
+      '</div>' +
+      '<h2>Posture by category</h2><table><tr><th>Category</th><th>Now</th><th>After auto fixes</th><th>Gain</th></tr>' +
+      cats.map(function (c) {
+        const b = before.catScores[c] === undefined ? 100 : before.catScores[c];
+        const a = after.catScores[c] === undefined ? 100 : after.catScores[c];
+        return '<tr><td>' + E(c) + '</td><td>' + b + '</td><td>' + a + '</td><td>' + (a > b ? '+' + (a - b) : '0') + '</td></tr>';
+      }).join('') + '</table>';
+  }
+
+  const findingsHtml = files.length
+    ? '<h2>Findings in your manifests</h2><table><tr><th>#</th><th>ID</th><th>Severity</th><th>Score</th><th>Policy and finding</th><th>Object</th><th>File</th><th>Fix</th></tr>' + rows + '</table>'
+    : '';
+
+  /* ACS violations.
+   *
+   * This section did not exist. A run with an ACS export and no manifests produced a
+   * report of about five kilobytes containing a heading, a method note and nothing else,
+   * while the page it came from was showing dozens of violations. The report is the thing
+   * people keep, so anything visible in the page has to reach it. */
+  let acsHtml = '';
+  if (st.acs && st.acs.total) {
+    const all = (st.acs.imported || []).concat(st.acs.unmatched || []);
+    const byObj = {};
+    for (const f of (findings || [])) byObj[f.obj] = true;
+    const vrow = function (r) {
+      const fx = violationFixability(r, !!byObj[r.obj]);
+      const sev = ACS_SEVERITY[r.acsSeverity] ? ACS_SEVERITY[r.acsSeverity].label : 'Low';
+      return '<tr>' +
+        '<td><span class="sev ' + E(sev) + '">' + E(sev) + '</span></td>' +
+        '<td>' + (r.policy ? '<b>' + E(r.policy.id) + '</b> ' : '') + E(r.acsPolicyName || '') + '</td>' +
+        '<td>' + E(r.obj || '') + '</td>' +
+        '<td>' + E(r.namespace || '') + '</td>' +
+        '<td>' + E(r.state || '') + '</td>' +
+        '<td>' + E(r.detail || '') + '</td>' +
+        '<td>' + E(fx.kind) + (fx.kind === 'platform'
+          ? ' <span class="muted">(' + (r.platformSource === 'acs' ? 'ACS reported' : 'namespace match') + ')</span>'
+          : '') + '</td></tr>';
+    };
+    const user = all.filter(function (r) { return !r.isPlatform; });
+    const plat = all.filter(function (r) { return r.isPlatform; });
+    const head = '<tr><th>Severity</th><th>ACS policy</th><th>Object</th><th>Namespace</th><th>State</th><th>Violation</th><th>Fix route</th></tr>';
+    acsHtml =
+      '<h2>Violations reported by ACS</h2>' +
+      '<p class="muted">' + st.acs.total + ' violation(s) imported: ' + st.acs.user +
+        ' on your workloads, ' + st.acs.platform + ' on platform components. ' +
+        (st.acs.platformFlagPresent
+          ? 'ACS supplied the platform component flag, so that split is authoritative.'
+          : 'ACS did not supply the platform component flag, so the split is inferred from the namespace and may be wrong in either direction.') +
+        '</p>' +
+      (user.length
+        ? '<h3>Your workloads (' + user.length + ')</h3><table>' + head + user.map(vrow).join('') + '</table>'
+        : '<p class="muted">No violations on your own workloads in this export.</p>') +
+      (plat.length
+        ? '<h3>Platform components (' + plat.length + ')</h3>' +
+          '<p class="muted">Listed for completeness and refused by default. The owning ' +
+          'operator reverts manual edits, so a patch changes nothing except how hard the ' +
+          'drift is to find. The supported routes are a policy exception with an expiry, a ' +
+          'configuration change through whatever the operator exposes, or a case with Red ' +
+          'Hat.</p><table>' + head + plat.map(vrow).join('') + '</table>'
+        : '');
+  }
+
   /* Vulnerability section, only when CVE data was supplied. Kept visually separate from
      the posture score for the same reason it is separate in the UI: the posture
      denominator is fixed by what was scanned, CVE counts move whenever a feed updates. */
@@ -2219,12 +2327,6 @@ function buildHtmlReport(st) {
         ? '<p class="muted">Showing the top 300 by priority. The JSON export carries all of them.</p>' : '');
   }
 
-  const cats = [];
-  const seen = {};
-  Object.keys(before.catScores).concat(Object.keys(after.catScores)).forEach(function (c) {
-    if (!seen[c]) { seen[c] = 1; cats.push(c); }
-  });
-  cats.sort();
 
   return '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>ACS Audit Report</title><style>' +
     ':root{--bg:#fff;--fg:#1c2430;--muted:#667085;--line:#e3e8ef;--panel:#f0f3f7;--sub:#fafbfc;--acc:#1f6feb;--card:#dde3ea}' +
@@ -2235,7 +2337,7 @@ function buildHtmlReport(st) {
     'td{padding:8px;border-bottom:1px solid var(--line);vertical-align:top}' +
     '.big{font-size:38px;font-weight:800}.grid{display:flex;gap:24px;flex-wrap:wrap;margin-top:11px}' +
     '.cardx{border:1px solid var(--card);border-radius:10px;padding:16px 22px;min-width:190px}' +
-    '.muted{color:var(--muted);font-size:12.5px}a{color:var(--acc)}' +
+    '.muted{color:var(--muted);font-size:12.5px}a{color:var(--acc)}.note{border-left:3px solid #d4a72c;background:var(--panel);padding:10px 13px;border-radius:0 6px 6px 0;font-size:13px;margin:10px 0}.sev{display:inline-block;padding:1px 7px;border-radius:9px;font-size:10.5px;font-weight:700}.sev.Critical{background:#67060c;color:#ffb3ad}.sev.High{background:#5a2d0c;color:#ffc999}.sev.Medium{background:#4d3800;color:#f2d24b}.sev.Low{background:#0f3d1e;color:#7ee2a8}h3{font-size:14px;margin:14px 0 6px}' +
     '#tg{position:fixed;top:13px;right:15px;background:var(--panel);color:var(--fg);border:1px solid var(--card);border-radius:6px;padding:6px 13px;cursor:pointer;font-size:13px}' +
     '</style></head><body><button id="tg">Dark mode</button>' +
     '<h1>Red Hat ACS Audit Report</h1>' +
@@ -2243,21 +2345,9 @@ function buildHtmlReport(st) {
       files.reduce(function (n, f) { return n + f.docs.length; }, 0) + ' YAML document(s).' +
       (st.acs ? ' Cross checked against an ACS export of ' + st.acs.total + ' violation(s).' : '') +
       (st.source ? ' Source: ' + E(st.source) + '.' : '') + '</p>' +
-    '<h2>Summary</h2><div class="grid">' +
-    '<div class="cardx"><div class="muted">CURRENT POSTURE</div><div class="big">' + before.score + ' / 100</div><div>Grade ' + before.grade + '</div></div>' +
-    '<div class="cardx"><div class="muted">AFTER AUTO FIXES</div><div class="big">' + after.score + ' / 100</div><div>Grade ' + after.grade + ' (+' + (after.score - before.score) + ')</div></div>' +
-    '<div class="cardx"><div class="muted">FINDINGS</div><div class="big">' + findings.length + '</div><div>' +
-      before.counts.Critical + ' critical, ' + before.counts.High + ' high</div></div>' +
-    (st.acs ? '<div class="cardx"><div class="muted">CONFIRMED LIVE</div><div class="big">' +
-      findings.filter(function (f) { return f.confirmedByAcs; }).length + '</div><div>present in the cluster too</div></div>' : '') +
-    '</div>' +
-    '<h2>Posture by category</h2><table><tr><th>Category</th><th>Now</th><th>After auto fixes</th><th>Gain</th></tr>' +
-    cats.map(function (c) {
-      const b = before.catScores[c] === undefined ? 100 : before.catScores[c];
-      const a = after.catScores[c] === undefined ? 100 : after.catScores[c];
-      return '<tr><td>' + E(c) + '</td><td>' + b + '</td><td>' + a + '</td><td>' + (a > b ? '+' + (a - b) : '0') + '</td></tr>';
-    }).join('') + '</table>' +
-    '<h2>Findings</h2><table><tr><th>#</th><th>ID</th><th>Severity</th><th>Score</th><th>Policy and finding</th><th>Object</th><th>File</th><th>Fix</th></tr>' + rows + '</table>' +
+    postureHtml +
+    acsHtml +
+    findingsHtml +
     vulnHtml +
     '<h2>Method</h2><p>Each policy mirrors a Red Hat ACS default security policy: same name, same ACS severity, same categories and lifecycle stage, with the ACS remediation guidance carried through. Severity drives a weighted posture score in which every applicable policy and object pair is one check, weighted Critical 18, High 10, Medium 5 and Low 2. Posture is passed weight over total applicable weight, and the denominator is derived only from what was scanned rather than what was found, so the current and projected numbers are directly comparable. CVSS style scores are for ranking configuration weakness classes, not instance specific vulnerability scoring. STIG references are mapping aids and must be verified against the current DISA release before they are cited in an accreditation package.</p>' +
     '<h2>Limits</h2><p>This is static analysis of manifest text. It does not query a cluster and does not replace ACS, admission control such as Pod Security Admission or Kyverno, or runtime enforcement. ACS policies that evaluate build metadata or runtime process behaviour cannot be assessed from YAML. Image CVEs appear here only when an ACS vulnerability export was supplied; this tool performs no scanning of its own, so an absence of CVEs below means none were imported, not that none exist.</p>' +
@@ -2999,6 +3089,7 @@ function describeUnloadable(text) {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
+    ACS_VERSION: ACS_VERSION, ACS_TOOL: ACS_TOOL,
     violationKey: violationKey,
     describeUnloadable: describeUnloadable,
     ACS_TOOL, ACS_SEVERITY, ACS_POLICIES, WORKLOADS,

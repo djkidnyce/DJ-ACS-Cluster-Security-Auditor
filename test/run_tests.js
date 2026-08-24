@@ -30,11 +30,13 @@ const SUITES = [
   ['cli_violations.cjs', 'the CLI drafting violation fixes to YAML, run end to end'],
   ['scripts.cjs', 'the shell scripts agree with each other about trust and credentials'],
   ['posture_platform.cjs', 'no score over zero manifests, and the platform override'],
+  ['version.cjs', 'the version agrees across the code, the CHANGELOG and the git tag'],
   ['page.cjs', 'whole page wiring in a real DOM (needs jsdom, skips without it)'],
 ];
 
 let pass = 0, fail = 0;
 const failed = [];
+const crashed = [];
 
 for (const [file, what] of SUITES) {
   const p = path.join(HERE, file);
@@ -47,11 +49,20 @@ for (const [file, what] of SUITES) {
   if (r.stderr) process.stderr.write(r.stderr);
   const m = (r.stdout || '').match(/(\d+) passed, (\d+) failed/);
   if (m) { pass += parseInt(m[1], 10); fail += parseInt(m[2], 10); }
+  else if (r.status !== 0) {
+    /* A suite that crashes never prints a summary line, so its assertions are absent from
+       the totals entirely. Counting that as "0 failed" reads like success. Name it. */
+    crashed.push(file);
+  }
   if (r.status !== 0) failed.push(file);
 }
 
 console.log('\n' + '='.repeat(64));
-console.log('  TOTAL: ' + pass + ' passed, ' + fail + ' failed');
+console.log('  TOTAL: ' + pass + ' passed, ' + fail + ' failed' +
+  (crashed.length ? ', ' + crashed.length + ' SUITE(S) CRASHED BEFORE REPORTING' : ''));
+if (crashed.length) {
+  console.log('  crashed, so none of their assertions are in the total above: ' + crashed.join(', '));
+}
 if (failed.length) console.log('  failing suites: ' + failed.join(', '));
 console.log('='.repeat(64));
 process.exit(failed.length || fail ? 1 : 0);

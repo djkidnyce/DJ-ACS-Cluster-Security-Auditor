@@ -5,7 +5,7 @@ Author: DJ
 Date: 15 August 2026
 Covers findings 2 and 3 from the security review
 
-These two were held back from the immediate fixes because they change how the pages
+These two were held back from the immediate fixes because they change how the page
 load. Findings 1, 4 and 5 were small and unambiguous and are already in, with regression
 tests in `test/hardening.cjs`.
 
@@ -19,8 +19,7 @@ Every number below was measured against the current code, not estimated.
 
 | Surface | Inline `<script>` blocks | Largest block | CSP |
 |---|---|---|---|
-| `dj_acs_auditor.html` | 2 | 32,495 bytes | none |
-| `dj_acs_remediation.html` | 2 | 43,704 bytes | none |
+| `dj_acs_auditor.html` | 2 | 107,087 bytes | none |
 | Generated HTML report | 1 | 401 bytes | none |
 
 ### Threat
@@ -84,7 +83,7 @@ be written down rather than glossed over.
 
 **And `connect-src` cannot save us on the tool pages either.** The obvious win would be
 restricting outbound connections so an injection cannot exfiltrate a token. It does not
-work here: the pages legitimately connect to whatever Central and API host the operator
+work here: the page legitimately loads whatever it is given, and the operator
 types, which is unknown when the page is authored. `connect-src https:` permits every
 https host on the internet, so it stops nothing that matters. Claiming it as a mitigation
 would be security theatre.
@@ -125,7 +124,7 @@ frame-ancestors 'none'
    meaningful `connect-src`, and real SRI all available at once.
 
 Effort: roughly half a day including tests. Risk of breaking the tool: low for the
-report, low for the pages given `'unsafe-inline'` is retained.
+report, low for the page given `'unsafe-inline'` is retained.
 
 ---
 
@@ -140,7 +139,7 @@ if (typeof jsyaml === 'undefined')
 
 Three occurrences across the two pages, two libraries. No `integrity`, no `crossorigin`.
 The CLI has no equivalent path: it already fails closed with instructions, which is the
-behaviour being proposed for the pages.
+behaviour being proposed for the page.
 
 ### Threat
 

@@ -179,3 +179,26 @@ Platform and cluster CVEs (Kubernetes, Istio, OpenShift components) are **not**
 covered here. In current ACS those are reached through the GraphQL API rather than a
 documented REST export, and this script does not guess at an endpoint it has not
 verified.
+
+
+## acs_summary.sh
+
+Summarise a pull directory without Node.
+
+```bash
+./acs_summary.sh findings/acs_findings_20260821_143022 -o findings.md
+```
+
+Needs jq and nothing else. It exists because Node cannot be installed everywhere, and a
+hardened host in a controlled enclave is exactly the machine where curl and jq are all you
+get.
+
+It reports what ACS said: violations by severity, policy and namespace, the split between
+your workloads and platform components, how many arrived with no `platformComponent` field
+at all, CVEs by Red Hat severity, how many have a published fix, and the images to rebuild
+ranked by critical count.
+
+It does not compute a posture score and does not draft fixes. Both need the policy engine.
+A score is measured over scanned manifests, and this script has no manifests and no
+scanner, so any number it printed would be invented. It says as much in its own output and
+points at the page, which needs a browser and no runtime.

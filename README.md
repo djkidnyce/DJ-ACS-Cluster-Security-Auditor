@@ -8,8 +8,7 @@ Audit Kubernetes and OpenShift manifests against Red Hat Advanced Cluster Securi
 
 | File | What it is for |
 |---|---|
-| `dj_acs_auditor.html` | Scan, score, rank, cross check against ACS violations and image CVEs, export the report. Read only, it never modifies anything |
-| `dj_acs_remediation.html` | Apply fixes interactively, with preview, confirmation, one at a time stepping, and undo |
+| `dj_acs_auditor.html` | The whole browser surface. Two tabs: **Audit** reads, scores and reports; **Remediate** edits the YAML you loaded with a diff, a confirmation and undo. One mode gate governs both |
 | `acs_policies.js` | The policy engine both pages share, so they can never disagree about a manifest |
 | `vendor/` | js-yaml and JSZip, committed so the tool needs no package manager and no network |
 | `acs_cli.js` + `acs.sh` / `.cmd` / `.ps1` | The same audit, report and fixes from a terminal or a pipeline |
@@ -17,7 +16,7 @@ Audit Kubernetes and OpenShift manifests against Red Hat Advanced Cluster Securi
 | `scripts/acs_pull_all.sh` and `.ps1` | Pull every finding ACS has, all severities and states, from outside the browser |
 | `scripts/acs_pull_via_oc.sh` | Same, but reaches Central through your existing `oc` session |
 | `scripts/acs_pull_over_ssh.ps1` | PowerShell, when only a bastion can reach the cluster |
-| `test/run_tests.js` | 774 tests against the real engine, pages and CLI |
+| `test/run_tests.js` | 823 tests against the real engine, the page, the scripts and the CLI |
 
 Open either HTML file directly. There is nothing to install and no server to run.
 
@@ -313,15 +312,33 @@ Nothing in the audit path needs a package manager, and the part most people actu
 | To do this | You need | Node? |
 |---|---|---|
 | Read, score, cross check, see violations, draft fixes | A browser. Open `dj_acs_auditor.html` from disk | **No** |
-| Apply fixes with preview, confirm and undo | A browser. Open `dj_acs_remediation.html` from disk | **No** |
+| Apply fixes with preview, confirm and undo | A browser. Open `dj_acs_auditor.html` from disk | **No** |
 | Pull data out of ACS | `bash`, `curl`, `jq` | **No** |
 | Pull via an `oc` port forward | The above plus `oc` | **No** |
 | Pull from PowerShell or over SSH | PowerShell 5.1 or newer, no extra modules | **No** |
-| Run the same audit headless, in a pipeline | `acs_cli.js` | Yes, Node 18+ |
+| Summarise a pull from the shell | `bash`, `jq` | **No** |
+| Run the same audit headless, in a pipeline | `acs_cli.js` | Yes, Node 18+, or a container |
 | Run the test suite | `test/run_tests.js` | Yes, Node 18+ |
 | Rebuild the Word guides and figures | `docs/` generators | Yes, plus Python |
 
-The pages load `vendor/js-yaml.min.js` and `vendor/jszip.min.js` with plain `<script src>` tags from the folder they sit in. No server, no build step, no install. If Node cannot be installed on the machine you audit from, you lose the headless CLI and the tests, and nothing else.
+The page loads `vendor/js-yaml.min.js` and `vendor/jszip.min.js` with plain `<script src>` tags from the folder it sits in. No server, no build step, no install.
+
+### If Node cannot be installed at all
+
+This is the normal case on a hardened host in a controlled enclave, so it is a supported path rather than a caveat.
+
+| What you need | How to get it without Node |
+|---|---|
+| Pull data out of ACS | `scripts/acs_pull_all.sh`. bash, curl and jq |
+| Posture score, violations, fix routes, drafted YAML, the full HTML report | `dj_acs_auditor.html`. A browser, nothing else. Open the file |
+| A summary you can read or hand over from the shell | `scripts/acs_summary.sh <pull-dir> -o findings.md`. jq only |
+| The headless CLI, for CI | A container: `podman run --rm -v "$PWD":/w:Z -w /w docker.io/library/node:20-alpine node acs_cli.js --help` |
+
+`acs_summary.sh` counts what ACS reported: violations by severity, policy and namespace, the split between your workloads and platform components, which violations arrived with no `platformComponent` field at all, CVEs by Red Hat severity, how many are actually fixable, and the images to rebuild ranked by critical count.
+
+It does not produce a posture score and does not draft fixes, and it says so in its own output. Both need the policy engine, and the engine needs the page or the CLI. A summary that implied a score it had not computed would be the same defect as scoring an empty scan.
+
+The wrapper scripts (`acs.sh`, `acs.ps1`, `acs.cmd`) detect a missing Node and print these routes rather than failing with `command not found`.
 
 ## When the pull script fails on TLS
 
@@ -380,7 +397,7 @@ node test/run_tests.js
 npm install jsdom && node test/run_tests.js
 ```
 
-636 engine, CLI and script tests, no install required, plus 138 whole page tests that need jsdom and skip without it. 774 in total.
+674 engine, CLI and script tests, no install required, plus 149 whole page tests that need jsdom and skip without it. 823 in total.
 
 They cover the policy catalogue, scanning and scoring, fix application and YAML validity, diff correctness, merge patch minimality, ACS import across every export shape the pull script writes plus renamed policy matching, the full remediation flow including that preview mutates nothing and undo restores byte for byte, and the vulnerability path end to end: NDJSON parsing, CVE deduplication, priority reasoning, manifest correlation and drift.
 
@@ -402,7 +419,7 @@ The tool has been reviewed against itself. Findings, and what was done:
 | Generated commands used `curl -sk`, teaching operators to disable TLS verification on a request carrying a bearer token | **Fixed.** Verification on by default, `--cacert` guidance shown, insecure is opt in and warns. |
 | Token clearing sat inside `try`, so it was skipped on failure, and failure is the common path with CORS | **Superseded.** The in browser connectors were removed entirely, so there is no longer a token to clear. |
 | The browser asked for a live ACS API token in exchange for a request the browser then blocked | **Fixed by removal.** A page opened from a file has a null origin and neither ACS Central nor the OpenShift API sends a header that permits it, so the feature could never work from there. The risk was real and the benefit was zero. Use `scripts/acs_pull_all.sh`, which runs where the cluster is reachable, keeps the token out of shell history and out of `ps`, and verifies TLS. |
-| No CSP on the pages or the generated report | **Proposed**, see `docs/PROPOSAL_page_hardening.md`. |
+| No CSP on the page or the generated report | **Proposed**, see `docs/PROPOSAL_page_hardening.md`. |
 | CDN fallback with no SRI, which also contradicts the offline claim | **Proposed**, same document. Recommendation is to fail closed. |
 
 Every fix has a regression test that was confirmed to fail against the pre fix code.
@@ -417,6 +434,19 @@ guarantee looking broader than it is. `--in-place --mode auto` runs `git status 
 via `execFileSync` with an argument array and no shell, in the directory you pointed at, and
 refuses to overwrite your files if the tree is dirty or is not a repository. It reads. It
 remediates nothing. Everything else the tool produces is a file.
+
+## Releasing
+
+Every change that ships gets a version and a tag. Semantic versioning, where the public
+interface is the CLI flags, the exit codes, the JSON and SARIF shapes, and the policy ids.
+
+The version lives in exactly one place, `ACS_VERSION` in `acs_policies.js`. The banner, the
+HTML report, the findings JSON, the SARIF run and every drafted patch header derive from
+it, and `test/version.cjs` fails the build if it disagrees with the newest CHANGELOG
+heading or with the git tag on a tagged commit. A report whose version does not match a tag
+cannot be used as evidence, because you cannot tell which build produced it.
+
+See [RELEASING.md](RELEASING.md) for the procedure.
 
 ## Documentation
 
