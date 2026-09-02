@@ -562,6 +562,22 @@ if (E.modeAllows(MODE, 'writes')) {
     log('  Emitted as patches. Nothing was modified and no corrected YAML was written.');
   } else {
     log('  ' + applied.length + ' fix(es) applied across ' + Object.keys(patched).length + ' file(s)');
+
+    /* Say which of them can stop a workload, on the terminal, at the moment they are
+       applied. Burying it in a file the operator may not open is not telling them. */
+    const risky = applied.filter(function (a) {
+      return a.finding && a.finding.policy && a.finding.policy.runtimeRisk;
+    });
+    if (risky.length) {
+      log('');
+      log(C.yel('  ' + risky.length + ' of those can stop the workload. Correct hardening, but the'));
+      log(C.yel('  edit being unambiguous says nothing about whether your application survives it:'));
+      for (const a of risky) {
+        log(C.yel('    ' + a.finding.policy.id + '  ' + a.finding.obj));
+        for (const line of E.wrapAt(a.finding.policy.runtimeRisk, 66)) log('      ' + C.dim(line));
+      }
+      log(C.yel('  Test in a namespace you do not care about before this goes anywhere real.'));
+    }
   }
   const placeholders = applied.filter(function (a) { return /PLACEHOLDER/.test(a.changes.join(' ')); });
   if (placeholders.length) {

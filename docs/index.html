@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DJ's ACS Auditor</title>
+<meta name="description" content="Audit Kubernetes and OpenShift manifests against Red Hat Advanced Cluster Security policy logic. Report, manual and auto modes. No command is ever run to remediate.">
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--panel2:#1c2330;--border:#30363d;--text:#e6edf3;
+  --muted:#8b949e;--accent:#58a6ff;--crit:#f85149;--med:#d4a72c;--low:#3fb950}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,Roboto,Helvetica,Arial,sans-serif;
+  font-size:16px;line-height:1.65}
+header{padding:60px 26px 44px;border-bottom:1px solid var(--border);background:var(--panel)}
+.wrap{max-width:860px;margin:0 auto;padding:0 26px}
+h1{font-size:34px;font-weight:700;letter-spacing:-.4px}
+.tag{color:var(--muted);font-size:17px;margin-top:10px;max-width:680px}
+main{padding:44px 0 80px}
+h2{font-size:20px;margin:40px 0 12px;color:var(--accent)}
+h3{font-size:16px;margin:22px 0 8px}
+p{margin:12px 0;color:#c9d1d9}
+ul{margin:12px 0 12px 22px}li{margin:6px 0;color:#c9d1d9}
+code{font-family:ui-monospace,Consolas,monospace;font-size:13.5px;background:var(--panel2);
+  padding:2px 6px;border-radius:4px}
+pre{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:14px 16px;
+  overflow-x:auto;margin:14px 0}
+pre code{background:none;padding:0;font-size:13px;line-height:1.6}
+a{color:var(--accent)}
+.callout{border-left:3px solid var(--med);background:var(--panel);padding:14px 18px;
+  border-radius:0 8px 8px 0;margin:20px 0}
+.callout.crit{border-left-color:var(--crit)}
+.callout strong{color:var(--text)}
+table{width:100%;border-collapse:collapse;font-size:14.5px;margin:16px 0}
+th{text-align:left;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.05em;
+  padding:8px 10px;border-bottom:1px solid var(--border)}
+td{padding:9px 10px;border-bottom:1px solid var(--border);vertical-align:top;color:#c9d1d9}
+.cta{display:inline-block;background:#1f6feb;color:#fff;padding:11px 22px;border-radius:7px;
+  text-decoration:none;font-weight:600;margin:18px 8px 0 0}
+.cta.alt{background:var(--panel2);border:1px solid var(--border);color:var(--text)}
+footer{border-top:1px solid var(--border);padding:28px 0;color:var(--muted);font-size:14px}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <h1>DJ's ACS Auditor</h1>
+    <p class="tag">Audit Kubernetes and OpenShift manifests against Red Hat Advanced Cluster
+      Security policy logic, score and rank every finding, and fix it in YAML with a preview
+      and an explicit confirmation before anything changes.</p>
+    <a class="cta" href="https://github.com/djkidnyce/DJ-ACS-Cluster-Security-Auditor">View on GitHub</a>
+    <a class="cta alt" href="https://github.com/djkidnyce/DJ-ACS-Cluster-Security-Auditor/releases">Releases</a>
+  </div>
+</header>
+
+<main class="wrap">
+
+<div class="callout crit">
+  <strong>No command is ever run to remediate a finding.</strong>
+  Fixes are text edits to YAML, handed back to you as files. Nothing touches a cluster,
+  nothing calls <code>oc</code>, <code>kubectl</code> or <code>roxctl</code>, and nothing is
+  applied behind your back. The one subprocess in the whole tool is
+  <code>git status</code>, used to refuse an in place write on a dirty tree.
+</div>
+
+<h2>What it is</h2>
+<p>One HTML file you open from disk. No install, no server, no package manager, no runtime.
+  It has two tabs: <strong>Audit</strong> reads, scores and reports; <strong>Remediate</strong>
+  edits the YAML you loaded, with a diff and a confirmation for every change and undo all the
+  way back.</p>
+<p>There is also a command line runner for pipelines, and shell scripts that pull findings out
+  of ACS. Those need <code>curl</code> and <code>jq</code>; the CLI needs Node. The audit
+  itself needs neither.</p>
+
+<h2>It exists to close one gap</h2>
+<p>ACS tells you a running workload is in violation. It does not hand you a corrected
+  manifest, and it does not tell you what your posture becomes once the fix lands. This does
+  both, against the manifest in your repository, which is where the fix actually has to be
+  made.</p>
+
+<h2>Report, manual, or auto. You choose, every time.</h2>
+<table>
+  <tr><th>Mode</th><th>Produces</th><th>Modifies anything</th></tr>
+  <tr><td><code>report</code></td><td>The analysis. Report, JSON, SARIF. Nothing that could be applied.</td><td>No</td></tr>
+  <tr><td><code>manual</code></td><td>Patches and written guidance for a human to review</td><td>No</td></tr>
+  <tr><td><code>auto</code></td><td>Applies the safe fixes and writes corrected YAML</td><td>Yes, with preview and confirmation</td></tr>
+</table>
+<p><code>report</code> is the default on every surface. The safe state is the one you get by
+  doing nothing, not the one you get by remembering a flag. The mode is never inferred:
+  asking for patches while in report mode is refused with an explanation rather than quietly
+  upgraded.</p>
+
+<div class="callout">
+  <strong>Why that is a security control and not a convenience.</strong>
+  A remediation tool that can write before the operator has chosen to write is a new risk,
+  not a mitigation. The failure is not the tool doing something malicious. It is someone at
+  the end of a long incident clicking the obvious button, producing a change to a production
+  manifest they did not intend, and defending it in review with a plausible looking diff
+  attached.
+</div>
+
+<h2>What it covers, stated as a number</h2>
+<p>Twenty policies. ACS ships roughly seventy defaults and most teams add their own, so a
+  clean score here means clean against twenty checks, not compliant with the ACS default
+  set. It should never be quoted as the latter.</p>
+<p>Build stage rules, runtime behaviour policies and image CVE policies cannot be judged from
+  a manifest at all. Violations this tool does not model arrive through your ACS export and
+  are shown as <strong>unmatched</strong> rather than dropped, because a scanner that
+  discards what it does not understand is indistinguishable from one that found nothing.</p>
+
+<h2>Automatic does not mean safe for your workload</h2>
+<p>An automatic fix means the edit to the YAML is unambiguous. It says nothing about whether
+  your application survives it. Four of them can stop a workload that relied on what gets
+  removed:</p>
+<ul>
+  <li><code>readOnlyRootFilesystem</code> on anything that writes to disk</li>
+  <li>dropping all capabilities from an image that needs one</li>
+  <li><code>runAsNonRoot</code> against an image with no numeric non-root user</li>
+  <li>unmounting the service account token from a pod that calls the Kubernetes API</li>
+</ul>
+<p>Each carries a note naming the failure and the remedy, in the confirmation dialog, the
+  change log, the patch header, the CLI output and the report. Test them somewhere you do not
+  care about first.</p>
+
+<h2>Getting findings out of ACS</h2>
+<p>The page never contacts anything. A page opened from a file has a null origin and no API
+  will accept it, so an in browser connector could only ever have asked for a live token in
+  exchange for a request the browser blocks. The scripts do it instead, from a shell where
+  the cluster is reachable and the token stays out of <code>ps</code> and shell history.</p>
+<pre><code>export ROX_ENDPOINT=https://central-stackrox.apps.example.com
+export ROX_API_TOKEN=&lt;token&gt;
+./scripts/acs_preflight.sh
+./scripts/acs_pull_all.sh -o findings</code></pre>
+<p>Central's certificate is self signed by default, so the first run will fail verification.
+  That is expected. The script resolves it in order of trustworthiness: a CA you supplied,
+  then the <code>central-tls</code> secret read through your authenticated <code>oc</code>
+  session, and failing both it prints the certificate's fingerprint and two commands that
+  work. <code>--insecure</code> is never offered as a shortcut.</p>
+<p>Each run ends by writing and printing <code>findings.md</code>, a summary you can read or
+  hand over. That part needs only <code>jq</code>.</p>
+
+<h2>Two ACS data planes, and why an empty alert list proves nothing</h2>
+<p><strong>An image CVE is not a policy violation.</strong> It only produces an alert if
+  somebody wrote a policy that fires on it, and most teams have not. A cluster full of
+  critical, actively exploited CVEs can return an empty <code>/v1/alerts</code> list. Empty
+  is not clean, it means you asked the wrong endpoint.</p>
+<table>
+  <tr><th>Plane</th><th>Endpoint</th><th>The catch</th></tr>
+  <tr><td>Policy violations</td><td><code>GET /v1/alerts</code></td>
+      <td>Returns a slim projection with no violation text at all, and the namespace under
+          <code>commonEntityInfo</code>. Only <code>/v1/alerts/{id}</code> has the detail.
+          This tool lists, then hydrates.</td></tr>
+  <tr><td>Image vulnerabilities</td><td><code>GET /v1/export/vuln-mgmt/workloads</code></td>
+      <td>Streams NDJSON, so <code>res.json()</code> fails on it. The token needs read on
+          Image <em>and</em> Deployment, which is the usual reason a CVE pull comes back
+          empty while alerts keep working.</td></tr>
+</table>
+
+<h2>Running where Node cannot be installed</h2>
+<p>Normal on a hardened host in a controlled enclave, and a supported path rather than a
+  limitation. The page gives you the posture, the violations, the fix routes, the drafted
+  YAML and the full report, and needs only a browser. The pull scripts need
+  <code>curl</code> and <code>jq</code>. <code>scripts/acs_summary.sh</code> gives you a
+  markdown summary from the shell using <code>jq</code> alone. Only the headless CLI and the
+  test suite need Node.</p>
+
+<h2>Limits</h2>
+<p>Static analysis of manifest text, plus whatever ACS hands you. It does no scanning of its
+  own: if ACS has not scanned an image this tool has nothing to say about it, and says so
+  rather than showing a reassuring zero. It does not replace ACS, admission control such as
+  Pod Security Admission or Kyverno, or runtime enforcement.</p>
+<p>Policy names, severities and remediation text are modelled on the ACS defaults with the
+  structure verified against the upstream StackRox definitions. Check them against your own
+  ACS version; defaults shift between releases and most teams tune them. STIG references are
+  mapping aids and must be verified against the current DISA release before being cited in an
+  accreditation package.</p>
+
+<div class="callout">
+  <strong>Written and reviewed by one person.</strong> This has not had an independent
+  security review. It is offered as a working tool, not an audited one, and the source is
+  small enough to read before you trust it.
+</div>
+
+<h2>Get it</h2>
+<pre><code>git clone https://github.com/djkidnyce/DJ-ACS-Cluster-Security-Auditor.git
+cd DJ-ACS-Cluster-Security-Auditor
+open dj_acs_auditor.html          # or double click it</code></pre>
+<p>Run the tests if you want to see it prove itself: <code>node test/run_tests.js</code>.</p>
+
+</main>
+
+<footer class="wrap">
+  <p>Built by DJ. <a href="https://github.com/djkidnyce/DJ-ACS-Cluster-Security-Auditor">Source on GitHub</a>.
+     Licensed under the terms in the repository.</p>
+</footer>
+</body>
+</html>

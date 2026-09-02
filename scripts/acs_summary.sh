@@ -151,17 +151,54 @@ if [ -r "$V" ]; then
   emit "rebuilding, so they are a different conversation from the ones that can."
   emit ""
 
-  emit "### Images to rebuild, most critical first"
+  KEV=$(jq -s -r '[.[].result.images[]?.scan.components[]?.vulns[]?
+      | select(.cisaKev == true or .cisa_kev == true)] | unique_by(.cve) | length' "$V" 2>/dev/null || echo 0)
+  if [ "$KEV" != "0" ]; then
+    if [ "$KEV" = "1" ]; then
+      emit "1 of them is on the CISA Known Exploited Vulnerabilities catalog. Somebody is"
+      emit "using it in the wild right now, which is the strongest signal in this file."
+    else
+      emit "$KEV of them are on the CISA Known Exploited Vulnerabilities catalog. Somebody is"
+      emit "using those in the wild right now, which is the strongest signal in this file."
+    fi
+    emit ""
+  fi
+
+  emit "### Images to rebuild, worst CVSS first"
   emit ""
-  emit "| Critical | Fixable | Image |"
-  emit "|---|---|---|"
+  emit "| Worst CVSS | Critical | KEV | Fixable | CVEs | Image |"
+  emit "|---|---|---|---|---|---|"
   jq -s -r '[.[].result | select(.images != null) | .images[]
         | {img: (.name.fullName // .name.remote // .id),
+           worst: ([.scan.components[]?.vulns[]?.cvss // 0] | max // 0),
            crit: ([.scan.components[]?.vulns[]? | select(.severity=="CRITICAL_VULNERABILITY_SEVERITY")] | unique_by(.cve) | length),
-           fix:  ([.scan.components[]?.vulns[]? | select((.fixedBy // "") != "")] | unique_by(.cve) | length)}]
-        | unique_by(.img) | sort_by(-.crit) | .[:15][]
-        | "| \(.crit) | \(.fix) | \(.img) |"' "$V" 2>/dev/null \
+           kev:  ([.scan.components[]?.vulns[]? | select(.cisaKev == true or .cisa_kev == true)] | unique_by(.cve) | length),
+           fix:  ([.scan.components[]?.vulns[]? | select((.fixedBy // "") != "")] | unique_by(.cve) | length),
+           all:  ([.scan.components[]?.vulns[]?] | unique_by(.cve) | length)}]
+        | unique_by(.img) | sort_by(-.worst, -.crit) | .[:20][]
+        | "| \(.worst) | \(.crit) | \(.kev) | \(.fix) | \(.all) | \(.img) |"' "$V" 2>/dev/null \
     | while IFS= read -r l; do emit "$l"; done
+  emit ""
+
+  emit "### Highest scoring CVEs"
+  emit ""
+  emit "| CVSS | KEV | Severity | CVE | Fixed in | Image |"
+  emit "|---|---|---|---|---|---|"
+  jq -s -r '[.[].result | select(.images != null) | .images[] as $i
+        | $i.scan.components[]?.vulns[]?
+        | {cve, cvss: (.cvss // 0), sev: (.severity // ""),
+           kev: (if (.cisaKev == true or .cisa_kev == true) then "yes" else "" end),
+           fix: (.fixedBy // ""), img: ($i.name.fullName // $i.name.remote // $i.id)}]
+        | unique_by(.cve) | sort_by(-.cvss) | .[:20][]
+        | "| \(.cvss) | \(.kev) | \(.sev | sub("_VULNERABILITY_SEVERITY";"")) | \(.cve) | \(if (.fix // "") == "" then "none yet" else .fix end) | \(.img) |"' "$V" 2>/dev/null \
+    | while IFS= read -r l; do emit "$l"; done
+  emit ""
+  emit "CVSS is the score ACS supplied for each CVE. It is not the priority this tool ranks"
+  emit "by: that adds the CISA catalog, EPSS exploitation probability, whether a fix exists"
+  emit "and whether pods are actually running the image, and it runs to 15 rather than 10."
+  emit "That model lives in the policy engine, so it comes from the page or the CLI, not"
+  emit "from here. Reimplementing it in this script would give you a second ranking that"
+  emit "drifts from the first, which is worse than not having one."
   emit ""
   emit "Grouped by image because that is the unit of work: you rebuild an image once and"
   emit "every fixable CVE inside it clears together. A list ordered by CVE looks like"

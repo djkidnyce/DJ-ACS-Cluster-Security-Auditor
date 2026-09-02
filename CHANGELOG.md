@@ -11,7 +11,181 @@ at least; removing or renaming one is a major.
 Every release is tagged. `git tag -l` is the list, and the tag matches the version this
 tool stamps into every report and patch header it writes.
 
+## 1.3.0 - 2026-08-24
+
+Everything here was written after 1.2.0 was tagged and pushed, so it gets its own version
+rather than being folded into a release that is already out.
+
+### Fixed
+
+- **`test/version.cjs` failed while preparing a release, and then gave two different
+  answers on two identical runs.** It compared the git tag against the code whenever HEAD
+  sat on a tag, so applying the next version's files on top of the previous tag turned the
+  suite red for doing exactly the right thing.
+
+  Guarding that with "unless the tree is dirty" made it worse rather than better. `unzip`
+  preserves the archive's timestamps, so git's stat cache reported a freshly replaced tree
+  as clean on the first `git status` and dirty on the second, once the index had been
+  refreshed. Two identical commands, two different results, which is worse than either
+  answer alone.
+
+  The comparison now binds in CI, where the checkout is a fresh clone and the tag, the
+  commit and the files are the same thing by construction. Locally it reports what it sees
+  and does not fail. Verified: fails in CI on a wrong tag, passes on the right one, skips
+  when there is no tag, and three identical local runs agree.
+- **The self signed TLS tests skipped silently where a local TLS server could not start.**
+  Thirty one assertions disappeared, the total dropped, and everything still said passed.
+  The skip now names the reason and checks python3, openssl and `-addext` support
+  individually, so a machine that is not exercising that coverage says so. The readiness
+  loop no longer uses `seq`, which is not POSIX, and probes with node's own TLS client
+  rather than shelling out to openssl, which is one less external tool to disagree.
+
+  The first version of that diagnostic still discarded the test server's stderr, so it
+  reported "could not start a local TLS server" and withheld the reason: the same defect
+  one level down. The server's stderr is now captured and printed with the skip.
+- **A CI check that could not fail, and was masking real violations.** The guarantee job
+  greps three files for `eval(`, `new Function(` and `child_process`, and one of them was
+  the remediation page, deleted in 1.2.0. grep exits 2 on a missing path, `if grep` reads
+  non zero as "no match", and the step printed "clean" and passed. The error also masked
+  matches in the files that did still exist: a planted `eval()` in the surviving page went
+  undetected. Every green build since 1.2.0 asserted nothing there.
+
+  The workflow now globs rather than naming files, asserts the files exist before checking
+  them, runs each step under `set -e`, pins the CLI to exactly one subprocess and asserts
+  what that subprocess is, fails the build when a suite crashes before reporting, and has a
+  self test job that plants an `eval()` and a password field and requires the checks to
+  catch them. `test/ci.cjs` asserts all of that from the suite, so the workflow is covered
+  the same way the code is.
+
+- **"Automatic" described the edit and was read as a promise about the workload.** Four of
+  the fourteen automatic fixes remove something an application may be relying on:
+  `readOnlyRootFilesystem` on anything that writes to disk, dropping all capabilities from
+  an image that needs one, `runAsNonRoot` against an image with no numeric non root user,
+  and unmounting the service account token from a pod that calls the Kubernetes API. They
+  were presented identically to genuinely inert changes like removing `hostPID`.
+
+  Each now carries a note naming the specific failure and the remedy, and it appears in the
+  confirmation dialog, the change log, the drafted patch header, the CLI output and its own
+  section in the report. The classification stays `auto`, because the edit really is
+  unambiguous; what changed is that the tool no longer implies that makes it safe to apply
+  without looking at the workload.
+
+- **`docs/index.html`, the GitHub Pages site, still described the tool as it was before
+  1.1.0.** Two pages, live connect panels, a test count from the first commit. It is the
+  public face of the project and had not been updated since it was written. Rewritten
+  against what actually ships, including the coverage number and the automatic fix caveat.
+
+
+- **The pull could not reach a Central with a self signed certificate**, which is what the
+  RHACS operator installs by default. It stopped at the token check having written only an
+  error file, leaving a directory that looked like a pull returning almost nothing. TLS is
+  now resolved before the token is touched, in order of trustworthiness: a CA you supplied,
+  then the `central-tls` secret read through your authenticated `oc` session, and failing
+  both it stops and prints the certificate's issuer, its SHA-256 fingerprint, and two
+  commands that work.
+- `--pinnedpubkey` alone can never verify a self signed certificate. It is an additional
+  check rather than a replacement, so curl rejects the chain before it looks at the pin.
+  `--pin` now turns the chain check off and enforces the key, which is the combination that
+  works. A wrong key fails closed with `curl (90)`, asserted against a real self signed TLS
+  server rather than by reading the script.
+- The curl command was assembled before the TLS decision was made, so whatever
+  `resolve_tls` chose was discarded. One branch rebuilt it by hand and the others did not.
+  It is rebuilt once now, after the decision is final.
+- **The `oc` call that bootstraps trust had no timeout.** On a workstation `oc` usually
+  exists and points at a real cluster, so a script whose job is to fetch findings could sit
+  silently on an unrelated API server. It now passes `--request-timeout=10s` and announces
+  that it is trying that route, so a wait is explained rather than mysterious.
+- A failed run no longer leaves a findings directory. TLS failures leave nothing, and a
+  token rejection writes `RUN_FAILED.txt` saying not to read the directory as a clean
+  cluster. `cleanup` runs before the `rmdir` it would otherwise defeat.
+- **ACS violations had no score, so there was nothing to rank them by.** Every matched
+  violation already carried a CVSS style score from the catalogue and the table never
+  rendered it. With an ACS export and no manifests the findings table is empty by
+  definition, so the violations table was the only thing on screen and it offered four
+  severity buckets and no ordering inside them. There is now a sortable Score column on the
+  page and in the report, and the report lists violations worst first. An unmatched
+  violation shows an em dash rather than a zero, because zero would sort it below every real
+  finding and read as harmless rather than as not assessed.
+- With ACS data and no manifests the top of the page was an explanation and nothing else.
+  It now shows the counts that are real, total violations, the severity split and how many
+  are on platform components, under a heading saying these are counts and not a posture
+  score.
+- `renderRemediateTab` also wrote the summary cards and, being the later of the two
+  writers, silently replaced whatever the Audit half had put there. Two owners for one
+  element is the failure the page merge existed to remove; it survived because that half
+  was lifted wholesale.
+
+### Added
+
+- **The exported HTML report is sortable.** Click any column header. Numeric columns are
+  detected from their values rather than declared, the arrow moves to whichever column is
+  active, and it is applied to every table generically so one added later is sortable
+  without anybody remembering to wire it. The report outlives the session and gets attached
+  to tickets; the first thing anybody does with a findings table is reorder it, and without
+  this they export to a spreadsheet and circulate that instead.
+- **The README states coverage as a number.** Twenty policies, against roughly seventy ACS
+  defaults, with a table of what cannot be judged from a manifest at all: build stage rules,
+  runtime behaviour, image CVE policies, and your own tuned policies. A clean score here
+  means clean against twenty checks and should never be quoted as compliance with the ACS
+  default set.
+- **The pull ends with a summary, written and shown.** `acs_pull_all.sh` writes
+  `findings.md` into the run directory and prints it. Seven JSON files in a folder is not a
+  result anybody can read, and a summary written but never displayed is one nobody reads.
+  `--no-summary` skips it.
+- **The summary scores the images.** Worst CVSS per image alongside critical, KEV and
+  fixable counts, and a table of the highest scoring CVEs with the version each is fixed in.
+  It states that CVSS is not the priority the engine ranks by, which additionally weighs the
+  CISA catalog, EPSS, whether a fix exists and whether pods are running the image, and runs
+  to 15 rather than 10. That model lives in the engine and is deliberately not reimplemented
+  in jq, because a second ranking that drifts from the first is worse than one ranking.
+- `--pin` on `acs_pull_all.sh`, and automatic CA bootstrap from the `central-tls` secret.
+- The script tests now run against a real self signed TLS server, and are hermetic: a stub
+  `oc` on PATH makes the trust bootstrap branch deterministic. Without it the branch was
+  never reached where `oc` is absent, so the suite passed while only testing half the code,
+  and hung where `oc` was present. Every external call in those tests is time bounded, so a
+  future hang fails an assertion instead of wedging the run.
+
 ## 1.2.0 - 2026-08-24
+
+### Fixed
+
+- **ACS violations had no score, so there was nothing to rank them by.** Every matched
+  violation already carried a CVSS style score from the policy catalogue and the table
+  simply never rendered it. With an ACS export and no manifests the findings table is
+  empty by definition, so the violations table was the only thing on screen and it offered
+  four severity buckets and no ordering inside them. There is now a sortable Score column
+  on the page and in the HTML report, and the report lists violations worst first. An
+  unmatched violation shows an em dash rather than a zero, because zero would sort it
+  below every real finding and read as harmless rather than as not assessed.
+- **With ACS data and no manifests the top of the page was an explanation and nothing
+  else.** It now shows the counts that are real, total violations, the severity split and
+  how many are on platform components, under a heading that says these are counts and not
+  a posture score. Refusing to invent a score should not mean refusing to show the numbers
+  that exist.
+- `renderRemediateTab` also wrote the summary cards, and being the later of the two writers
+  it silently replaced whatever the Audit half had put there. Two owners for one element is
+  the failure the page merge existed to remove, and it survived the merge because that half
+  was lifted wholesale.
+
+- **The pull script could not reach a Central with a self signed certificate, which is
+  what the operator installs by default.** It stopped at the token check having written
+  only an error file, leaving a directory that looked like a pull returning almost
+  nothing. It now resolves TLS before touching the token, in order of trustworthiness: a
+  CA you supplied, then the `central-tls` secret read through your authenticated `oc`
+  session, and failing both it stops and prints the certificate's issuer, its SHA-256
+  fingerprint, and two commands that work.
+- `--pinnedpubkey` alone can never verify a self signed certificate. It is an additional
+  check rather than a replacement, so curl rejects the chain before it looks at the pin.
+  The `--pin` option now disables the chain check and enforces the key, which is the
+  combination that actually works. A wrong key fails closed with `curl (90)`, asserted
+  against a real self signed TLS server rather than by reading the script.
+- The curl command was assembled before the TLS decision was made, so whatever
+  `resolve_tls` chose was silently discarded. One branch rebuilt it by hand and the others
+  did not. It is rebuilt once now, after the decision is final.
+- A failed run left a findings directory behind. TLS failures now leave nothing, and a
+  token rejection writes `RUN_FAILED.txt` saying not to read the directory as a clean
+  cluster. `cleanup` is called before the `rmdir` it would otherwise defeat, since the
+  trap runs on exit and the directory is never empty until it has.
 
 ### Added
 
@@ -213,7 +387,7 @@ tool stamps into every report and patch header it writes.
   toolset. A note describing the state of a local working folder was removed; it did not
   belong in a published repository.
 
-- 200 more tests. `test/exports.cjs` loads all six pull script outputs and asserts merging
+- 237 more tests. `test/exports.cjs` loads all six pull script outputs and asserts merging
   and deduplication. `test/cli_violations.cjs` runs the CLI as a real process and inspects
   what lands on disk, chiefly that report mode leaves nothing applyable behind, and that a
   selection is honoured on both surfaces.

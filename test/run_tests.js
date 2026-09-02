@@ -31,6 +31,7 @@ const SUITES = [
   ['scripts.cjs', 'the shell scripts agree with each other about trust and credentials'],
   ['posture_platform.cjs', 'no score over zero manifests, and the platform override'],
   ['version.cjs', 'the version agrees across the code, the CHANGELOG and the git tag'],
+  ['ci.cjs', 'the CI workflow asserts what the README claims, and can actually fail'],
   ['page.cjs', 'whole page wiring in a real DOM (needs jsdom, skips without it)'],
 ];
 

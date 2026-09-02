@@ -25,12 +25,25 @@ jobs:
 
       # jsdom is the only thing here that needs a package manager, and it is optional.
       # The suite skips the whole page tests without it rather than failing, because the
-      # tool itself must keep working on a machine that has no npm.
+      # tool itself must keep working on a machine that has no npm. In CI we install it,
+      # because a skipped suite in CI is a suite nobody is running.
       - name: Install jsdom for the whole page tests
         run: npm install --no-save jsdom
 
       - name: Run the suite
         run: node test/run_tests.js
+
+      # A suite that crashes prints no summary line, so its assertions are absent from the
+      # total rather than counted as failures. The runner names that in its output; fail
+      # the build on it explicitly so it cannot be read as a pass.
+      - name: No suite crashed before reporting
+        run: |
+          set -uo pipefail
+          if node test/run_tests.js | grep -q "CRASHED BEFORE REPORTING"; then
+            echo "::error::a test suite crashed and its assertions are not in the total"
+            exit 1
+          fi
+          echo "every suite reported"
 
   guarantees:
     runs-on: ubuntu-latest
@@ -39,23 +52,65 @@ jobs:
 
       # These are the properties the README and SECURITY.md claim. Assert them in CI so a
       # claim cannot quietly become false.
-      - name: No exec, eval or Function constructor in shipped files
+      #
+      # Every check below globs rather than naming files. Naming them is how this job
+      # broke once already: it listed the old remediation page by name, that file was
+      # deleted in 1.2.0, and grep started exiting 2 on the missing path. `if grep` reads
+      # a non zero exit as "no match", so the step printed "clean" and passed. Worse, the
+      # error masked real matches in the files that did still exist, so a planted eval()
+      # went undetected. A check that cannot fail is worse than no check: it is counted.
+      - name: The files these checks assert on actually exist
         run: |
-          if grep -nE '\beval\(|new Function\(|child_process' \
-              acs_policies.js dj_acs_auditor.html dj_acs_remediation.html; then
+          set -eu
+          for f in acs_policies.js acs_cli.js dj_acs_auditor.html; do
+            test -f "$f" || { echo "::error::expected $f and it is not here"; exit 1; }
+          done
+          n=$(ls dj_acs_*.html | wc -l)
+          test "$n" -ge 1 || { echo "::error::no page files matched"; exit 1; }
+          echo "found the files, $n page file(s)"
+
+      - name: No exec, eval or Function constructor in a shipped page or the engine
+        run: |
+          set -eu
+          if grep -nE '\beval\(|new Function\(|child_process' acs_policies.js dj_acs_*.html; then
             echo "::error::found an execution primitive in a shipped file"; exit 1
           fi
           echo "clean"
 
+      # acs_cli.js is allowed exactly one subprocess: git status, to refuse --in-place on a
+      # dirty tree. Assert it is that and only that, rather than exempting the whole file.
+      - name: The CLI spawns nothing but the git safety check
+        run: |
+          set -eu
+          count=$(grep -c "require('child_process')" acs_cli.js || true)
+          test "$count" -eq 1 || { echo "::error::expected exactly one child_process require, found $count"; exit 1; }
+          grep -q "execFileSync('git', \['status', '--porcelain'\]" acs_cli.js \
+            || { echo "::error::the one subprocess is no longer git status --porcelain"; exit 1; }
+          if grep -nE "exec\(|execSync\(|spawn\(|shell: *true" acs_cli.js; then
+            echo "::error::a shell capable spawn appeared in the CLI"; exit 1
+          fi
+          echo "one subprocess, git status, no shell"
+
       - name: No token written to browser storage
         run: |
-          if grep -nE 'localStorage[^;]{0,150}(acsToken|vulnToken|ocpToken)' dj_acs_*.html; then
-            echo "::error::a token reaches browser storage"; exit 1
+          set -eu
+          if grep -nE 'localStorage[^;]{0,150}(acsToken|vulnToken|ocpToken|Bearer)' dj_acs_*.html; then
+            echo "::error::a credential reaches browser storage"; exit 1
           fi
           echo "clean"
 
+      # The connectors were removed in 1.1.0. Assert the absence, not the handling.
+      - name: The page holds no credential field and makes no network call
+        run: |
+          set -eu
+          if grep -nE 'type="password"|acsToken|vulnToken|ocpToken|\bfetch\s*\(|XMLHttpRequest' dj_acs_*.html; then
+            echo "::error::the page can take a credential or make a request"; exit 1
+          fi
+          echo "no credential can enter the page"
+
       - name: Engine issues no write methods to a cluster
         run: |
+          set -eu
           if grep -nE "method: *['\"](POST|PUT|PATCH|DELETE)" acs_policies.js; then
             echo "::error::engine can write to a cluster"; exit 1
           fi
@@ -63,8 +118,43 @@ jobs:
 
       - name: Vendored dependency hashes match the published values
         run: |
+          set -eu
           echo "45dc3dd03dc07a06705a2c2989b8c7f709013f04bd5386e3279d4e447f07ebd7  vendor/js-yaml.min.js" | sha256sum -c -
           echo "acc7e41455a80765b5fd9c7ee1b8078a6d160bbbca455aeae854de65c947d59e  vendor/jszip.min.js"  | sha256sum -c -
 
       - name: Shell scripts parse under POSIX sh
-        run: for f in scripts/*.sh acs.sh; do sh -n "$f" && echo "ok $f"; done
+        run: |
+          set -eu
+          for f in scripts/*.sh acs.sh; do sh -n "$f" && echo "ok $f"; done
+
+      # The version is stamped into every report and patch header. If it disagrees with the
+      # newest CHANGELOG heading, a reader cannot tell which build produced an artifact.
+      - name: Version agrees across the code, the CHANGELOG and the tag
+        run: node test/version.cjs
+
+  # Prove the guarantee checks can actually fail. A green job proves nothing unless a
+  # planted violation turns it red, and this job is the reason the last one broke silently.
+  selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: A planted eval() must be caught
+        run: |
+          set -eu
+          cp dj_acs_auditor.html /tmp/poisoned.html
+          echo '<script>eval("1+1")</script>' >> /tmp/poisoned.html
+          if grep -nE '\beval\(|new Function\(' /tmp/poisoned.html >/dev/null; then
+            echo "the check detects a planted eval, so it is live"
+          else
+            echo "::error::the eval check does not detect a planted eval"; exit 1
+          fi
+      - name: A planted password field must be caught
+        run: |
+          set -eu
+          cp dj_acs_auditor.html /tmp/pw.html
+          echo '<input type="password" id="acsToken">' >> /tmp/pw.html
+          if grep -nE 'type="password"' /tmp/pw.html >/dev/null; then
+            echo "the credential check detects a planted field, so it is live"
+          else
+            echo "::error::the credential check does not detect a planted field"; exit 1
+          fi

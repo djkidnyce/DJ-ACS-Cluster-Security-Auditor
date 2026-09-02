@@ -27,7 +27,7 @@
    test/version.cjs asserts it agrees with the newest CHANGELOG heading and with the git
    tag when one is checked out. A tool whose banner disagrees with its tag cannot be used
    as evidence, because you cannot tell which build produced a given report. */
-const ACS_VERSION = '1.2.0';
+const ACS_VERSION = '1.3.0';
 const ACS_TOOL = "DJ's ACS Auditor v" + ACS_VERSION;
 
 /* ACS severity scale and the weight each carries in the posture score. A Critical costs
@@ -123,6 +123,7 @@ const ACS_POLICIES = [
   } },
 
 { id: 'ACS.002',
+  runtimeRisk: 'Can crash loop a workload that writes anywhere on its root filesystem, which is common: log files, PID files, a scratch directory, or a framework that writes to /tmp on startup. Mount an emptyDir at each path that needs to be writable, then apply this.',
   acsPolicy: 'Container using read-write root filesystem',
   acsCriteria: 'Read-Only Root Filesystem',
   categories: ['Docker CIS'],
@@ -284,6 +285,7 @@ const ACS_POLICIES = [
   } },
 
 { id: 'ACS.008',
+  runtimeRisk: 'Dropping ALL removes capabilities some images genuinely need: NET_BIND_SERVICE for a port below 1024, NET_RAW for ping style health checks, CHOWN or SETUID for an entrypoint that drops privileges itself. Add back exactly what the workload needs rather than reverting the drop.',
   acsPolicy: 'Container does not drop all capabilities',
   acsCriteria: 'Drop Capabilities',
   categories: ['Privileges'],
@@ -319,6 +321,7 @@ const ACS_POLICIES = [
   } },
 
 { id: 'ACS.009',
+  runtimeRisk: 'If the image has no numeric non root USER, the kubelet refuses to start the container with CreateContainerConfigError, because it cannot verify the user is not root. Set runAsUser to the uid the image runs as, or rebuild the image with a USER line, then apply this.',
   acsPolicy: 'Deployments should not run as root user',
   acsCriteria: 'Run as Privileged User',
   categories: ['Privileges', 'Docker CIS'],
@@ -543,6 +546,7 @@ const ACS_POLICIES = [
   } },
 
 { id: 'ACS.016',
+  runtimeRisk: 'Breaks any pod that calls the Kubernetes API from inside itself: operators, controllers, service meshes, anything using in cluster config. If the pod needs the API, leave the token mounted and scope the service account instead.',
   acsPolicy: 'Pod Service Account Token Automatically Mounted',
   acsCriteria: 'Automount Service Account Token',
   categories: ['Kubernetes'],
@@ -2236,6 +2240,22 @@ function buildHtmlReport(st) {
       }).join('') + '</table>';
   }
 
+  /* Fixes that are correct and can still stop a workload. Naming them once in the report
+     matters because the report is what a reviewer reads before approving a change. */
+  const riskyFindings = (findings || []).filter(function (f) { return f.policy.runtimeRisk; });
+  const riskHtml = riskyFindings.length ? (
+    '<h2>Fixes that can stop the workload</h2>' +
+    '<p class="muted">These are classified as automatic because the edit itself is ' +
+    'unambiguous. That is a statement about the YAML, not about your application. Each one ' +
+    'below is correct hardening that can crash loop a workload which was relying on the ' +
+    'thing being removed. Test in a namespace you do not care about first.</p>' +
+    '<table><tr><th>ID</th><th>Policy</th><th>Object</th><th>What can break</th></tr>' +
+    riskyFindings.map(function (f) {
+      return '<tr><td><b>' + E(f.policy.id) + '</b></td><td>' + E(f.policy.acsPolicy) + '</td>' +
+        '<td>' + E(f.obj) + '</td><td>' + E(f.policy.runtimeRisk) + '</td></tr>';
+    }).join('') + '</table>'
+  ) : '';
+
   const findingsHtml = files.length
     ? '<h2>Findings in your manifests</h2><table><tr><th>#</th><th>ID</th><th>Severity</th><th>Score</th><th>Policy and finding</th><th>Object</th><th>File</th><th>Fix</th></tr>' + rows + '</table>'
     : '';
@@ -2256,6 +2276,7 @@ function buildHtmlReport(st) {
       const sev = ACS_SEVERITY[r.acsSeverity] ? ACS_SEVERITY[r.acsSeverity].label : 'Low';
       return '<tr>' +
         '<td><span class="sev ' + E(sev) + '">' + E(sev) + '</span></td>' +
+        '<td>' + (r.policy ? r.policy.score.toFixed(1) : '&mdash;') + '</td>' +
         '<td>' + (r.policy ? '<b>' + E(r.policy.id) + '</b> ' : '') + E(r.acsPolicyName || '') + '</td>' +
         '<td>' + E(r.obj || '') + '</td>' +
         '<td>' + E(r.namespace || '') + '</td>' +
@@ -2265,9 +2286,15 @@ function buildHtmlReport(st) {
           ? ' <span class="muted">(' + (r.platformSource === 'acs' ? 'ACS reported' : 'namespace match') + ')</span>'
           : '') + '</td></tr>';
     };
-    const user = all.filter(function (r) { return !r.isPlatform; });
-    const plat = all.filter(function (r) { return r.isPlatform; });
-    const head = '<tr><th>Severity</th><th>ACS policy</th><th>Object</th><th>Namespace</th><th>State</th><th>Violation</th><th>Fix route</th></tr>';
+    /* Worst first. An audit report read top to bottom should start with what matters,
+       and an unmatched violation has no score, so it sorts last rather than as a zero. */
+    const byScore = function (x, y) {
+      const a = x.policy ? x.policy.score : -1, b = y.policy ? y.policy.score : -1;
+      return b - a;
+    };
+    const user = all.filter(function (r) { return !r.isPlatform; }).sort(byScore);
+    const plat = all.filter(function (r) { return r.isPlatform; }).sort(byScore);
+    const head = '<tr><th>Severity</th><th>Score</th><th>ACS policy</th><th>Object</th><th>Namespace</th><th>State</th><th>Violation</th><th>Fix route</th></tr>';
     acsHtml =
       '<h2>Violations reported by ACS</h2>' +
       '<p class="muted">' + st.acs.total + ' violation(s) imported: ' + st.acs.user +
@@ -2348,10 +2375,43 @@ function buildHtmlReport(st) {
     postureHtml +
     acsHtml +
     findingsHtml +
+    riskHtml +
     vulnHtml +
     '<h2>Method</h2><p>Each policy mirrors a Red Hat ACS default security policy: same name, same ACS severity, same categories and lifecycle stage, with the ACS remediation guidance carried through. Severity drives a weighted posture score in which every applicable policy and object pair is one check, weighted Critical 18, High 10, Medium 5 and Low 2. Posture is passed weight over total applicable weight, and the denominator is derived only from what was scanned rather than what was found, so the current and projected numbers are directly comparable. CVSS style scores are for ranking configuration weakness classes, not instance specific vulnerability scoring. STIG references are mapping aids and must be verified against the current DISA release before they are cited in an accreditation package.</p>' +
     '<h2>Limits</h2><p>This is static analysis of manifest text. It does not query a cluster and does not replace ACS, admission control such as Pod Security Admission or Kyverno, or runtime enforcement. ACS policies that evaluate build metadata or runtime process behaviour cannot be assessed from YAML. Image CVEs appear here only when an ACS vulnerability export was supplied; this tool performs no scanning of its own, so an absence of CVEs below means none were imported, not that none exist.</p>' +
     '<h2>References</h2><ul>' + ACS_REFERENCES.map(function (r) { return '<li>' + anchor(r[1], r[0]) + '</li>'; }).join('') + '</ul>' +
+    /* Sorting.
+     *
+     * The report is a standalone file that outlives the session, and the first thing
+     * anybody does with a findings table is reorder it: worst first, or grouped by
+     * namespace, or by the file they own. Without this they export to a spreadsheet to do
+     * it, and the spreadsheet is what gets circulated instead of the report.
+     *
+     * Applied to every table generically rather than wired per table, so one added later
+     * is sortable without anybody remembering to do it. Numeric columns are detected from
+     * the values rather than declared, because a declaration is one more thing to keep in
+     * step with the markup. */
+    '<script>(function(){' +
+    'function cmp(a,b,i,num){var x=a.cells[i].textContent.trim(),y=b.cells[i].textContent.trim();' +
+    'if(num){var nx=parseFloat(x.replace(/[^0-9.\\-]/g,"")),ny=parseFloat(y.replace(/[^0-9.\\-]/g,""));' +
+    'if(isNaN(nx))nx=-Infinity;if(isNaN(ny))ny=-Infinity;return nx-ny;}' +
+    'return x.localeCompare(y,undefined,{numeric:true});}' +
+    'Array.prototype.forEach.call(document.querySelectorAll("table"),function(tb){' +
+    'var head=tb.rows[0];if(!head)return;' +
+    'Array.prototype.forEach.call(head.cells,function(th,i){' +
+    'th.style.cursor="pointer";th.title="Sort by "+th.textContent.trim();' +
+    'var base=th.textContent;th.addEventListener("click",function(){' +
+    'var rows=Array.prototype.slice.call(tb.rows,1);if(!rows.length)return;' +
+    'var num=rows.every(function(r){var v=r.cells[i]?r.cells[i].textContent.trim():"";' +
+    'return v===""||v==="\\u2014"||/^[0-9]+(\\.[0-9]+)?$/.test(v);});' +
+    'var dir=th.getAttribute("data-dir")==="1"?-1:1;' +
+    'Array.prototype.forEach.call(head.cells,function(o){o.removeAttribute("data-dir");' +
+    'o.textContent=o.textContent.replace(/ [\\u25b2\\u25bc]$/,"");});' +
+    'th.setAttribute("data-dir",dir===1?"1":"0");' +
+    'th.textContent=base.replace(/ [\\u25b2\\u25bc]$/,"")+(dir===1?" \\u25b2":" \\u25bc");' +
+    'rows.sort(function(a,b){return cmp(a,b,i,num)*dir;});' +
+    'rows.forEach(function(r){tb.appendChild(r);});});});});' +
+    '})();<\/script>' +
     '<script>(function(){var t=document.getElementById("tg");function ap(m){document.body.classList.toggle("dark",m==="dark");t.textContent=m==="dark"?"Light mode":"Dark mode";try{localStorage.setItem("acsRepTheme",m)}catch(e){}}' +
     't.addEventListener("click",function(){ap(document.body.classList.contains("dark")?"light":"dark")});' +
     'var s="light";try{s=localStorage.getItem("acsRepTheme")||"light"}catch(e){}ap(s)})();<\/script>' +
@@ -2506,6 +2566,19 @@ function violationKey(rec) {
   return rec.acsAlertId || (rec.acsPolicyName + '|' + rec.obj + '|' + rec.namespace);
 }
 
+/* Wrap prose for a comment block. Long single line comments in a YAML header are worse
+   than no comment: people stop reading at the edge of the terminal. */
+function wrapAt(text, width) {
+  const words = String(text).split(/\s+/);
+  const out = []; let line = '';
+  for (const w of words) {
+    if (line && (line + ' ' + w).length > width) { out.push(line); line = w; }
+    else line = line ? line + ' ' + w : w;
+  }
+  if (line) out.push(line);
+  return out;
+}
+
 function buildViolationFixBundle(acs, opts) {
   const o = opts || {};
   const mode = resolveFixMode(o.mode);
@@ -2581,6 +2654,21 @@ function buildViolationFixBundle(acs, opts) {
       header.push('# to patch it anyway. If it is operator managed, the operator will revert');
       header.push('# this, and the resulting drift will look like a deliberate change to whoever');
       header.push('# reviews it. Confirm you own this object before applying.');
+    }
+    const risks = g.policies.map(function (pid) {
+      const pol = ACS_POLICIES.filter(function (x) { return x.id === pid; })[0];
+      return pol && pol.runtimeRisk ? { id: pid, note: pol.runtimeRisk } : null;
+    }).filter(Boolean);
+    if (risks.length) {
+      header.push('#');
+      header.push('# CAN STOP THE WORKLOAD. This patch is correct hardening, and applying it');
+      header.push('# without checking the workload can crash loop it. Test in a namespace you');
+      header.push('# do not care about before this goes anywhere real.');
+      for (const r of risks) {
+        header.push('#');
+        header.push('#   ' + r.id + ':');
+        for (const line of wrapAt(r.note, 72)) header.push('#     ' + line);
+      }
     }
     if (g.needsContainerName) {
       header.push('#');
@@ -3089,7 +3177,7 @@ function describeUnloadable(text) {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    ACS_VERSION: ACS_VERSION, ACS_TOOL: ACS_TOOL,
+    ACS_VERSION: ACS_VERSION, ACS_TOOL: ACS_TOOL, wrapAt: wrapAt,
     violationKey: violationKey,
     describeUnloadable: describeUnloadable,
     ACS_TOOL, ACS_SEVERITY, ACS_POLICIES, WORKLOADS,

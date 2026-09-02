@@ -16,7 +16,7 @@ Audit Kubernetes and OpenShift manifests against Red Hat Advanced Cluster Securi
 | `scripts/acs_pull_all.sh` and `.ps1` | Pull every finding ACS has, all severities and states, from outside the browser |
 | `scripts/acs_pull_via_oc.sh` | Same, but reaches Central through your existing `oc` session |
 | `scripts/acs_pull_over_ssh.ps1` | PowerShell, when only a bastion can reach the cluster |
-| `test/run_tests.js` | 823 tests against the real engine, the page, the scripts and the CLI |
+| `test/run_tests.js` | 899 tests against the real engine, the page, the scripts and the CLI |
 
 Open either HTML file directly. There is nothing to install and no server to run.
 
@@ -35,7 +35,7 @@ Shapes verified against the upstream StackRox definitions: `api/v1/alert_service
 
 Three sources, and you can use any combination.
 
-**Local scan.** Drop in YAML and the engine evaluates it against replicas of the ACS default Deploy stage policies. Works with no ACS access at all, which makes it usable in development, in CI, and on a disconnected network.
+**Local scan.** Drop in YAML and the engine evaluates it against replicas of twenty ACS default policies. Works with no ACS access at all, which makes it usable in development, in CI, and on a disconnected network.
 
 **Your ACS violations.** Run `scripts/acs_pull_all.sh`, then drop what it writes onto the page. A roxctl JSON report works too. Each violation is matched back to a policy by name, so findings present in both are marked **live in ACS**, which tells you the problem is not theoretical: it exists in a running cluster right now.
 
@@ -47,7 +47,7 @@ Drop as many of those files as you like, in any order. They accumulate rather th
 
 ## Seeing and fixing violations
 
-Every violation in the export gets a row: severity, policy, object, namespace, state, the violation text, and what can be done about it. Filters cover your workloads against platform components, matched against unmatched, and fixable only. Click a row for the rationale, the standards it maps to, and the reasoning behind the fix route.
+Every violation in the export gets a row: severity, score, policy, object, namespace, state, the violation text, and what can be done about it. Severity is what your ACS reported and may be tuned; the score is this tool's own ranking of the weakness class, so sort by it to order work inside a severity band. An unmatched violation shows an em dash rather than a zero, because zero would rank it as harmless rather than as not assessed. Filters cover your workloads against platform components, matched against unmatched, and fixable only. Click a row for the rationale, the standards it maps to, and the reasoning behind the fix route.
 
 The Fix column is the point. A count you cannot act on is not a finding.
 
@@ -273,7 +273,11 @@ Every route shows a real diff computed against your actual file, not a descripti
 
 Fixes are classified, and the classification is the most important judgment in the tool.
 
-**Auto** means one correct change with no plausible downside: `privileged`, `allowPrivilegeEscalation`, `readOnlyRootFilesystem`, host namespaces, capabilities, `runAsNonRoot`, resource requests and limits, `automountServiceAccountToken`, host ports, and rewriting a hardcoded credential to a `secretKeyRef`.
+**Auto** describes the edit, not your application. It means the change to the YAML is unambiguous: there is one correct value and the tool knows it. It does **not** mean the workload will survive the change.
+
+Four of them can stop a workload that was relying on what gets removed: `readOnlyRootFilesystem` on anything that writes to disk, dropping all capabilities from an image that needs one, `runAsNonRoot` against an image with no numeric non-root user, and unmounting the service account token from a pod that calls the Kubernetes API. Each carries a specific note naming the failure and the remedy, and it appears in the confirmation dialog, the change log, the drafted patch header, the CLI output and the report. Test them in a namespace you do not care about first.
+
+Auto covers: `privileged`, `allowPrivilegeEscalation`, `readOnlyRootFilesystem`, host namespaces, capabilities, `runAsNonRoot`, resource requests and limits, `automountServiceAccountToken`, host ports, and rewriting a hardcoded credential to a `secretKeyRef`.
 
 **Generate** creates a new object rather than editing one, currently the default deny NetworkPolicy with DNS egress already allowed.
 
@@ -334,11 +338,43 @@ This is the normal case on a hardened host in a controlled enclave, so it is a s
 | A summary you can read or hand over from the shell | `scripts/acs_summary.sh <pull-dir> -o findings.md`. jq only |
 | The headless CLI, for CI | A container: `podman run --rm -v "$PWD":/w:Z -w /w docker.io/library/node:20-alpine node acs_cli.js --help` |
 
-`acs_summary.sh` counts what ACS reported: violations by severity, policy and namespace, the split between your workloads and platform components, which violations arrived with no `platformComponent` field at all, CVEs by Red Hat severity, how many are actually fixable, and the images to rebuild ranked by critical count.
+`acs_pull_all.sh` runs this for you at the end of every pull, writing `findings.md` into the run directory and printing it. `--no-summary` turns that off.
 
-It does not produce a posture score and does not draft fixes, and it says so in its own output. Both need the policy engine, and the engine needs the page or the CLI. A summary that implied a score it had not computed would be the same defect as scoring an empty scan.
+`acs_summary.sh` counts what ACS reported: violations by severity, policy and namespace, the split between your workloads and platform components, which violations arrived with no `platformComponent` field at all, CVEs by Red Hat severity, how many are actually fixable, how many are on the CISA Known Exploited Vulnerabilities catalog, the images to rebuild ranked by worst CVSS, and the highest scoring CVEs with the version each is fixed in.
+
+It reports CVSS, which is the score ACS supplied. It does not reproduce the tool's own 0 to 15 priority ranking, which additionally weighs the CISA catalog, EPSS, fixability and whether pods are running the image: that model lives in the engine, and a second ranking in jq would drift from it. It does not produce a posture score and does not draft fixes, and it says so in its own output. Both need the policy engine, and the engine needs the page or the CLI. A summary that implied a score it had not computed would be the same defect as scoring an empty scan.
 
 The wrapper scripts (`acs.sh`, `acs.ps1`, `acs.cmd`) detect a missing Node and print these routes rather than failing with `command not found`.
+
+## Central's certificate is self signed, and that is normal
+
+The RHACS operator installs a self signed certificate for Central. Your system trust store will never verify it, so `curl (60) SSL certificate problem` on the first run is the expected outcome, not a misconfiguration.
+
+`--insecure` is not the answer. That request carries a token that reads your entire security posture, and disabling verification hands it to anyone on the path. The script does not offer it as a shortcut.
+
+Run the pull and it works out the best available route by itself, in this order:
+
+1. **A CA you supplied**, via `--cacert` or `ROX_CA`. You decided where it came from.
+2. **The `central-tls` secret, read through your `oc` session.** The cluster tells us its own CA over a connection `oc` already verified. If `oc` is logged in this usually just works, and the CA is saved for next time.
+3. **Nothing automatic worked**, so it stops and shows you the certificate's issuer and SHA-256 fingerprint, plus two commands that will work.
+
+Confirm that fingerprint against the cluster through some channel other than the connection you are trying to trust. That confirmation is the entire security of what follows.
+
+```bash
+# A: verify against the certificate itself. A self signed certificate is its own
+# issuer, so it works as a CA bundle. Full verification, hostname check included.
+./scripts/acs_pull_all.sh --cacert findings/central-cert.pem -o findings
+
+# B: pin the public key. Works even when the hostname does not match the
+# certificate, which is common through a port forward.
+./scripts/acs_pull_all.sh --pin 'sha256//<the hash it printed>' -o findings
+```
+
+A is better where it works, because it keeps hostname verification. The script tests A against your endpoint before recommending it, so it only offers it when it actually works.
+
+B turns the chain check off and requires that exact public key instead. `--pinnedpubkey` on its own cannot help here: it is an additional check rather than a replacement, so curl rejects a self signed certificate before it ever looks at the pin. The pin is enforced, and a wrong key fails closed with `curl (90)`.
+
+A failed run leaves no findings directory. If TLS never resolved there is nothing to keep, and if the token was rejected the directory is marked `RUN_FAILED.txt` so it cannot be mistaken for a pull that came back clean.
 
 ## When the pull script fails on TLS
 
@@ -380,6 +416,25 @@ If your organisation already publishes a CA bundle, use that instead of extracti
 
 Both scripts now detect this failure and print these commands rather than the word `--cacert`. A CA path that does not exist is refused with a non zero exit rather than quietly falling back to no verification.
 
+## Coverage, stated as a number
+
+This tool models **twenty** policies. Red Hat ACS ships roughly seventy defaults, and most teams add their own. So a clean posture score here means clean against twenty checks, not compliant with the ACS default policy set, and it should never be quoted as the latter.
+
+What the twenty cover: the Deploy stage configuration weaknesses that are visible in a manifest and mechanically checkable. Privilege, host namespaces, capabilities, root, resource limits, service account tokens, host ports, secrets in environment variables, and a default deny NetworkPolicy.
+
+What they do not, and cannot:
+
+| Not covered | Why |
+|---|---|
+| Build stage policies, image provenance, signature and registry rules | Nothing in a manifest tells you where the image was built or by whom |
+| Runtime policies: process execution, network baselines, file integrity | These describe behaviour of a running container, not declared state |
+| Image CVE policies | CVEs come from the ACS vulnerability export and are reported separately; they are deliberately kept out of the posture score |
+| Your own tuned or custom policies | This tool does not know they exist. They arrive through the ACS export and are shown as **unmatched** rather than dropped |
+
+A violation this tool cannot match to a policy appears in the violations table under its own filter, with the fix route `Not modelled`. That is the honest answer, and it is why the unmatched count is worth watching after an ACS upgrade: a jump in it means the catalogue has drifted from your ACS version.
+
+**Use this alongside ACS, not instead of it.** ACS sees the cluster, the build pipeline and the runtime. This sees the manifest, and fixes it.
+
 ## The posture score, and when there isn't one
 
 The denominator comes from what was scanned, never from what was found. That is what makes the projected score comparable to a real rescan.
@@ -397,7 +452,7 @@ node test/run_tests.js
 npm install jsdom && node test/run_tests.js
 ```
 
-674 engine, CLI and script tests, no install required, plus 149 whole page tests that need jsdom and skip without it. 823 in total.
+745 engine, CLI and script tests, no install required, plus 154 whole page tests that need jsdom and skip without it. 899 in total. Suites that need something the machine lacks say what is missing rather than skipping silently.
 
 They cover the policy catalogue, scanning and scoring, fix application and YAML validity, diff correctness, merge patch minimality, ACS import across every export shape the pull script writes plus renamed policy matching, the full remediation flow including that preview mutates nothing and undo restores byte for byte, and the vulnerability path end to end: NDJSON parsing, CVE deduplication, priority reasoning, manifest correlation and drift.
 

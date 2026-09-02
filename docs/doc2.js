@@ -62,7 +62,7 @@ push([Tbl(['', "DJ's ACS Auditor v" + VERSION], [
   ['Surfaces', 'One page with an Audit and a Remediate tab, pull scripts, command line'],
   ['Writes to disk', 'The page hands you files to download. The CLI writes only where you point it, and only in manual or auto mode'],
   ['Talks to a cluster', 'The page never does. The scripts and the CLI issue GET only'],
-  ['Tests', '823 across the engine, the page, the scripts and the command line'],
+  ['Tests', '899 across the engine, the page, the scripts and the command line'],
 ], [1900, 7400])]);
 body.push(P('', { spacing: { after: 140 } }));
 T('It is deliberately conservative, because it exists to be pointed at production manifests by people who may not have written them. That is the reason report is the default mode, the reason platform components are never patched, and the reason nothing it produces is ever applied on your behalf.');
@@ -407,7 +407,16 @@ push([Bul('Untrusted input is the YAML and the ACS export a user loads. Both are
       Bul('The most realistic failure is not an attack. It is a wrong finding trusted without review, or a stale policy set that quietly stops catching something. That is what sections 6 and 8 exist to prevent.')]);
 
 // 12
-H1('15. Running where Node cannot be installed');
+H1('15. A CI check that could not fail');
+T('The guarantee job in .github/workflows/ci.yml asserts the properties the README claims. It stopped working in 1.2.0 and nobody noticed for three releases.');
+T('It greps three files for exec primitives, and one of them was the remediation page, which 1.2.0 deleted. grep exits 2 on a missing path. The step was written as if grep ...; then fail; fi, and a non zero exit reads as "no match", so it printed clean and passed. The error also masked real matches in the files that did still exist: a planted eval() in the surviving page went undetected.');
+push(Note('crit', 'The rule this produced', [
+  'A check that cannot fail is worse than no check, because it is counted. A green build with a dead assertion in it is a false statement about the code.',
+  'Every grep target in that workflow now globs rather than naming a file, and a step asserts the files exist before anything greps them. Each step runs under set -e so an unexpected error stops it rather than being read as success.',
+  'There is a selftest job that plants an eval() and a password field and requires the checks to catch them. If the checks ever go dead again, that job goes red.',
+  'test/ci.cjs asserts all of this from the suite, so the workflow is covered the same way the code is. When you add a guarantee to the README, add it to the workflow and to that suite in the same commit.']));
+
+H1('16. Running where Node cannot be installed');
 T('A hardened host in a controlled enclave often has curl and jq and no route to install anything else. That machine is a first class target for this tool, not an edge case, so the split is deliberate.');
 push([Tbl(['Surface', 'Needs', 'Covers'], [
   ['dj_acs_auditor.html', 'A browser', 'Everything: posture, findings, violations, fix routes, drafted YAML, the HTML report and the JSON export'],
@@ -423,7 +432,7 @@ push(Note('crit', 'If you extend the summary script', [
   'Keep it to counts of what ACS reported. Nothing inferred, nothing weighted, nothing called a score.',
   'test/scripts.cjs asserts that its output contains no grade and no score, and that it states what it cannot tell you. Those assertions are the guard rail; do not relax them to make a nicer looking report.']));
 
-H1('16. Maintainer troubleshooting');
+H1('17. Maintainer troubleshooting');
 push([Tbl(['Symptom', 'Diagnosis'], [
   ['mapfile: command not found', 'bash 3.2 on macOS. See section 10.'],
   ['A test passes against known broken code', 'The fixture cancels the error out. Rebuild it so the defect is observable, then confirm the test fails against the old code.'],
@@ -442,7 +451,7 @@ push([Tbl(['Symptom', 'Diagnosis'], [
 ], [3200, 6100])]);
 
 // 13
-H1('17. Ownership and escalation');
+H1('18. Ownership and escalation');
 T('Both toolsets are maintained by DJ. Issues, policy suggestions, and pull requests: github.com/djkidnyce');
 H2('What to include in a report');
 push([Bul('For a scoring or matching problem: the manifest set, and the ACS export if you can share it. A match failure cannot be reproduced without both.'),

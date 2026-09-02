@@ -181,12 +181,22 @@ async function auditor() {
   t('the count line says what the filters are hiding',
     /1 of 2/.test($('violCount').textContent));
   const cells = vrows()[0].querySelectorAll('td');
-  t('each row carries a checkbox, severity, policy, object, namespace, state, detail and fix',
-    cells.length === 8);
+  t('each row carries a checkbox, severity, score, policy, object, namespace, state, detail and fix',
+    cells.length === 9);
   t('the fix column is filled in for every row',
-    vrows().every((r) => r.querySelectorAll('td')[7].textContent.trim().length > 0));
+    vrows().every((r) => r.querySelectorAll('td')[8].textContent.trim().length > 0));
   t('the detail column shows the violation text, not a placeholder',
-    /privileged/i.test(vrows()[0].querySelectorAll('td')[6].textContent));
+    /privileged/i.test(vrows()[0].querySelectorAll('td')[7].textContent));
+
+  /* A violation you cannot rank is a violation you cannot triage. The severity band is
+     four buckets; the score is what orders the work inside them. */
+  t('every matched violation shows its score',
+    vrows().every((r) => /^\d+\.\d$/.test(r.querySelectorAll('td')[2].textContent.trim())));
+  w.document.querySelector('#vtbl th[data-vk="score"]').click();
+  const scores = vrows().map((r) => parseFloat(r.querySelectorAll('td')[2].textContent));
+  t('and the table sorts by it, worst first',
+    scores.every((v, i) => i === 0 || scores[i - 1] >= v));
+  w.document.querySelector('#vtbl th[data-vk="sev"]').click();
 
   const before = vrows().length;
   $('vfUser').checked = false; $('vfUser').dispatchEvent(new w.Event('change'));
@@ -333,11 +343,17 @@ async function noManifests(page) {
   t('  the page is visible on ACS data alone', !$('app').classList.contains('hidden'));
   t('  no manifests were loaded', w.__STATE().files.length === 0);
   const cards = $('cards').textContent;
-  t('  no score card is rendered at all',
-    $('cards').querySelectorAll('.card .num').length === 0);
-  t('  so there is no number a reader could mistake for a grade',
-    !/Posture, grade/.test(cards));
-  t('  it says there is no posture score', /No posture score/.test(cards));
+  t('  no grade is shown', !/Posture, grade/.test(cards));
+  t('  and nothing claims a score', !/After auto fixes/.test(cards));
+  /* Counts are not a score. With ACS data loaded they are real numbers worth showing,
+     and showing them is what stops "no posture" reading as "no information". */
+  t('  the ACS severity counts are shown instead',
+    /ACS violations/.test(cards) && $('cards').querySelectorAll('.card .num').length > 0);
+  t('  and they are labelled as counts rather than a score',
+    /These are counts, not a posture score/.test(cards));
+  t('  the platform split is on the cards too', /On platform/.test(cards));
+  t('  it says plainly that these are counts and not a score',
+    /counts, not a posture score/.test(cards));
   t('  and why, in terms of what that number would mean',
     /not the same as|unmeasured/.test(cards));
   t('  and how to get a real one', /oc get deployment|Drop in the YAML/.test(cards));

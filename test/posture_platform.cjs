@@ -122,5 +122,85 @@ console.log('\nReport mode still withholds an overridden patch');
 const rep = E.buildViolationFixBundle(acs, { filesByObj: {}, mode: 'report', overridden: [key] });
 t('an override does not bypass the mode gate', rep.files.length === 0 && rep.suppressed === 1);
 
+/* ---------------------------------------------- ranking ACS violations */
+
+console.log('\nAn ACS violation carries a score, so it can be ranked');
+const scored = first(mk('prod', false, 'payments-api'));
+t('a matched violation has the catalogue score on it',
+  scored.policy && typeof scored.policy.score === 'number' && scored.policy.score > 0);
+
+/* An unmatched violation genuinely has no score. Giving it 0 would sort it below every
+   real finding, which reads as "harmless" rather than "not assessed". */
+const unmatched = first({ alerts: [{ id: 'u1', state: 'ACTIVE', platformComponent: false,
+  namespace: 'prod', policy: { id: 'zz', name: 'Some Custom Policy Nobody Modelled' },
+  deployment: { name: 'thing', type: 'Deployment', namespace: 'prod' } }] });
+t('an unmatched violation has no policy, so no score is invented',
+  !unmatched.matched && !unmatched.policy);
+
+const scoreRep = E.buildHtmlReport({ files: [], findings: [],
+  acs: E.importAcsViolations({ alerts: [
+    mk('prod', false, 'low-one').alerts[0],
+    { id: 'u9', state: 'ACTIVE', platformComponent: false, namespace: 'prod',
+      policy: { id: 'zz', name: 'Unmodelled Thing' },
+      deployment: { name: 'x', type: 'Deployment', namespace: 'prod' } }] }),
+  onlyInAcs: [], vulns: null, vulnCorr: null });
+t('the report shows a score column for violations', /<th>Score<\/th>/.test(scoreRep));
+t('and an em dash where there is no score, not a zero',
+  /&mdash;/.test(scoreRep) && !/<td>0\.0<\/td>/.test(scoreRep));
+
+/* ------------------------------ fixes that are correct and can still break things */
+
+/* "Auto" describes the edit, not the application. Four of the automatic fixes remove
+ * something a workload may have been relying on, and the tool used to present them
+ * identically to genuinely inert changes like dropping hostPID. The classification was
+ * accurate about the YAML and misleading about the consequence.
+ */
+console.log('\nAutomatic fixes that can stop a workload say so');
+
+const risky = E.ACS_POLICIES.filter((p) => p.runtimeRisk);
+t('the risky ones are identified', risky.length === 4);
+t('and they are the ones that actually remove something a workload may need',
+  ['ACS.002', 'ACS.008', 'ACS.009', 'ACS.016'].every((id) => risky.some((p) => p.id === id)));
+t('each names a concrete failure mode rather than a vague warning',
+  risky.every((p) => p.runtimeRisk.length > 120));
+t('and each names the remedy, not just the risk',
+  risky.every((p) => /Mount an emptyDir|Add back|Set runAsUser|leave the token mounted/.test(p.runtimeRisk)));
+t('they are still classified auto, because the edit itself is unambiguous',
+  risky.every((p) => p.fixKind === 'auto'));
+
+console.log('\n  It reaches every surface that presents a fix');
+const rp = E.ACS_POLICIES.find((p) => p.id === 'ACS.002');
+const acsRisk = E.importAcsViolations({ alerts: [{
+  id: 'r1', state: 'ACTIVE', platformComponent: false, namespace: 'prod',
+  policy: { id: 'p', name: rp.acsPolicy, severity: 'MEDIUM_SEVERITY' },
+  deployment: { name: 'app', type: 'Deployment', namespace: 'prod' },
+  violations: [{ message: 'Container "c" has a read write root filesystem' }] }] });
+const bundle = E.buildViolationFixBundle(acsRisk, { filesByObj: {}, mode: 'manual' });
+t('the drafted patch header carries it', bundle.files.length === 1 &&
+  /CAN STOP THE WORKLOAD/.test(bundle.files[0].text));
+t('the header names the specific failure, wrapped to stay readable',
+  /crash loop/.test(bundle.files[0].text) &&
+  bundle.files[0].text.split('\n').every((l) => l.length <= 100));
+t('and the remedy', /emptyDir/.test(bundle.files[0].text));
+
+const man = ['apiVersion: apps/v1', 'kind: Deployment', 'metadata:', '  name: app',
+             '  namespace: prod', 'spec:', '  template:', '    spec:', '      containers:',
+             '      - name: c', '        image: quay.io/x/y:1.0'].join('\n');
+const f = E.parseFileText('m.yaml', man);
+const found = E.scanFiles([f]);
+const rep2 = E.buildHtmlReport({ files: [f], findings: found, acs: null, onlyInAcs: [],
+                                 vulns: null, vulnCorr: null });
+t('the report gives them their own section', /Fixes that can stop the workload/.test(rep2));
+t('which explains that auto describes the edit and not the application',
+  /statement about the YAML, not about your application/.test(rep2));
+t('and lists each object it applies to', /Deployment\/app/.test(rep2));
+
+console.log('\n  The report is sortable, because a findings table nobody can reorder gets exported to a spreadsheet');
+t('the report ships a sort handler', /Sort by/.test(rep2));
+t('it detects numeric columns rather than requiring them to be declared',
+  /parseFloat/.test(rep2));
+t('and it is applied to every table generically, so a new one is sortable for free',
+  /querySelectorAll\("table"\)/.test(rep2));
+
 console.log('\n' + P + ' passed, ' + F + ' failed');
 process.exit(F ? 1 : 0);

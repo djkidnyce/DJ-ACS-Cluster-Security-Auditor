@@ -61,7 +61,7 @@ push([Tbl(['File', 'What it is for'], [
   ['acs_cli.js', 'The same engine headless, for a pipeline or a terminal. Needs Node; the page does not.'],
   ['scripts/', 'Getting the data out of ACS. Preflight, the full pull, and PowerShell, SSH and oc port forward variants. Bash and curl, no runtime.'],
   ['vendor/', 'js-yaml and JSZip, committed to the repository so the tool needs no package manager and no network access.'],
-  ['test/run_tests.js', '823 tests against the real engine, the page, the scripts and the command line.'],
+  ['test/run_tests.js', '899 tests against the real engine, the page, the scripts and the command line.'],
 ], [2200, 7100])]);
 body.push(P('', { spacing: { after: 120 } }));
 T('Open dj_acs_auditor.html by double clicking it. There is nothing to install, no server to start, and no package manager involved. Node is needed only for the command line runner and the test suite, never for the page.');
@@ -197,6 +197,30 @@ push(Note('warn', 'Why there is no connect button any more', [
   'Mitigating that risk, masking the field, clearing the value, keeping it out of storage, was work spent making a credential slightly safer in a place it had no reason to be. Removing the feature deletes the risk class instead of managing it. The test suite now asserts the stronger property: no password field, no token identifier and no network call exists in either page.']));
 push(Fig(F('fig2_pull_workflow.png'), 'Figure 2. The supported path. The scripts run where the cluster is reachable, and the page reads what they write.', 640));
 
+H2('Central\'s certificate is self signed, and that is normal');
+T('The RHACS operator installs a self signed certificate for Central. Your system trust store will never verify it, so a certificate error on the first run is the expected outcome rather than a sign something is broken.');
+push(Note('crit', 'The one thing not to do', [
+  'Do not reach for --insecure. This request carries a token that reads your entire security posture, and disabling verification hands it to anyone on the network path between you and Central.',
+  'The script does not offer it as a shortcut, which is deliberate. A tool that suggests turning verification off is teaching a habit that outlives the tool.']));
+T('Run the pull and it works out the best available route itself, most trustworthy first:');
+push(NumList([
+  'A CA you supplied, with --cacert or ROX_CA. You decided where it came from.',
+  'The central-tls secret, read through your authenticated oc session. The cluster tells us its own CA over a connection oc has already verified. If you are logged in this usually just works, and the CA is saved beside the run for next time.',
+  'Neither of those, so it stops and shows you the certificate issuer, its SHA-256 fingerprint, and two commands that will work.']));
+T('Confirm that fingerprint against the cluster through some channel other than the connection you are trying to trust. That confirmation is the entire security of what comes next.');
+push(Code(['# A: verify against the certificate itself. A self signed certificate is its',
+           '# own issuer, so it works as a CA bundle. Keeps the hostname check.',
+           './scripts/acs_pull_all.sh --cacert findings/central-cert.pem -o findings',
+           '',
+           '# B: pin the public key. Works even when the hostname does not match the',
+           '# certificate, which is common through a port forward.',
+           "./scripts/acs_pull_all.sh --pin 'sha256//<the hash it printed>' -o findings"]));
+T('A is better where it works, because it keeps full verification. The script tests it against your endpoint before recommending it, so it only appears as an option when it genuinely works.');
+T('B turns the chain check off and requires that exact public key instead. Pinning on its own cannot help with a self signed certificate: the pin is an additional check rather than a replacement, so curl rejects the chain before it ever looks at the key. Pinned, a wrong key fails closed rather than connecting anyway.');
+push(Note('info', 'What a failed run leaves behind', [
+  'Nothing that could be mistaken for a pull. If TLS never resolved there is no findings directory at all.',
+  'If TLS worked and the token was rejected, the directory is marked RUN_FAILED.txt saying in plain terms that there are no findings in it and not to conclude the cluster is clean. An almost empty directory that looks like a successful run is a worse outcome than an error.']));
+
 H2('Step one: the preflight');
 T('Run scripts/acs_preflight.sh before anything else. It checks that the endpoint resolves and answers, that TLS verifies, that the token is valid, and, most usefully, that the token can actually read each of the three things the export needs.');
 T('That last check is worth its own paragraph. A token scoped only to Alert will pull violations perfectly and return 403 on the vulnerability export. You see violations, you see no CVEs, and nothing tells you the second half silently failed. The preflight catches it in one line.');
@@ -224,6 +248,18 @@ push(Code(['./scripts/acs_pull_all.sh -o findings', '',
            '    ...', '  acs_findings_20260822_091500/', '    ...']));
 T('The -o flag names the parent, not the run. A second run never overwrites the first, which matters more than it sounds: an export you cannot compare against last week is worth much less than one you can, and proving a fix landed means holding both.');
 T('Pass --no-timestamp when you want the files written straight into -o, which is usually a pipeline that expects a fixed path.');
+
+H2('What the run gives you at the end');
+T('The pull finishes by writing findings.md into the run directory and printing it. A directory of seven JSON files is not a result anybody can read, so the run ends with something you can look at, forward, or attach to a ticket without opening anything else.');
+push([Bul('Violations counted by severity, by policy and by namespace, split between your workloads and platform components, with a count of any that arrived without the platformComponent field at all.'),
+      Bul('CVEs by Red Hat severity, how many have a published fix, and how many are on the CISA Known Exploited Vulnerabilities catalog.'),
+      Bul('Images ranked by worst CVSS, with critical, KEV and fixable counts beside each, because you rebuild an image once and every fixable CVE inside it clears together.'),
+      Bul('The highest scoring CVEs, with the version each is fixed in.')]);
+T('It is jq only, so it works on a machine where Node cannot be installed. Pass --no-summary to skip it in a pipeline that only wants the files.');
+push(Note('info', 'CVSS in the summary is not the priority this tool ranks by', [
+  'The summary reports CVSS, which is the score ACS supplied for each CVE.',
+  'The tool\'s own priority runs to 15 rather than 10, because it adds the CISA catalog, EPSS exploitation probability, whether a fix exists and whether pods are actually running the image. Every one of those adjustments is named on screen.',
+  'That model lives in the policy engine, so it comes from the page or the CLI. It is deliberately not reimplemented in the summary script: a second ranking that drifts from the first is worse than having only one.']));
 
 H2('Step three: drop them on the page');
 push(Note('info', 'If you use Browse files rather than dragging', [
@@ -316,6 +352,10 @@ push([Bul('Your workloads and Platform components. On by default and off by defa
       Bul('Matched to a policy and Unmatched. A violation the catalogue cannot map to a policy is still shown, under its own filter, rather than dropped.'),
       Bul('Fixable only, for when you want the work queue rather than the picture.')]);
 T('Click any row to open the rationale, the standards the policy maps to, the cluster and lifecycle stage it came from, and the reasoning behind the fix route it was given.');
+H2('Severity and Score are two different things');
+T('Severity is what your ACS reported. If your team has tuned a policy, that is the tuned value, and it is what your cluster believes.');
+T('Score is this tool\'s own CVSS style ranking of the weakness class, fixed per policy in the catalogue. The two can disagree, and where they do it is usually because the policy was tuned rather than because something is wrong.');
+T('Sort by Score to order the work inside a severity band. Four severity buckets tell you which pile a finding is in; the score tells you where in the pile. A violation this tool does not model shows an em dash rather than a zero, because zero would sort it below every real finding and read as harmless rather than as not assessed.');
 H2('The fix routes');
 T('Six routes, and which one a violation gets depends on what the tool can see:');
 push([Tbl(['Route', 'What it means', 'What you do'], [
@@ -401,6 +441,12 @@ push([Bul('Every route asks for confirmation before it writes. There is a checkb
 
 // ---------------- 8
 H1('12. What gets fixed automatically, and what deliberately does not');
+push(Note('crit', 'Automatic describes the edit, not your application', [
+  'An automatic fix means the change to the YAML is unambiguous: there is one correct value and the tool knows it. It says nothing about whether your workload survives the change.',
+  'Four of them remove something an application may be relying on. readOnlyRootFilesystem on anything that writes to disk. Dropping all capabilities from an image that needs one. runAsNonRoot against an image with no numeric non root user, which the kubelet refuses to start at all. Unmounting the service account token from a pod that calls the Kubernetes API.',
+  'Each carries a note naming the specific failure and the remedy, and it appears in the confirmation dialog, the change log, the drafted patch header, the command line output and its own section in the report. Apply them in a namespace you do not care about first, and watch the pod actually start.']));
+
+
 T('Fixes carry one of three classifications, and choosing that classification correctly is the most consequential judgment in the tool.');
 H2('Auto');
 T('One correct change with no plausible downside. Thirteen policies qualify: privileged, allowPrivilegeEscalation, readOnlyRootFilesystem, host network, host PID, host IPC, CAP_SYS_ADMIN and capability drops, runAsNonRoot, CPU and memory requests and limits, automountServiceAccountToken, privileged host ports, and rewriting a hardcoded credential in an environment variable to a secretKeyRef.');
@@ -446,6 +492,12 @@ T('Each patch carries only the fields that actually changed, and container array
 
 // ---------------- 10
 H1('14. How the score is calculated');
+push(Note('warn', 'What the score is measured against', [
+  'Twenty policies. Red Hat ACS ships roughly seventy defaults and most teams add their own, so a clean score here means clean against twenty checks. It is not compliance with the ACS default policy set and should never be quoted as such.',
+  'Build stage rules, runtime behaviour policies and image CVE policies cannot be judged from a manifest at all. Violations this tool does not model arrive through your ACS export and are shown as unmatched rather than dropped, with the fix route "Not modelled".',
+  'Watch the unmatched count after an ACS upgrade. A jump in it means the catalogue has drifted from your ACS version.']));
+
+
 push(Note('crit', 'When there is no score at all, and why that is the correct answer', [
   'The denominator comes from what was scanned, never from what was found. That is what makes the projected score comparable to a real rescan.',
   'It also means scoring zero manifests returns 100 out of 100, Grade A. That is arithmetically correct and completely misleading: nothing was scanned, so nothing was found. If you load an ACS export and no YAML, the page, the CLI and the report all refuse to show a number and say why.',

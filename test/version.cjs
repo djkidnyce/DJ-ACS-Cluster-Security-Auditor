@@ -65,7 +65,26 @@ for (const f of ['README.md', 'acs_cli.js', 'docs/doc1.js', 'docs/doc2.js']) {
   if (stale.length) console.log('        found: ' + Array.from(new Set(stale)).join(', '));
 }
 
-console.log('\nThe git tag agrees, when one is checked out');
+console.log('\nThe git tag agrees with the version');
+
+/* Where this binds, and why it is not "whenever a tag is checked out".
+ *
+ * The obvious rule is: if HEAD sits on a tag, the tag must match the version. That rule
+ * fails in two ways on a working machine.
+ *
+ * It fires while preparing a release, which is the one time it should not: sitting on the
+ * previous tag with the next version's files applied is exactly what preparing looks like.
+ *
+ * And the obvious guard for that, "unless the tree is dirty", is not reliable. unzip
+ * preserves the archive's timestamps, so git's stat cache can report a freshly replaced
+ * tree as clean on the first status and dirty on the second, once the index has been
+ * refreshed. That produced two different results from two identical runs, which is worse
+ * than either answer on its own.
+ *
+ * So it binds in CI, where the checkout is fresh and the tag, the commit and the files are
+ * the same thing by construction. Locally it reports what it sees and does not fail.
+ */
+const inCI = !!(process.env.CI || process.env.GITHUB_ACTIONS);
 let tag = null;
 try {
   tag = execFileSync('git', ['describe', '--tags', '--exact-match'],
@@ -74,13 +93,18 @@ try {
 
 if (!tag) {
   console.log('  skip  no exact tag on this commit, so there is nothing to compare');
-  console.log('        (this check binds on a release commit, which is when it matters)');
+} else if (!inCI) {
+  const agrees = tag === 'v' + E.ACS_VERSION;
+  console.log('  note  HEAD is on ' + tag + ' and the code says ' + E.ACS_VERSION +
+    (agrees ? ', which agree.' : ', which do not agree.'));
+  if (!agrees) {
+    console.log('        That is expected while preparing a release and is not failed here.');
+    console.log('        It is asserted in CI, where the checkout is a fresh clone of the tag.');
+  }
 } else {
-  t('the tag is v followed by the version (' + tag + ')', tag === 'v' + E.ACS_VERSION);
-  t('and the CHANGELOG documents that exact version',
-    new RegExp('^## ' + E.ACS_VERSION.replace(/\./g, '\\.')).test(
-      cl.split('\n').filter((l) => l.startsWith('## ')).join('\n')) ||
-    releases[0].indexOf(E.ACS_VERSION) === 0);
+  t('the tag matches the version (' + tag + ' vs ' + E.ACS_VERSION + ')',
+    tag === 'v' + E.ACS_VERSION);
+  t('and the CHANGELOG documents that exact version', releases[0].indexOf(E.ACS_VERSION) === 0);
 }
 
 console.log('\nThe stamp actually reaches the artifacts');

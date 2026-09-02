@@ -31,12 +31,14 @@
 #   export ROX_ENDPOINT=https://central-stackrox.apps.example.com
 #   export ROX_API_TOKEN=...        # never pass this as an argument
 #   ./acs_pull_all.sh [-o PARENT_DIR] [-n NAMESPACE] [-c CLUSTER] [-j JOBS]
-#                     [--no-timestamp] [--cacert FILE] [--insecure]
+#                     [--no-timestamp] [--no-summary] [--cacert FILE]
+#                     [--pin sha256//KEY] [--insecure]
 #
 #   -o names the parent. Each run lands in PARENT/acs_findings_<timestamp>/ so
 #   runs never overwrite each other. --no-timestamp writes straight into -o.
 #
 set -u
+SCRIPTDIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
 # Where the run goes.
 #
@@ -48,6 +50,8 @@ set -u
 OUTPARENT="."
 RUNDIR="acs_findings_$(date +%Y%m%d_%H%M%S)"
 NO_TS=0
+NO_SUMMARY=0
+PIN=""
 NAMESPACE=""
 CLUSTER=""
 JOBS=4
@@ -60,6 +64,8 @@ while [ $# -gt 0 ]; do
   case "$1" in
     -o) OUTPARENT="$2"; shift 2 ;;
     --no-timestamp) NO_TS=1; shift ;;
+    --no-summary) NO_SUMMARY=1; shift ;;
+    --pin) PIN="${2:-}"; shift 2 ;;
     -n) NAMESPACE="$2"; shift 2 ;;
     -c) CLUSTER="$2"; shift 2 ;;
     -j) JOBS="$2"; shift 2 ;;
@@ -193,6 +199,176 @@ say "  output   : $OUTDIR"
 hr
 
 # --- 0. Prove the token works and say what it can see -----------------------
+# --- TLS: get to a verified connection without reaching for -k ---------------
+#
+# Central's certificate is self signed by default. That is not a misconfiguration, it is
+# what the operator installs, and it means the system trust store will never verify it.
+# The wrong answer is --insecure, because this request carries a token that reads your
+# entire security posture. The right answer is to obtain the issuer over a channel you
+# already trust and pin to it.
+#
+# Order of preference, most trustworthy first:
+#   1. A CA you supplied. You decided where it came from.
+#   2. The central-tls secret, read through your authenticated oc session. The cluster
+#      tells us its own CA over a connection kubectl already verified.
+#   3. A public key pin you confirmed out of band. Verifies the exact key with no chain.
+#   4. Nothing. The run stops and tells you which of the above to do.
+resolve_tls() {
+  [ -n "$CACERT" ] && return 0
+  [ "$CURL_TLS" = "-k" ] && return 0
+  if [ -n "$PIN" ]; then
+    # -k is required here and is not a weakening.
+    #
+    # --pinnedpubkey is an ADDITIONAL check, not a replacement for chain verification.
+    # Against a self signed certificate curl fails with error 60 before it ever looks at
+    # the pin, so the pin alone can never work. -k turns off the chain and hostname
+    # checks, and the pin then requires the exact public key you named. Wrong key fails
+    # closed: verified against a self signed endpoint, a mismatched pin returns no
+    # response at all.
+    #
+    # The security of this rests entirely on you having confirmed the fingerprint through
+    # some channel other than this connection. Pinned to whatever answered first, it is
+    # trust on first use and worth saying so plainly.
+    CURL_TLS="-k --pinnedpubkey $PIN"
+    say "  chain verification off, pinned to the public key you supplied"
+    say "  every request must present exactly that key or it fails"
+    return 0
+  fi
+
+  # Does the system trust store already work? Most of the time with a self signed cert it
+  # will not, but a cluster behind a corporate CA that is already installed will pass.
+  if curl -sS -o /dev/null --max-time 10 "$ROX_ENDPOINT/v1/metadata" 2>/dev/null; then
+    say "  verified against the system trust store"
+    return 0
+  fi
+
+  # Try the cluster. This is the good path and it is why oc being logged in matters.
+  if command -v oc >/dev/null 2>&1; then
+    CA_AUTO="$OUTDIR/central-ca.pem"
+    # --request-timeout is not optional here.
+    #
+    # oc will happily block for a long time against a cluster it cannot reach, and this
+    # runs on a workstation whose kubeconfig may point anywhere, or nowhere. Without a
+    # bound, a script whose whole job is to fetch findings sits silently on an unrelated
+    # API call, and the operator has no idea which step they are waiting on.
+    say "  trying the central-tls secret through your oc session"
+    if oc --request-timeout=10s -n stackrox get secret central-tls \
+         -o jsonpath='{.data.ca\.pem}' 2>/dev/null \
+         | base64 -d > "$CA_AUTO" 2>/dev/null && [ -s "$CA_AUTO" ]; then
+      if curl -sS --cacert "$CA_AUTO" -o /dev/null --max-time 10 "$ROX_ENDPOINT/v1/metadata" 2>/dev/null; then
+        CURL_TLS="--cacert $CA_AUTO"
+        say "  CA read from the central-tls secret over your oc session, and it verifies"
+        say "  saved to $CA_AUTO for the next run: --cacert that file, or export ROX_CA"
+        return 0
+      fi
+      say "  read a CA from central-tls but it does not verify this endpoint."
+      say "  Central is probably behind a route with a different certificate than its own."
+      rm -f "$CA_AUTO"
+    else
+      say "  no CA available that way: not logged in, no read on the secret, or the"
+      say "  request timed out. Falling through to the options below."
+      rm -f "$CA_AUTO" 2>/dev/null || true
+    fi
+  fi
+
+  # Nothing automatic worked. Show the key so it can be confirmed out of band.
+  say ""
+  say "  TLS verification failed and no trusted CA could be obtained automatically."
+  say ""
+  if command -v openssl >/dev/null 2>&1; then
+    HOSTPORT=$(echo "$ROX_ENDPOINT" | sed -e 's|^https\{0,1\}://||' -e 's|/.*$||')
+    case "$HOSTPORT" in *:*) : ;; *) HOSTPORT="$HOSTPORT:443" ;; esac
+    SPKI=$(echo | openssl s_client -connect "$HOSTPORT" -servername "${HOSTPORT%%:*}" 2>/dev/null \
+      | openssl x509 -pubkey -noout 2>/dev/null \
+      | openssl pkey -pubin -outform der 2>/dev/null \
+      | openssl dgst -sha256 -binary 2>/dev/null | openssl base64 2>/dev/null)
+    FP=$(echo | openssl s_client -connect "$HOSTPORT" 2>/dev/null \
+      | openssl x509 -noout -fingerprint -sha256 2>/dev/null | sed 's/.*=//')
+    ISS=$(echo | openssl s_client -connect "$HOSTPORT" 2>/dev/null \
+      | openssl x509 -noout -issuer 2>/dev/null | sed 's/^issuer=//')
+    # sha256 of nothing is 47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=. If the handshake
+    # produced no certificate, every step of that pipeline still succeeds and hashes an
+    # empty string, so the check below is on the certificate rather than on the hash.
+    # Printing a pin command built from an empty handshake would be worse than printing
+    # nothing: it looks authoritative and pins to a value that means the opposite.
+    if [ -n "$FP" ] && [ -n "$SPKI" ] && \
+       [ "$SPKI" != "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=" ]; then
+      say "  The endpoint is presenting a certificate issued by:"
+      say "    $ISS"
+      say "  SHA-256 fingerprint:"
+      say "    $FP"
+      say ""
+      say "  Confirm that fingerprint against the cluster through a channel other than this"
+      say "  connection before trusting either option below. That confirmation is the whole"
+      say "  security of both of them."
+      say ""
+
+      # A self signed certificate is its own issuer, so the certificate itself works as a
+      # CA bundle. That keeps full verification, chain and hostname, and is the better of
+      # the two. It only fails when the name you are connecting to is not in the
+      # certificate, which is common with a port forward and rare with a real route.
+      LEAF="$OUTPARENT/central-cert.pem"
+      echo | openssl s_client -connect "$HOSTPORT" 2>/dev/null | openssl x509 > "$LEAF" 2>/dev/null
+      if [ -s "$LEAF" ] && curl -sS --cacert "$LEAF" -o /dev/null --max-time 10 \
+           "$ROX_ENDPOINT/v1/metadata" 2>/dev/null; then
+        say "  A: verify against the certificate itself. Full verification, keeps the"
+        say "     hostname check. This one works against your endpoint:"
+        say ""
+        say "       ./acs_pull_all.sh --cacert $LEAF -o $OUTPARENT"
+        say ""
+      else
+        say "  A: verifying against the certificate itself did not work here, which"
+        say "     usually means the name you are connecting to is not in the certificate."
+        say "     The certificate is saved at $LEAF if you want to inspect it."
+        say ""
+      fi
+
+      say "  B: pin the public key. Works regardless of the name, and fails closed if the"
+      say "     key ever changes:"
+      say ""
+      say "       ./acs_pull_all.sh --pin 'sha256//$SPKI' -o $OUTPARENT"
+      say ""
+      say "     This turns the chain check off and requires that exact key instead. It is"
+      say "     trust on first use unless you confirmed the fingerprint above."
+      say ""
+    else
+      say "  Could not read a certificate from $HOSTPORT to show you its fingerprint."
+      say "  Nothing answered the TLS handshake, so the endpoint or the port is wrong,"
+      say "  or something between you and it is refusing the connection."
+      say ""
+    fi
+  fi
+  say "  Or read the CA from the cluster yourself and pass it:"
+  say ""
+  say "    oc -n stackrox get secret central-tls -o jsonpath='{.data.ca\\.pem}' \\"
+  say "      | base64 -d > central-ca.pem"
+  say "    ./acs_pull_all.sh --cacert central-ca.pem -o $OUTPARENT"
+  say ""
+  say "  Both of these verify. --insecure does not, and this request carries a token that"
+  say "  reads your whole security posture, so it is not offered as a shortcut here."
+  return 1
+}
+
+say "[0/6] TLS"
+if ! resolve_tls; then
+  # Leave nothing that could be mistaken for a pull. A directory named
+  # acs_findings_<timestamp> containing one stray file looks like a run that returned
+  # almost nothing, which is a very different thing from a run that never started.
+  #
+  # cleanup() removes the token header file, but it runs on EXIT, which is after this.
+  # Call it first or the directory is never empty and the rmdir quietly does nothing.
+  cleanup
+  rmdir "$OUTDIR" 2>/dev/null || true
+  say ""
+  say "  Nothing was pulled, so no findings directory was created."
+  exit 1
+fi
+
+# CURL is built from CURL_TLS, and resolve_tls is what decides CURL_TLS. Building it
+# before that ran meant the decision was discarded: the pin was computed, announced, and
+# then never passed to curl. Rebuild here, once, after the decision is final.
+CURL="curl -sS --fail-with-body $CURL_TLS -H @$HDR -H Accept:application/json"
+
 say "[0/6] Checking the token"
 if ! $CURL "$ROX_ENDPOINT/v1/auth/status" -o "$OUTDIR/00_auth_status.json" 2>"$OUTDIR/00_auth_status.err"; then
   say "  FAILED. $(head -c 300 "$OUTDIR/00_auth_status.err")"
@@ -205,6 +381,17 @@ if ! $CURL "$ROX_ENDPOINT/v1/auth/status" -o "$OUTDIR/00_auth_status.json" 2>"$O
   else
     say "  A connection error usually means an untrusted internal CA. Use --cacert."
   fi
+  # Mark the directory so it cannot be mistaken for a pull that came back empty.
+  {
+    echo "This run FAILED at the token check and pulled nothing."
+    echo "Generated $(date -u '+%Y-%m-%dT%H:%M:%SZ') against $ROX_ENDPOINT"
+    echo ""
+    echo "The only other file here is 00_auth_status.err, which is what curl said."
+    echo "There are no findings in this directory. Do not load it and conclude the"
+    echo "cluster is clean."
+  } > "$OUTDIR/RUN_FAILED.txt"
+  say ""
+  say "  Marked $OUTDIR/RUN_FAILED.txt so this is not mistaken for an empty result."
   exit 1
 fi
 say "  ok"
@@ -399,6 +586,30 @@ hr
 say "Written to $OUTDIR:"
 ls -1 "$OUTDIR" | sed 's/^/  /'
 say ""
+# --- the summary, written and shown --------------------------------------------
+#
+# A directory of seven JSON files is not a result anybody can read. Writing the summary
+# here means the run ends with something you can look at, send on, or attach to a ticket
+# without opening anything else. It is jq only, so it works on the machines where the
+# rest of the tooling does not.
+SUMMARY="$OUTDIR/findings.md"
+if [ "$NO_SUMMARY" = "0" ] && command -v jq >/dev/null 2>&1 \
+   && [ -x "$SCRIPTDIR/acs_summary.sh" ]; then
+  hr
+  if "$SCRIPTDIR/acs_summary.sh" "$OUTDIR" -o "$SUMMARY" >/dev/null 2>&1 && [ -s "$SUMMARY" ]; then
+    # Show it. A file written and not shown is a file nobody reads.
+    cat "$SUMMARY"
+    hr
+    say "Summary written to $SUMMARY"
+  else
+    say "Could not write the summary. The exported files are still in $OUTDIR."
+  fi
+elif [ "$NO_SUMMARY" = "0" ] && ! command -v jq >/dev/null 2>&1; then
+  hr
+  say "jq is not installed, so no summary was written. The exports are in $OUTDIR."
+fi
+
+hr
 say "Next: open dj_acs_auditor.html in a browser and drop these files on it."
 say "Drop all of them at once. They merge rather than replacing each other."
 say ""
