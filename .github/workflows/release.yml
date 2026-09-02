@@ -1,0 +1,132 @@
+name: release
+
+# Runs when a version tag is pushed. Builds the artifacts, records what they are and how
+# they were produced, and attaches them to a GitHub Release.
+#
+# The point is provenance. Before this, the only way to get the tool was to clone the
+# repository and trust that what you got was what the maintainer intended. There was no
+# signed statement of what a release contains, no checksums, and no way to tell a genuine
+# archive from one somebody rebuilt. For a tool people are invited to point at production
+# manifests, "trust the repo" is not an answer.
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build, for a dry run'
+        required: true
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      # Full history and tags. The version check compares the tag against the version
+      # stamped in the engine, and it cannot do that without the tags being present.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: The tag, the code and the CHANGELOG must agree before anything is built
+        run: |
+          set -eu
+          node test/version.cjs
+          echo "version agrees"
+
+      - name: The suite must pass on the exact commit being released
+        run: |
+          set -eu
+          npm install --no-save jsdom
+          node test/run_tests.js
+
+      - name: The SBOM must describe what is actually vendored
+        run: |
+          set -eu
+          node scripts/make_sbom.js --check
+
+      # The Word guides are generated, so they are not committed. Building them here is
+      # what proves the generators still work, and it is where the published copies come
+      # from. A documentation change is reviewable as a diff of doc1.js; the binary is an
+      # output of the release rather than a file in the tree.
+      - name: Build the documentation
+        run: |
+          set -eu
+          npm install --no-save docx
+          node docs/doc1.js
+          node docs/doc2.js
+          ls -l docs/*.docx
+
+      - name: Assemble the archive
+        id: build
+        run: |
+          set -eu
+          VER="${GITHUB_REF_NAME#v}"
+          VER="${VER:-${{ github.event.inputs.tag }}}"
+          STAGE="dj-acs-auditor-${VER}"
+          mkdir -p "dist/${STAGE}"
+
+          # Everything a user needs and nothing that is only for developing the tool.
+          for item in dj_acs_auditor.html acs_policies.js acs_cli.js acs.sh acs.ps1 acs.cmd \
+                      scripts vendor docs test README.md CHANGELOG.md RELEASING.md \
+                      LICENSE SECURITY.md sbom.cdx.json; do
+            [ -e "$item" ] && cp -R "$item" "dist/${STAGE}/" || echo "skipping absent $item"
+          done
+          rm -rf "dist/${STAGE}/docs/figures"/*.svg 2>/dev/null || true
+
+          cd dist
+          zip -qr "${STAGE}.zip" "${STAGE}"
+          tar -czf "${STAGE}.tar.gz" "${STAGE}"
+          sha256sum "${STAGE}.zip" "${STAGE}.tar.gz" > SHA256SUMS
+          cat SHA256SUMS
+          echo "stage=${STAGE}" >> "$GITHUB_OUTPUT"
+
+      # A signed, verifiable statement that these exact bytes were produced by this
+      # workflow from this commit. Anyone can check it with:
+      #   gh attestation verify dj-acs-auditor-X.Y.Z.zip --repo djkidnyce/DJ-ACS-Cluster-Security-Auditor
+      - name: Attest what was built
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: |
+            dist/${{ steps.build.outputs.stage }}.zip
+            dist/${{ steps.build.outputs.stage }}.tar.gz
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/${{ steps.build.outputs.stage }}.zip
+            dist/${{ steps.build.outputs.stage }}.tar.gz
+            dist/SHA256SUMS
+            sbom.cdx.json
+            docs/DJ_ACS_Auditor_User_Guide.docx
+            docs/DJ_Security_Tooling_Administration_Guide.docx
+          body: |
+            Built by GitHub Actions from ${{ github.sha }}.
+
+            Verify the archive before you trust it:
+
+                sha256sum -c SHA256SUMS
+                gh attestation verify dj-acs-auditor-*.zip \
+                  --repo ${{ github.repository }}
+
+            The attestation is a signed statement that these bytes came from this
+            workflow, from this commit. It is not a claim that the tool is correct.
+
+            `sbom.cdx.json` lists the entire dependency surface: two vendored
+            libraries, both committed to the repository and verified by hash in CI.
+            Nothing is fetched at build or run time.
+
+            The Word guides are generated from `docs/doc1.js` and `docs/doc2.js` and
+            are attached here rather than committed, so a documentation change is
+            reviewable as a diff.
+
+            See CHANGELOG.md for what changed.

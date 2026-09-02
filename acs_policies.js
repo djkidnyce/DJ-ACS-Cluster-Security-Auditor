@@ -27,7 +27,7 @@
    test/version.cjs asserts it agrees with the newest CHANGELOG heading and with the git
    tag when one is checked out. A tool whose banner disagrees with its tag cannot be used
    as evidence, because you cannot tell which build produced a given report. */
-const ACS_VERSION = '1.3.0';
+const ACS_VERSION = '1.4.0';
 const ACS_TOOL = "DJ's ACS Auditor v" + ACS_VERSION;
 
 /* ACS severity scale and the weight each carries in the posture score. A Critical costs

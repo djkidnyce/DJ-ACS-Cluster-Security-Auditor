@@ -79,5 +79,73 @@ console.log('\nA crashed suite cannot be read as a pass');
 t('CI fails the build when a suite crashes before reporting',
   /CRASHED BEFORE REPORTING/.test(y));
 
+/* ------------------------------------------------- the release pipeline */
+
+const REL = path.join(ROOT, '.github', 'workflows', 'release.yml');
+
+console.log('\nA release produces something verifiable, not just a git tag');
+t('there is a release workflow', fs.existsSync(REL));
+const r = fs.existsSync(REL) ? fs.readFileSync(REL, 'utf8') : '';
+
+t('it triggers on a version tag rather than on every push',
+  /tags: \['v\[0-9\]/.test(r));
+t('it fetches tags, so the version check can bind', /fetch-depth: 0/.test(r));
+
+console.log('\n  It refuses to publish something that does not hold together');
+t('the version, the CHANGELOG and the tag must agree first',
+  /node test\/version\.cjs/.test(r));
+t('the whole suite must pass on the exact commit',
+  /node test\/run_tests\.js/.test(r));
+t('the SBOM must match what is vendored', /make_sbom\.js --check/.test(r));
+
+console.log('\n  And what it publishes can be checked by whoever downloads it');
+t('checksums are generated', /sha256sum/.test(r));
+t('build provenance is attested', /attest-build-provenance/.test(r));
+t('the SBOM ships with the release', /sbom\.cdx\.json/.test(r));
+t('the release notes say how to verify', /gh attestation verify/.test(r));
+t('and say plainly what the attestation does not mean',
+  /not a claim that the tool is correct/.test(r));
+
+console.log('\nThe generated documentation is built, not committed');
+t('the .docx files are gitignored',
+  /docs\/\*\.docx/.test(fs.readFileSync(path.join(ROOT, '.gitignore'), 'utf8')));
+t('CI proves the generators still run', /node docs\/doc1\.js/.test(y));
+t('and fails if a generated document gets committed again',
+  /a generated \.docx is tracked/.test(y));
+t('the release builds them and attaches them', /node docs\/doc1\.js/.test(r));
+
+console.log('\nThe SBOM is generated from the files, not maintained by hand');
+const gen = path.join(ROOT, 'scripts', 'make_sbom.js');
+t('there is a generator', fs.existsSync(gen));
+const g = fs.existsSync(gen) ? fs.readFileSync(gen, 'utf8') : '';
+t('it hashes the actual bytes on disk', /createHash\('sha256'\)/.test(g));
+t('it refuses to omit a vendored file it does not recognise',
+  /does not know about/.test(g));
+t('it has no timestamp, so it only changes when a dependency does',
+  !/new Date\(\)/.test(g));
+t('CI verifies it still matches', /make_sbom\.js --check/.test(y));
+
+const sbom = path.join(ROOT, 'sbom.cdx.json');
+t('the SBOM is committed', fs.existsSync(sbom));
+if (fs.existsSync(sbom)) {
+  const b = JSON.parse(fs.readFileSync(sbom, 'utf8'));
+  t('it is CycloneDX', b.bomFormat === 'CycloneDX');
+  t('it names the whole dependency surface, which is two libraries',
+    b.components.length === 2);
+  t('every component carries a hash', b.components.every((c) => c.hashes && c.hashes.length));
+  t('every component carries a licence', b.components.every((c) => c.licenses && c.licenses.length));
+  t('every component says where it came from',
+    b.components.every((c) => (c.externalReferences || []).some((e) => e.type === 'distribution')));
+  t('and the version matches the engine',
+    b.metadata.component.version === require('../acs_policies.js').ACS_VERSION);
+}
+
+console.log('\nSigning is documented honestly');
+const rel = fs.readFileSync(path.join(ROOT, 'RELEASING.md'), 'utf8');
+t('RELEASING explains how to sign a tag', /gpg\.format ssh|tag\.gpgsign/.test(rel));
+t('and how to verify one', /git tag -v/.test(rel));
+t('and says to admit it when you cannot sign, rather than implying you did',
+  /quietly letting people assume/.test(rel));
+
 console.log('\n' + P + ' passed, ' + F + ' failed');
 process.exit(F ? 1 : 0);

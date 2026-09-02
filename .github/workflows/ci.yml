@@ -49,8 +49,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       # These are the properties the README and SECURITY.md claim. Assert them in CI so a
       # claim cannot quietly become false.
@@ -133,6 +131,55 @@ jobs:
       # newest CHANGELOG heading, a reader cannot tell which build produced an artifact.
       - name: Version agrees across the code, the CHANGELOG and the tag
         run: node test/version.cjs
+
+  # The documentation is generated and no longer committed, so the generators being
+  # runnable is now a property CI has to hold. A broken doc1.js would otherwise be
+  # discovered at release time, which is the worst moment to find it.
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: The Word guides still build from source
+        run: |
+          set -eu
+          npm install --no-save docx
+          node docs/doc1.js
+          node docs/doc2.js
+          for f in docs/DJ_ACS_Auditor_User_Guide.docx docs/DJ_Security_Tooling_Administration_Guide.docx; do
+            test -s "$f" || { echo "::error::$f was not produced"; exit 1; }
+            echo "built $f ($(wc -c < "$f") bytes)"
+          done
+
+      - name: The generated documents are not committed
+        run: |
+          set -eu
+          if git ls-files --error-unmatch docs/DJ_ACS_Auditor_User_Guide.docx >/dev/null 2>&1; then
+            echo "::error::a generated .docx is tracked. It is built in CI and attached to"
+            echo "::error::releases; committing it makes documentation changes unreviewable."
+            exit 1
+          fi
+          echo "generated documents are not in the tree"
+
+      - name: The figures still render
+        run: |
+          set -eu
+          python3 -m pip install --quiet cairosvg
+          cd docs && python3 make_figures.py && python3 make_admin_figures.py
+          ls figures/*.png | head -3
+
+  # The SBOM is generated from what is actually in vendor/, so it cannot drift.
+  sbom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: The SBOM describes what is actually vendored
+        run: node scripts/make_sbom.js --check
 
   # Prove the guarantee checks can actually fail. A green job proves nothing unless a
   # planted violation turns it red, and this job is the reason the last one broke silently.

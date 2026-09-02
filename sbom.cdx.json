@@ -1,0 +1,109 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "bom-ref": "dj-acs-auditor",
+      "name": "DJ's ACS Auditor",
+      "version": "1.4.0",
+      "description": "Audit Kubernetes and OpenShift manifests against Red Hat Advanced Cluster Security policy logic."
+    },
+    "properties": [
+      {
+        "name": "dependency:model",
+        "value": "vendored, committed to the repository"
+      },
+      {
+        "name": "dependency:package-manager",
+        "value": "none at build or run time"
+      },
+      {
+        "name": "note",
+        "value": "Both libraries are committed to the repository and verified by hash in CI. Nothing is fetched at build or run time, which is why this tool works on a disconnected network."
+      }
+    ]
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/js-yaml@4.1.0",
+      "name": "js-yaml",
+      "version": "4.1.0",
+      "purl": "pkg:npm/js-yaml@4.1.0",
+      "description": "YAML parsing and serialisation. Used by every surface, so the page, the CLI and the tests provably share one YAML implementation.",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/nodeca/js-yaml"
+        },
+        {
+          "type": "distribution",
+          "url": "https://unpkg.com/js-yaml@4.1.0/dist/js-yaml.min.js"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "45dc3dd03dc07a06705a2c2989b8c7f709013f04bd5386e3279d4e447f07ebd7"
+        }
+      ],
+      "properties": [
+        {
+          "name": "vendored:path",
+          "value": "vendor/js-yaml.min.js"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/jszip@3.10.1",
+      "name": "jszip",
+      "version": "3.10.1",
+      "purl": "pkg:npm/jszip@3.10.1",
+      "description": "Builds the ZIP of patched YAML in the browser. Not used by the CLI.",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        },
+        {
+          "license": {
+            "id": "GPL-3.0-or-later"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/Stuk/jszip"
+        },
+        {
+          "type": "distribution",
+          "url": "https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "acc7e41455a80765b5fd9c7ee1b8078a6d160bbbca455aeae854de65c947d59e"
+        }
+      ],
+      "properties": [
+        {
+          "name": "vendored:path",
+          "value": "vendor/jszip.min.js"
+        }
+      ]
+    }
+  ]
+}

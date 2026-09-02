@@ -11,6 +11,51 @@ at least; removing or renaming one is a major.
 Every release is tagged. `git tag -l` is the list, and the tag matches the version this
 tool stamps into every report and patch header it writes.
 
+## 1.4.0 - 2026-09-02
+
+Provenance and reviewability. Nothing in the tool's behaviour changes; what changes is
+whether you can check that the thing you downloaded is the thing that was built.
+
+### Added
+
+- **A release pipeline that produces something verifiable.** Pushing a version tag now
+  builds the archives, generates `SHA256SUMS`, attests build provenance through GitHub's
+  signing infrastructure, and attaches everything to a GitHub Release. Anyone can check a
+  download:
+
+      sha256sum -c SHA256SUMS
+      gh attestation verify dj-acs-auditor-1.4.0.zip --repo djkidnyce/DJ-ACS-Cluster-Security-Auditor
+
+  The attestation is a signed statement that those exact bytes came from that workflow at
+  that commit. The release notes say plainly that it is not a claim the tool is correct,
+  because a verified signature on bad software is still bad software.
+
+  The pipeline refuses to publish unless the version, the CHANGELOG and the tag agree, the
+  whole suite passes on that exact commit, and the SBOM matches what is vendored.
+
+- **An SBOM, generated rather than written.** `sbom.cdx.json`, CycloneDX 1.5, listing the
+  entire dependency surface: js-yaml 4.1.0 and JSZip 3.10.1, both vendored, both hashed.
+  `scripts/make_sbom.js` reads the bytes on disk, so the document cannot describe a
+  dependency that is not there. It refuses to run if `vendor/` contains a file it does not
+  recognise, because an SBOM that silently omits a dependency is worse than none. It has no
+  timestamp, so it changes only when a dependency does and a diff on it always means
+  something. CI verifies it still matches.
+
+- **Signed tags documented.** `RELEASING.md` covers SSH tag signing, how to verify one, and
+  says to admit it when you cannot sign rather than letting people assume you did.
+
+### Changed
+
+- **The generated Word guides are no longer committed.** They were 1.1MB and 465KB of
+  binary in the tree, diffing as `Bin X -> Y bytes`, so a documentation change could not be
+  reviewed, and the repository carried both the source and the output of the same thing.
+  They are built in CI and attached to each release. A documentation change is now a diff
+  of `docs/doc1.js`.
+
+  Two new CI jobs hold what that gives up: one proves the generators still run and the
+  figures still render, and one fails the build if a generated `.docx` is committed again.
+  Building them is now checked on every push rather than discovered at release time.
+
 ## 1.3.0 - 2026-08-24
 
 Everything here was written after 1.2.0 was tagged and pushed, so it gets its own version

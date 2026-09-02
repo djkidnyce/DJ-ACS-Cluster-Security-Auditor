@@ -16,7 +16,7 @@ Audit Kubernetes and OpenShift manifests against Red Hat Advanced Cluster Securi
 | `scripts/acs_pull_all.sh` and `.ps1` | Pull every finding ACS has, all severities and states, from outside the browser |
 | `scripts/acs_pull_via_oc.sh` | Same, but reaches Central through your existing `oc` session |
 | `scripts/acs_pull_over_ssh.ps1` | PowerShell, when only a bastion can reach the cluster |
-| `test/run_tests.js` | 899 tests against the real engine, the page, the scripts and the CLI |
+| `test/run_tests.js` | 929 tests against the real engine, the page, the scripts and the CLI |
 
 Open either HTML file directly. There is nothing to install and no server to run.
 
@@ -452,7 +452,7 @@ node test/run_tests.js
 npm install jsdom && node test/run_tests.js
 ```
 
-745 engine, CLI and script tests, no install required, plus 154 whole page tests that need jsdom and skip without it. 899 in total. Suites that need something the machine lacks say what is missing rather than skipping silently.
+775 engine, CLI and script tests, no install required, plus 154 whole page tests that need jsdom and skip without it. 929 in total. Suites that need something the machine lacks say what is missing rather than skipping silently.
 
 They cover the policy catalogue, scanning and scoring, fix application and YAML validity, diff correctness, merge patch minimality, ACS import across every export shape the pull script writes plus renamed policy matching, the full remediation flow including that preview mutates nothing and undo restores byte for byte, and the vulnerability path end to end: NDJSON parsing, CVE deduplication, priority reasoning, manifest correlation and drift.
 
@@ -489,6 +489,50 @@ guarantee looking broader than it is. `--in-place --mode auto` runs `git status 
 via `execFileSync` with an argument array and no shell, in the directory you pointed at, and
 refuses to overwrite your files if the tree is dirty or is not a repository. It reads. It
 remediates nothing. Everything else the tool produces is a file.
+
+## Verifying a download
+
+Releases carry checksums and a signed build provenance attestation, so you do not have to
+take the archive on trust:
+
+```bash
+sha256sum -c SHA256SUMS
+gh attestation verify dj-acs-auditor-1.4.0.zip \
+  --repo djkidnyce/DJ-ACS-Cluster-Security-Auditor
+```
+
+That proves those bytes came from this repository's release workflow, at that commit. It
+does not prove the tool is correct. A verified signature on bad software is still bad
+software, and the two claims are worth keeping apart.
+
+`sbom.cdx.json` lists the whole dependency surface, which is two libraries:
+
+| Component | Version | Licence | Why |
+|---|---|---|---|
+| js-yaml | 4.1.0 | MIT | YAML parsing, shared by every surface so they cannot disagree |
+| JSZip | 3.10.1 | MIT or GPL-3.0 | Builds the ZIP of patched YAML in the browser |
+
+Both are committed to the repository and verified by hash in CI. Nothing is fetched at
+build or run time, which is why this works on a disconnected network. The SBOM is generated
+from the bytes on disk by `scripts/make_sbom.js`, so it cannot describe a dependency that
+is not there, and it refuses to run if `vendor/` gains a file it does not recognise.
+
+## The Word guides are built, not committed
+
+They are generated from `docs/doc1.js` and `docs/doc2.js` and attached to each release.
+Committing them meant a documentation change arrived as `Bin 1128727 -> 1129347 bytes`,
+which nobody can review, and the repository carried both the source and the output of the
+same thing.
+
+To read them without waiting for a release:
+
+```bash
+npm install --no-save docx
+node docs/doc1.js && node docs/doc2.js
+```
+
+CI builds them on every push, so a broken generator is caught then rather than at release
+time.
 
 ## Releasing
 
