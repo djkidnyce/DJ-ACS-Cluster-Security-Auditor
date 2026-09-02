@@ -429,6 +429,111 @@ async function tabs() {
   cleanup();
 }
 
+/* The workflow this tool is actually used in: the scan runs on one machine, the review
+ * happens on another, and neither has Node. The browser is not a preview of the fix, it is
+ * the only thing that can produce one, so the export path has to work and has to be
+ * usable at four figures of findings.
+ */
+async function bulkExport() {
+  const { w, $, cleanup } = await open('dj_acs_auditor.html',
+    'window.__S=()=>STATE;window.__load=(i)=>loadItems(i);window.__tab=(t)=>showTab(t);' +
+    'window.__rows=()=>findingRows();window.__sel=()=>FSELECTED;');
+  const S = () => w.__S();
+  const M = (n) => ['apiVersion: apps/v1', 'kind: Deployment', 'metadata:', '  name: ' + n,
+    '  namespace: prod', 'spec:', '  template:', '    spec:', '      hostNetwork: true',
+    '      containers:', '      - name: c', '        image: q/' + n + ':1',
+    '        securityContext:', '          privileged: true'].join('\n');
+
+  console.log('\nFiltering a large finding list into something workable');
+  w.__load([{ name: 'app/a.yaml', text: M('alpha') }, { name: 'app/b.yaml', text: M('beta') }]);
+  w.__tab('remediate');
+  const all = S().findings.length;
+  t('the scan produced a list worth filtering', all > 10);
+
+  const sevBoxes = () => Array.from(w.document.querySelectorAll('input.fsev'));
+  sevBoxes().forEach((c) => { c.checked = (c.value === 'High'); });
+  sevBoxes()[0].dispatchEvent(new w.Event('change'));
+  const highOnly = w.__rows();
+  t('a severity filter narrows the list',
+    highOnly.length > 0 && highOnly.length < all);
+  /* Read the rendered badge rather than recomputing the label from the same helper the
+     filter uses, so a wrong mapping cannot agree with itself. */
+  const shownSev = Array.from(w.document.querySelectorAll('#rtable tbody span.sev'))
+    .map((e) => e.textContent.trim());
+  t('and everything the table shows is that severity',
+    shownSev.length === highOnly.length && shownSev.every((x) => x === 'High'));
+
+  sevBoxes().forEach((c) => { c.checked = true; });
+  sevBoxes()[0].dispatchEvent(new w.Event('change'));
+
+  $('fCat').value = 'Privileges';
+  $('fCat').dispatchEvent(new w.Event('change'));
+  const byCat = w.__rows();
+  t('a weakness class filter works, which is how you take privilege escalation on its own',
+    byCat.length > 0 && byCat.every((f) => f.policy.categories.indexOf('Privileges') !== -1));
+  t('the class picker is built from what was found, not the whole catalogue',
+    Array.from($('fCat').options).slice(1)
+      .every((o) => S().findings.some((f) => f.policy.categories.indexOf(o.value) !== -1)));
+  $('fCat').value = '';
+  $('fCat').dispatchEvent(new w.Event('change'));
+
+  console.log('\n  Selection survives filtering, because it is held per finding');
+  $('fixMode').value = 'manual';
+  $('fixMode').dispatchEvent(new w.Event('change'));
+  $('btnFSelAll').click();
+  const n = w.__sel().size;
+  t('select all shown takes the fixable ones', n > 0);
+  t('the button names the count', new RegExp(n + ' selected').test($('btnExportFixed').textContent));
+  sevBoxes().forEach((c) => { c.checked = (c.value === 'Low'); });
+  sevBoxes()[0].dispatchEvent(new w.Event('change'));
+  t('filtering the selection out of view does not clear it', w.__sel().size === n);
+  sevBoxes().forEach((c) => { c.checked = true; });
+  sevBoxes()[0].dispatchEvent(new w.Event('change'));
+
+  console.log('\n  Export writes corrected YAML and changes nothing that is loaded');
+  const got = [];
+  w.download = (nm, c) => got.push({ name: nm, text: c });
+  delete w.JSZip;
+  $('btnExportFixed').click();
+  await new Promise((r) => setTimeout(r, 900));
+
+  const yamls = got.filter((g) => /\.ya?ml$/.test(g.name));
+  t('corrected YAML is written', yamls.length > 0);
+  t('one file per manifest that changed', yamls.length === 2);
+  const doc = w.jsyaml.load(yamls[0].text);
+  t('the fixes are actually in it',
+    doc.spec.template.spec.containers[0].securityContext.privileged === false &&
+    doc.spec.template.spec.hostNetwork === false);
+  t('a readme goes with it', got.some((g) => /READ_THIS_FIRST/.test(g.name)));
+  const rm = got.find((g) => /READ_THIS_FIRST/.test(g.name));
+  t('the readme says nothing was run', /No command was run/.test(rm.text));
+  t('it names the fixes that can stop a workload', /can stop the workload/.test(rm.text));
+  t('it says how to apply them', /oc apply -f corrected/.test(rm.text));
+  t('and suggests a server side dry run first', /--dry-run=server/.test(rm.text));
+  t('exporting did not apply anything to the loaded files',
+    S().history.length === 0 && S().findings.filter((f) => f.applied).length === 0);
+
+  console.log('\n  Report mode produces none of it, and says why');
+  got.length = 0;
+  $('fixMode').value = 'report';
+  $('fixMode').dispatchEvent(new w.Event('change'));
+  t('the export button is disabled in report mode', $('btnExportFixed').disabled);
+  t('and the page explains which control is holding it',
+    /Report only, so nothing that could be applied/.test($('modeWhy').textContent));
+  $('btnExportFixed').click();
+  await new Promise((r) => setTimeout(r, 200));
+  t('clicking it anyway writes nothing', got.length === 0);
+
+  console.log('\n  The heavy sections collapse, with counts that mean something');
+  const secs = w.document.querySelectorAll('details.sec');
+  t('the heavy sections are collapsible', secs.length >= 3);
+  t('they start open, so nothing is hidden from a first read',
+    Array.from(secs).every((d) => d.open));
+  t('a closed one still reports what is inside',
+    $('rtableCnt').textContent.indexOf('open') !== -1);
+  cleanup();
+}
+
 async function remediation() {
   const { w, $, cleanup } = await open('dj_acs_auditor.html',
     'window.__STATE=()=>STATE;window.__load=(i)=>loadItems(i);window.__undoAll=()=>undoAll();' +
@@ -597,6 +702,7 @@ async function remediation() {
     await auditor();
     await remediation();
     await tabs();
+    await bulkExport();
     await noManifests('dj_acs_auditor.html');
   }
   catch (e) { console.log('  FAIL  ' + e.message); F++; }

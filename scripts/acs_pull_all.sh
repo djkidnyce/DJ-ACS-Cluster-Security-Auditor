@@ -349,7 +349,7 @@ resolve_tls() {
   return 1
 }
 
-say "[0/6] TLS"
+say "[0/7] TLS"
 if ! resolve_tls; then
   # Leave nothing that could be mistaken for a pull. A directory named
   # acs_findings_<timestamp> containing one stray file looks like a run that returned
@@ -369,7 +369,7 @@ fi
 # then never passed to curl. Rebuild here, once, after the decision is final.
 CURL="curl -sS --fail-with-body $CURL_TLS -H @$HDR -H Accept:application/json"
 
-say "[0/6] Checking the token"
+say "[0/7] Checking the token"
 if ! $CURL "$ROX_ENDPOINT/v1/auth/status" -o "$OUTDIR/00_auth_status.json" 2>"$OUTDIR/00_auth_status.err"; then
   say "  FAILED. $(head -c 300 "$OUTDIR/00_auth_status.err")"
   say ""
@@ -400,7 +400,7 @@ say "  ok"
 # Deliberately NO 'Violation State' term. The ACS console defaults to ACTIVE; omitting
 # the term returns ACTIVE, RESOLVED and ATTEMPTED. Same for severity and lifecycle
 # stage: no filter means every value, which is what "low to high" asks for.
-say "[1/6] Policy violations, all severities, all states, all lifecycle stages"
+say "[1/7] Policy violations, all severities, all states, all lifecycle stages"
 # Build the alert query: scope, plus both platform and user. No state term, so every
 # state comes back: ACTIVE, RESOLVED and ATTEMPTED.
 AQ="$PLATFORM_TERM"
@@ -452,7 +452,7 @@ fi
 # GET /v1/alerts returns storage.ListAlert, which has NO violations[] array. The
 # violation text only exists on GET /v1/alerts/{id}. Without this loop you get a
 # list of policy names with nothing explaining them, which reads as "no findings".
-say "[2/6] Fetching violation detail per alert (this is what /v1/alerts omits)"
+say "[2/7] Fetching violation detail per alert (this is what /v1/alerts omits)"
 jq -r '.alerts[]?.id' "$OUTDIR/01_alerts_list.json" | sort -u > "$OUTDIR/.ids"
 IDCOUNT=$(wc -l < "$OUTDIR/.ids" | tr -d ' ')
 if [ "$IDCOUNT" != "0" ]; then
@@ -480,7 +480,7 @@ rm -f "$OUTDIR/.ids" "$OUTDIR/00_auth_status.err"
 # --- 3. Image CVEs on running workloads --------------------------------------
 # Streams NDJSON, one {"result":{deployment,images,livePods}} per line. Do not pipe
 # this through anything expecting a single JSON document.
-say "[3/6] Image CVEs for running workloads (vuln-mgmt export)"
+say "[3/7] Image CVEs for running workloads (vuln-mgmt export)"
 VQ="timeout=$TIMEOUT"
 [ -n "$SCOPE" ] && VQ="query=$SCOPE_ENC&$VQ"
 if $CURL "$ROX_ENDPOINT/v1/export/vuln-mgmt/workloads?$VQ" -o "$OUTDIR/03_vuln_workloads.ndjson" 2>"$OUTDIR/.v.err"; then
@@ -500,7 +500,7 @@ rm -f "$OUTDIR/.v.err"
 # Step 3 only covers images attached to a deployment. This covers watched images,
 # images from deleted deployments, and anything scanned but not running. If you want
 # "all possible findings", you need both.
-say "[4/6] Image CVEs for every image Central knows (including non running)"
+say "[4/7] Image CVEs for every image Central knows (including non running)"
 if $CURL "$ROX_ENDPOINT/v1/export/images?timeout=$TIMEOUT" -o "$OUTDIR/04_all_images.ndjson" 2>"$OUTDIR/.i.err"; then
   L=$(grep -c . "$OUTDIR/04_all_images.ndjson" 2>/dev/null || echo 0)
   C=$(jq -s '[.[].result.scan.components[]?.vulns[]?.cve] | unique | length' \
@@ -512,7 +512,7 @@ fi
 rm -f "$OUTDIR/.i.err"
 
 # --- 5. Node CVEs -------------------------------------------------------------
-say "[5/6] Node CVEs"
+say "[5/7] Node CVEs"
 if $CURL "$ROX_ENDPOINT/v1/export/nodes?timeout=$TIMEOUT" -o "$OUTDIR/05_nodes.ndjson" 2>"$OUTDIR/.n.err"; then
   L=$(grep -c . "$OUTDIR/05_nodes.ndjson" 2>/dev/null || echo 0)
   say "  $L node(s)"
@@ -524,7 +524,7 @@ rm -f "$OUTDIR/.n.err"
 # --- 6. Snoozed and deferred, which the default views hide -------------------
 # A CVE somebody deferred is still a finding. It is a decision, not an absence. If
 # you are asking for everything, you want these too, clearly labelled.
-say "[6/6] Snoozed and deferred CVEs (hidden from the default views)"
+say "[6/7] Snoozed and deferred CVEs (hidden from the default views)"
 SNZ="$(urlenc 'CVE Snoozed:true')"
 if $CURL "$ROX_ENDPOINT/v1/export/images?query=$SNZ&timeout=$TIMEOUT" \
      -o "$OUTDIR/06_snoozed.ndjson" 2>/dev/null; then
@@ -586,6 +586,50 @@ hr
 say "Written to $OUTDIR:"
 ls -1 "$OUTDIR" | sed 's/^/  /'
 say ""
+# --- 7. The live workloads, captured beside the findings -----------------------
+#
+# ACS tells you a workload is in violation. It does not hand you the manifest. Capturing
+# the running objects into the same directory, at the same moment, is what makes the pair
+# useful: the findings and the thing they are about, from the same instant.
+#
+# It also gives you a before and after. Run this, make changes, run it again, and the two
+# workloads.json files diff cleanly. Without that you are comparing a finding count to a
+# finding count and hoping the cluster did not move underneath you.
+say "[7/7] Live workloads"
+WL="$OUTDIR/workloads.json"
+if command -v oc >/dev/null 2>&1; then
+  # Same time bound as the trust bootstrap, and for the same reason: this runs on a
+  # workstation whose kubeconfig may point anywhere, or nowhere.
+  if oc --request-timeout=60s get deployment,daemonset,statefulset,cronjob,job \
+       --all-namespaces -o json > "$WL" 2>"$OUTDIR/.wl.err"; then
+    if command -v jq >/dev/null 2>&1; then
+      N=$(jq -r '.items | length' "$WL" 2>/dev/null || echo "?")
+      say "  $N workload object(s) written to workloads.json"
+    else
+      say "  written to workloads.json"
+    fi
+    say "  drop this on the page with the rest to audit what is running, not what git says"
+  else
+    # An oc that is present but cannot reach the cluster leaves you in exactly the same
+    # place as no oc at all, so give the same instruction rather than only the error.
+    say "  could not read workloads: $(head -c 160 "$OUTDIR/.wl.err" 2>/dev/null)"
+    say "  Not fatal. The ACS findings above are unaffected; the workloads were not"
+    say "  captured, so violations will show as needing a manifest you do not have."
+    say "  Capture them anywhere your oc session works and drop the file on the page:"
+    say ""
+    say "    oc get deployment,daemonset,statefulset,cronjob,job -A -o json > workloads.json"
+    rm -f "$WL"
+  fi
+else
+  say "  oc is not on PATH, so the running workloads were not captured."
+  say "  Without them the page can show you the violations but has no manifest to fix."
+  say "  Capture them anywhere you have oc and drop the file on the page alongside these:"
+  say ""
+  say "    oc get deployment,daemonset,statefulset,cronjob,job -A -o json > workloads.json"
+fi
+rm -f "$OUTDIR/.wl.err"
+hr
+
 # --- the summary, written and shown --------------------------------------------
 #
 # A directory of seven JSON files is not a result anybody can read. Writing the summary

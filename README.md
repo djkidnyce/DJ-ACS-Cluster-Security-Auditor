@@ -208,7 +208,13 @@ should be deployed. Those two drift, and the gap is frequently where the finding
 oc get deployment,daemonset,statefulset,cronjob,job --all-namespaces -o json > workloads.json
 ```
 
-Drop `workloads.json` on either page, or:
+`scripts/acs_pull_all.sh` runs that same command as its last step and drops
+`workloads.json` into the timestamped run directory beside the ACS findings, so the
+violations and the objects they are about come from the same moment. Run the script, make
+your changes, run it again, and the two directories diff cleanly. If `oc` is missing or
+cannot reach the cluster the run still succeeds and prints the command to run elsewhere.
+
+Drop `workloads.json` on the page, or:
 
 ```sh
 node acs_cli.js --workloads workloads.json --report
@@ -293,6 +299,58 @@ Two fixes insert placeholder resource values. They are flagged as PLACEHOLDER in
 * **The full diff**, copied to the clipboard
 * **A change log** in markdown recording every change, why it was made, and the standards behind it, plus everything still needing a human decision
 
+## Working through a large finding list
+
+A first run against a real cluster returns findings in the hundreds or thousands. A flat
+list that long is not a work queue, so the findings table filters and the rows are
+selectable.
+
+Filter by severity, by fix kind (auto, generate, manual, already applied), by weakness
+class, or by ACS policy. The class and policy pickers are built from what was actually
+found rather than from the whole catalogue, so an empty option never appears. Taking
+privilege escalation on its own is the class filter set to Privileges; taking the top of
+the list is Critical and High with everything else unticked.
+
+The header count says what is behind a collapsed section and what a filter is hiding:
+`showing 84 of 1104, 1104 open, 40 critical`. That matters more than the collapsing does.
+A narrowed list looks like a shorter one, and a shorter one reads as a cleaner cluster.
+
+Selection is held per finding, not per row, so filtering and sorting never move a tick
+onto something else. `Select all shown` takes every fixable finding currently visible,
+which is not the same as everything loaded. A finding with no mechanical fix gets a
+disabled checkbox naming the reason, so the absence of an option reads as an answer
+rather than an oversight.
+
+## Getting corrected YAML out of the browser
+
+The scan runs on a Linux box, the files get copied to a Windows machine, and the review
+happens there. Neither end has Node and neither can be given it. So the browser is not a
+preview of the fix, it is what produces it.
+
+Tick what you want, choose Manual or Auto, and press **Download corrected YAML**. You get
+a ZIP holding `corrected/` with your manifests rewritten in the folder layout you loaded
+them in, plus `READ_THIS_FIRST.md` recording every change applied, every fix that can stop
+a workload, every placeholder value that still needs tuning, and anything that could not be
+applied and why.
+
+The export runs against a copy. Nothing in the page moves, the undo history is untouched,
+and you can export one severity band, review it, then export another without the two
+interfering.
+
+Exporting is not applying. No command runs, from the browser or anywhere else, and nothing
+in the ZIP touches a cluster until you put it there through your own change process:
+
+```sh
+oc apply -f corrected/ --dry-run=server   # see what the API server would do
+oc apply -f corrected/                    # or commit them and let your pipeline do it
+```
+
+The server side dry run is worth the extra step. It catches an admission controller
+rejecting the change before you find out during a rollout.
+
+In `report` mode the export controls are disabled, and the page says which control is
+holding them rather than leaving a grey button that reads like a bug.
+
 ## Scoring
 
 Every finding carries the ACS severity, a CVSS v3.1 style score for ranking, and citations to CIS Kubernetes Benchmark, NIST SP 800-53 Rev 5, Pod Security Standards and DISA STIG.
@@ -335,6 +393,7 @@ This is the normal case on a hardened host in a controlled enclave, so it is a s
 |---|---|
 | Pull data out of ACS | `scripts/acs_pull_all.sh`. bash, curl and jq |
 | Posture score, violations, fix routes, drafted YAML, the full HTML report | `dj_acs_auditor.html`. A browser, nothing else. Open the file |
+| Corrected YAML for the findings you chose, as a ZIP | `dj_acs_auditor.html`, Remediate tab, Download corrected YAML |
 | A summary you can read or hand over from the shell | `scripts/acs_summary.sh <pull-dir> -o findings.md`. jq only |
 | The headless CLI, for CI | A container: `podman run --rm -v "$PWD":/w:Z -w /w docker.io/library/node:20-alpine node acs_cli.js --help` |
 
@@ -344,7 +403,9 @@ This is the normal case on a hardened host in a controlled enclave, so it is a s
 
 It reports CVSS, which is the score ACS supplied. It does not reproduce the tool's own 0 to 15 priority ranking, which additionally weighs the CISA catalog, EPSS, fixability and whether pods are running the image: that model lives in the engine, and a second ranking in jq would drift from it. It does not produce a posture score and does not draft fixes, and it says so in its own output. Both need the policy engine, and the engine needs the page or the CLI. A summary that implied a score it had not computed would be the same defect as scoring an empty scan.
 
-The wrapper scripts (`acs.sh`, `acs.ps1`, `acs.cmd`) detect a missing Node and print these routes rather than failing with `command not found`.
+The wrapper scripts (`acs.sh`, `acs.ps1`, `acs.cmd`) detect a missing Node and print these routes rather than failing with `command not found`. Run `./acs.sh` rather than `node acs_cli.js` and you get the routes instead of a bare `bash: node: command not found`.
+
+Nothing in the browser path is degraded. Every fix the CLI can write, the page can write, and the corrected YAML the page exports is produced by the same engine file the CLI loads. The CLI exists for headless CI, not for capability.
 
 ## Central's certificate is self signed, and that is normal
 

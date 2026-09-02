@@ -254,7 +254,12 @@ T('The pull finishes by writing findings.md into the run directory and printing 
 push([Bul('Violations counted by severity, by policy and by namespace, split between your workloads and platform components, with a count of any that arrived without the platformComponent field at all.'),
       Bul('CVEs by Red Hat severity, how many have a published fix, and how many are on the CISA Known Exploited Vulnerabilities catalog.'),
       Bul('Images ranked by worst CVSS, with critical, KEV and fixable counts beside each, because you rebuild an image once and every fixable CVE inside it clears together.'),
-      Bul('The highest scoring CVEs, with the version each is fixed in.')]);
+      Bul('The highest scoring CVEs, with the version each is fixed in.'),
+      Bul('workloads.json, the running deployments, daemonsets, statefulsets, cronjobs and jobs, captured in the same directory at the same moment as the findings.')]);
+push(Note('info', 'Why the workloads are captured by the same run', [
+  'ACS names a workload in violation. Fixing it requires the object it named. Pull the findings now and the manifests an hour later and you are describing two different clusters, and every count you compare between them is off by whatever moved in between.',
+  'Because both land in one timestamped directory, a run before your changes and a run after them diff cleanly, and the difference is evidence rather than an assertion.',
+  'The capture is time bounded at sixty seconds and never fails the run. If oc is missing, or present but pointed somewhere it cannot reach, the pull says so, prints the command to run where your oc session does work, and carries on with the findings intact.']));
 T('It is jq only, so it works on a machine where Node cannot be installed. Pass --no-summary to skip it in a pipeline that only wants the files.');
 push(Note('info', 'CVSS in the summary is not the priority this tool ranks by', [
   'The summary reports CVSS, which is the score ACS supplied for each CVE.',
@@ -439,6 +444,27 @@ H2('Confirmation and undo');
 push([Bul('Every route asks for confirmation before it writes. There is a checkbox to suppress the prompt once you trust it. It is off by default and it resets when you reload.'),
       Bul('Undo last steps back one fix. Undo everything returns the files to exactly how they were loaded. The test suite verifies the restore byte for byte, not just structurally.')]);
 
+H2('Working a list of a thousand findings');
+T('A first run against a real cluster returns findings in the hundreds or thousands. A flat list that long is not a work queue, it is a wall, so the findings table filters and every row is selectable.');
+push([Bul('Severity. Critical and High with the rest unticked is the top of the list.'),
+      Bul('Fix kind: auto, generate, manual, or already applied. Ticking auto alone gives you exactly what can be exported.'),
+      Bul('Weakness class. Privileges on its own is every privilege escalation finding, which is usually where the first pass goes.'),
+      Bul('ACS policy, when you are working one policy across the estate.')]);
+T('The class and policy pickers are built from what was actually found rather than from the whole catalogue, so you never pick an option that returns nothing.');
+T('The heavy sections collapse, and each header carries its count. The count is the point rather than the collapsing: a header reading showing 84 of 1104, 1104 open, 40 critical tells you both where to start and that a filter is hiding most of the list. A narrowed list looks like a shorter one, and a shorter one reads as a cleaner cluster.');
+push(Note('info', 'Selection follows the finding, not the row', [
+  'Ticks are held against the finding itself, so filtering and sorting cannot move a tick onto something else. Select a critical, filter it out of view, and it is still selected when you come back.',
+  'Select all shown takes every fixable finding currently visible, which is deliberately not everything loaded. A finding with no mechanical fix gets a disabled checkbox naming the reason, rather than no checkbox, so the absence of an option reads as an answer instead of an oversight.']));
+
+H2('Corrected YAML for a chosen subset, from the browser');
+T('The scan runs on a Linux box, the files are copied to a Windows machine, and the review happens there. Neither end has Node and neither can be given it. So the browser is not a preview of the fix, it is what produces it.');
+T('Tick what you want, choose Manual or Auto, and press Download corrected YAML. You get a ZIP holding a corrected folder with your manifests rewritten in the layout you loaded them in, plus READ_THIS_FIRST.md recording every change applied, every fix that can stop a workload, every placeholder value still needing tuning, and anything that could not be applied and why.');
+T('The export runs against a copy. Nothing in the page moves, the undo history is untouched, and you can export one severity band, review it, then export another without the two interfering.');
+push(Note('crit', 'Exporting is not applying', [
+  'No command runs, from the browser or from anywhere else. The tool has no path to your cluster and is not given one. What you get is files.',
+  'Nothing in that ZIP reaches a cluster until you put it there through your own change process. Run oc apply -f corrected/ --dry-run=server first: it asks the API server what it would do, which catches an admission controller rejecting the change before you find out during a rollout.',
+  'In report mode the export controls are disabled and the page names the control holding them, so a greyed out button reads as a deliberate gate rather than a broken tool.']));
+
 // ---------------- 8
 H1('12. What gets fixed automatically, and what deliberately does not');
 push(Note('crit', 'Automatic describes the edit, not your application', [
@@ -477,7 +503,7 @@ push(Note('warn', 'If you have a report from an earlier version that looks empty
   'Regenerate it. The data was never lost, it just was not written into the document.']));
 
 
-T('Five export routes, because the right one depends on how your manifests are managed.');
+T('Six export routes, because the right one depends on how your manifests are managed.');
 push(Fig(F('fig4_outputs.png'), 'Figure 4. Export options. Patched YAML, a single file, strategic merge patches, the diff, and the change log.', 640));
 push([Tbl(['Export', 'Use it when'], [
   ['Patched YAML as a ZIP', 'Your manifests are plain YAML in git. Preserves your exact folder structure and includes the change log.'],
@@ -485,6 +511,7 @@ push([Tbl(['Export', 'Use it when'], [
   ['Strategic merge patches', 'Your manifests are templated by Helm or Kustomize and cannot be edited directly. One patch per applied fix.'],
   ['The full diff to clipboard', 'You are pasting into a pull request description, a change ticket, or a chat thread.'],
   ['Change log in markdown', 'You need the audit trail: every change, why it was made, the citations, and everything still awaiting a human decision.'],
+  ['Corrected YAML for selected findings', 'You are working a large list on a machine with no Node, and you want files for the subset you ticked rather than for everything. Includes READ_THIS_FIRST.md with the changes, the risky ones and the placeholders.'],
 ], [3000, 6300])]);
 body.push(P('', { spacing: { after: 120 } }));
 H2('Why the merge patches are worth understanding');

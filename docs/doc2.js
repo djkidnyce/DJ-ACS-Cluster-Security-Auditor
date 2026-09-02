@@ -194,20 +194,23 @@ push([Tbl(['Suite', 'Count', 'Covers'], [
   ['flow.cjs', '36', 'Preview mutates nothing, undo restores byte for byte, merge patches stay minimal, diffs are correct.'],
   ['live.cjs', '32', 'URL normalising, actionable error classification, command generation, live object sanitising.'],
   ['vuln.cjs', '99', 'NDJSON parsing, CVE deduplication, priority reasoning, manifest correlation and image drift.'],
-  ['hardening.cjs', '36', 'URL scheme allowlisting, and the standing guarantees: no eval, no credential field, no network call in either page, no write method anywhere.'],
+  ['hardening.cjs', '26', 'URL scheme allowlisting, and the standing guarantees: no eval, no credential field, no network call in the page, no write method anywhere.'],
   ['cli.cjs', '95', 'The whole argument surface, the mode gate, exit codes, and that --fail-on blocks on the right severities.'],
   ['kubejson.cjs', '38', 'oc get -o json in every shape it comes in, and that server side fields are stripped before scanning.'],
   ['platform.cjs', '60', 'Platform detection, all alert states, and fixing a violation with no manifest in hand.'],
-  ['exports.cjs', '50', 'All six files acs_pull_all.sh writes, merging rather than overwriting, and that an unloadable file is told what it is.'],
-  ['scripts.cjs', '21', 'The shell scripts agree with each other: same trust source, no token over an unverified connection, insecure never the default.'],
-  ['posture_platform.cjs', '35', 'No posture score over zero manifests, and the per object platform override.'],
-  ['cli_violations.cjs', '29', 'The CLI run as a real process, inspecting what lands on disk. Chiefly that report mode leaves nothing applyable behind.'],
+  ['exports.cjs', '50', 'Every file acs_pull_all.sh writes, merging rather than overwriting, and that an unloadable file is told what it is.'],
+  ['scripts.cjs', '101', 'The shell scripts agree with each other, TLS against a real self signed server, the pin is enforced, and the workloads capture lands beside the findings.'],
+  ['posture_platform.cjs', '49', 'No posture score over zero manifests, and the per object platform override.'],
+  ['cli_violations.cjs', '53', 'The CLI run as a real process, inspecting what lands on disk. Chiefly that report mode leaves nothing applyable behind.'],
+  ['version.cjs', '15', 'The version in the engine, the changelog, the SBOM and the build stamp are the same version.'],
+  ['ci.cjs', '52', 'The workflows themselves: that the guarantee check can actually fail, and that the SBOM matches the bytes on disk.'],
+  ['page.cjs', '177', 'The pages in a real DOM, driven end to end. Needs jsdom, skips cleanly without it.'],
 ], [1900, 900, 6500])]);
 body.push(P('', { spacing: { after: 140 } }));
 H2('The optional whole page tests');
-T('test/page.cjs loads each HTML file from disk in a real DOM, with the actual script tags resolving to the actual files in document order, then drives it: drops an export, checks the panel unhides, clicks the filters, expands a violation row, drafts the fixes and inspects the YAML that would have been downloaded, and walks the image replacement dialog through preview, confirm and undo. 88 assertions.');
+T('test/page.cjs loads each HTML file from disk in a real DOM, with the actual script tags resolving to the actual files in document order, then drives it: drops an export, checks the panel unhides, clicks the filters, expands a violation row, drafts the fixes and inspects the YAML that would have been downloaded, and walks the image replacement dialog through preview, confirm and undo, and exports corrected YAML for a filtered selection then reads back what came out of the ZIP. 177 assertions.');
 T('It catches a class of defect the engine tests structurally cannot see. An element id that does not exist, a handler never bound, a panel that never unhides, a filter wired to the wrong checkbox. The engine can be perfect and the page still show nothing.');
-T('This is not hypothetical. The Download button under the violation fix panel shipped once with no click handler at all. Every engine test passed, the bundle it would have produced was correct, and pressing the button did nothing. Only a page test can see that.');
+T('This is not hypothetical, and it has happened more than once. The Download button under the violation fix panel shipped with no click handler at all: every engine test passed, the bundle it would have produced was correct, and pressing the button did nothing. In 1.5.0 the new findings filters fed the selection and the export correctly while the table itself still rendered the unfiltered list, so the controls looked live and changed nothing on screen. Both were caught by asserting against the rendered DOM rather than against the function behind it, which is the rule worth taking from this: test what the user sees, not what you called.');
 push(Note('info', 'jsdom is the one thing here that needs a package manager, so it is optional', [
   'Without jsdom the suite prints a skip notice and reports zero, it does not fail. The tool itself must keep working on a disconnected machine with no npm, and a test dependency that breaks that would defeat the point of vendoring everything else.',
   'Run them where you can: npm install jsdom, then node test/run_tests.js. Do it before any release that touched a page.']));

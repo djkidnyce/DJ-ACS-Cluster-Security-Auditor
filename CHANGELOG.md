@@ -11,6 +11,54 @@ at least; removing or renaming one is a major.
 Every release is tagged. `git tag -l` is the list, and the tag matches the version this
 tool stamps into every report and patch header it writes.
 
+## 1.5.0 - 2026-09-02
+
+Written for the workflow this is actually used in: scan on a Linux box, copy the files to a
+Windows machine, review there, apply through your own change process. No Node on either
+end, so the browser has to be the whole path rather than a preview of it.
+
+### Added
+
+- **Corrected YAML for a chosen subset of findings, from the browser.** Filter and tick
+  what you want, press Download corrected YAML, and you get a ZIP of your manifests with
+  those fixes applied, in the folder layout you loaded them in, plus a `READ_THIS_FIRST.md`
+  recording every change, the ones that can stop a workload, any placeholder values, and
+  anything that could not be applied.
+
+  It applies to a copy. Nothing in the page moves, the undo history is untouched, and you
+  can export one severity band, then another, without the two interfering. Exporting is not
+  applying: these are files, and putting them on a cluster remains your decision.
+
+- **Filters on the findings table.** Severity, fix kind, weakness class and policy id, with
+  the pickers built from what was actually found rather than from the whole catalogue. At
+  four figures of findings a single flat list is not a work queue, it is a wall.
+
+- **Selection, by filter and by row.** Tick individual findings, or take everything
+  currently shown. Selection is held per finding rather than per row, so filtering and
+  sorting never move a tick onto something else. A finding with no mechanical fix gets a
+  disabled box naming the reason instead of no box.
+
+- **`acs_pull_all.sh` captures the running workloads.** `oc get
+  deployment,daemonset,statefulset,cronjob,job -A -o json` lands as `workloads.json` in the
+  same timestamped run directory as the findings, so the violations and the manifests they
+  are about come from the same instant. Run it, make changes, run it again, and the two
+  directories diff cleanly. Without it ACS tells you a workload is in violation and you
+  have nothing to fix.
+
+  Time bounded like the trust bootstrap, and not fatal if `oc` is missing: it says what to
+  run elsewhere and carries on.
+
+### Changed
+
+- **The heavy sections collapse, with counts in the header.** Cross check, Violations from
+  ACS, and Findings, on the page and in the exported report. The count is what makes
+  collapsing useful rather than merely tidy: `1100 open, 40 critical` in a closed header
+  tells you where to start, and a critical count turns the badge red.
+
+- **A disabled export button now says what is holding it.** Report mode greying out the
+  patch and corrected YAML controls was silent, so it read as the tool being broken rather
+  than as a deliberate gate.
+
 ## 1.4.0 - 2026-09-02
 
 Provenance and reviewability. Nothing in the tool's behaviour changes; what changes is

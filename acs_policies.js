@@ -27,7 +27,7 @@
    test/version.cjs asserts it agrees with the newest CHANGELOG heading and with the git
    tag when one is checked out. A tool whose banner disagrees with its tag cannot be used
    as evidence, because you cannot tell which build produced a given report. */
-const ACS_VERSION = '1.4.0';
+const ACS_VERSION = '1.5.0';
 const ACS_TOOL = "DJ's ACS Auditor v" + ACS_VERSION;
 
 /* ACS severity scale and the weight each carries in the posture score. A Critical costs
@@ -2166,6 +2166,20 @@ function buildFindingsJson(st) {
   return out;
 }
 
+/* Sections in the report collapse, with the count in the header.
+ *
+ * The report is read by somebody who did not run the scan, often in a ticket, and a
+ * thousand row table with no way to fold it is a document people scroll past rather than
+ * read. Open by default so nothing is hidden from a reader who just wants to read; the
+ * count is what lets them decide which ones to close. */
+function reportSection(title, count, body, hot) {
+  if (!body) return '';
+  return '<details class="rsec" open><summary>' + escHtml(title) +
+    (count === null || count === undefined ? '' :
+      ' <span class="cnt' + (hot ? ' hot' : '') + '">' + escHtml(String(count)) + '</span>') +
+    '</summary>' + body + '</details>';
+}
+
 function buildHtmlReport(st) {
   const files = st.files || [], findings = st.findings || [];
   const before = computePosture(files, findings, false);
@@ -2256,8 +2270,12 @@ function buildHtmlReport(st) {
     }).join('') + '</table>'
   ) : '';
 
+  const critN = findings.filter(function (f) { return sevLabel(f.policy.severity) === 'Critical'; }).length;
   const findingsHtml = files.length
-    ? '<h2>Findings in your manifests</h2><table><tr><th>#</th><th>ID</th><th>Severity</th><th>Score</th><th>Policy and finding</th><th>Object</th><th>File</th><th>Fix</th></tr>' + rows + '</table>'
+    ? reportSection('Findings in your manifests',
+        findings.length + (critN ? ', ' + critN + ' critical' : ''),
+        '<table><tr><th>#</th><th>ID</th><th>Severity</th><th>Score</th><th>Policy and finding</th><th>Object</th><th>File</th><th>Fix</th></tr>' + rows + '</table>',
+        critN > 0)
     : '';
 
   /* ACS violations.
@@ -2295,8 +2313,8 @@ function buildHtmlReport(st) {
     const user = all.filter(function (r) { return !r.isPlatform; }).sort(byScore);
     const plat = all.filter(function (r) { return r.isPlatform; }).sort(byScore);
     const head = '<tr><th>Severity</th><th>Score</th><th>ACS policy</th><th>Object</th><th>Namespace</th><th>State</th><th>Violation</th><th>Fix route</th></tr>';
-    acsHtml =
-      '<h2>Violations reported by ACS</h2>' +
+    acsHtml = reportSection('Violations reported by ACS',
+      st.acs.total + ' total, ' + st.acs.user + ' yours, ' + st.acs.platform + ' platform',
       '<p class="muted">' + st.acs.total + ' violation(s) imported: ' + st.acs.user +
         ' on your workloads, ' + st.acs.platform + ' on platform components. ' +
         (st.acs.platformFlagPresent
@@ -2313,7 +2331,8 @@ function buildHtmlReport(st) {
           'drift is to find. The supported routes are a policy exception with an expiry, a ' +
           'configuration change through whatever the operator exposes, or a case with Red ' +
           'Hat.</p><table>' + head + plat.map(vrow).join('') + '</table>'
-        : '');
+        : ''),
+      st.acs.user > 0);
   }
 
   /* Vulnerability section, only when CVE data was supplied. Kept visually separate from
@@ -2364,7 +2383,7 @@ function buildHtmlReport(st) {
     'td{padding:8px;border-bottom:1px solid var(--line);vertical-align:top}' +
     '.big{font-size:38px;font-weight:800}.grid{display:flex;gap:24px;flex-wrap:wrap;margin-top:11px}' +
     '.cardx{border:1px solid var(--card);border-radius:10px;padding:16px 22px;min-width:190px}' +
-    '.muted{color:var(--muted);font-size:12.5px}a{color:var(--acc)}.note{border-left:3px solid #d4a72c;background:var(--panel);padding:10px 13px;border-radius:0 6px 6px 0;font-size:13px;margin:10px 0}.sev{display:inline-block;padding:1px 7px;border-radius:9px;font-size:10.5px;font-weight:700}.sev.Critical{background:#67060c;color:#ffb3ad}.sev.High{background:#5a2d0c;color:#ffc999}.sev.Medium{background:#4d3800;color:#f2d24b}.sev.Low{background:#0f3d1e;color:#7ee2a8}h3{font-size:14px;margin:14px 0 6px}' +
+    '.muted{color:var(--muted);font-size:12.5px}a{color:var(--acc)}details.rsec{margin:18px 0}details.rsec>summary{cursor:pointer;list-style:none;font-size:18px;font-weight:600;margin:0 0 8px;display:flex;align-items:center;gap:10px;user-select:none}details.rsec>summary::-webkit-details-marker{display:none}details.rsec>summary::before{content:"\\25B8";font-size:12px;color:var(--muted);display:inline-block;transition:transform .12s}details.rsec[open]>summary::before{transform:rotate(90deg)}summary .cnt{font-size:12px;font-weight:400;color:var(--muted);border:1px solid var(--card);border-radius:10px;padding:1px 9px}summary .cnt.hot{color:#cf222e;border-color:#cf222e}.note{border-left:3px solid #d4a72c;background:var(--panel);padding:10px 13px;border-radius:0 6px 6px 0;font-size:13px;margin:10px 0}.sev{display:inline-block;padding:1px 7px;border-radius:9px;font-size:10.5px;font-weight:700}.sev.Critical{background:#67060c;color:#ffb3ad}.sev.High{background:#5a2d0c;color:#ffc999}.sev.Medium{background:#4d3800;color:#f2d24b}.sev.Low{background:#0f3d1e;color:#7ee2a8}h3{font-size:14px;margin:14px 0 6px}' +
     '#tg{position:fixed;top:13px;right:15px;background:var(--panel);color:var(--fg);border:1px solid var(--card);border-radius:6px;padding:6px 13px;cursor:pointer;font-size:13px}' +
     '</style></head><body><button id="tg">Dark mode</button>' +
     '<h1>Red Hat ACS Audit Report</h1>' +

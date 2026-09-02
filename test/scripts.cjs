@@ -303,6 +303,7 @@ if (!served) {
   console.log('        but it is not being exercised on this machine.');
 } else {
   const EP = 'https://127.0.0.1:18443';
+  const pullSrcOf = (f) => fs.readFileSync(f, 'utf8');
   const pull = path.join(DIR, 'acs_pull_all.sh');
   /* Hermetic, in two ways that both matter.
    *
@@ -324,7 +325,8 @@ if (!served) {
     const out = path.join(tlsdir, 'out-' + Math.random().toString(36).slice(2));
     const env = Object.assign({}, process.env,
       { ROX_API_TOKEN: 'x', ROX_ENDPOINT: EP, KUBECONFIG: '/dev/null' });
-    if (!o.realPath) env.PATH = stub + ':' + process.env.PATH;
+    if (o.ocPath) env.PATH = o.ocPath + ':' + process.env.PATH;
+    else if (!o.realPath) env.PATH = stub + ':' + process.env.PATH;
     let r;
     try {
       r = { code: 0, out: execFileSync('sh', [pull, '-o', out].concat(args),
@@ -425,8 +427,52 @@ if (!served) {
     nosum.files.indexOf('findings.md') === -1 &&
     nosum.files.indexOf('02_alerts_full.json') !== -1);
 
+  /* The findings and the manifests they are about have to come from the same instant.
+     ACS naming a workload is only actionable if you also have the object it named, and a
+     workloads.json pulled an hour later has already drifted. This is also what makes a
+     before and after comparison mean anything: two run directories, diffed. */
+  console.log('\n  The run captures the live workloads beside the findings');
+  const goodOc = path.join(tlsdir, 'bin-oc');
+  fs.mkdirSync(goodOc, { recursive: true });
+  fs.writeFileSync(path.join(goodOc, 'oc'),
+    '#!/bin/sh\ncase "$*" in\n' +
+    '  *deployment,daemonset*) echo \'{"apiVersion":"v1","kind":"List","items":' +
+    '[{"kind":"Deployment","metadata":{"name":"a","namespace":"prod"}},' +
+    '{"kind":"DaemonSet","metadata":{"name":"b","namespace":"kube-system"}}]}\' ;;\n' +
+    '  *) exit 1 ;;\nesac\n', { mode: 0o755 });
+
+  const wl = runPull(['--pin', 'sha256//' + spki], { ocPath: goodOc });
+  t('workloads.json lands in the same run directory as the findings',
+    wl.files.indexOf('workloads.json') !== -1 &&
+    wl.files.indexOf('02_alerts_full.json') !== -1);
+  const wlf = walk(wl.dir).find((f) => /workloads\.json$/.test(f));
+  const wlj = wlf ? JSON.parse(fs.readFileSync(wlf, 'utf8')) : null;
+  t('it holds the objects oc returned, unaltered', !!wlj && wlj.items.length === 2);
+  t('the run says how many objects it captured', /2 workload object\(s\)/.test(wl.out));
+  t('the capture asks for every controller kind, not just deployments',
+    /deployment,daemonset,statefulset,cronjob,job/.test(pullSrcOf(pull)));
+  t('and across all namespaces', /--all-namespaces/.test(pullSrcOf(pull)));
+  t('the capture is time bounded too, so a slow API server cannot wedge the run',
+    /oc --request-timeout=60s get deployment/.test(pullSrcOf(pull)));
+
+  /* Most people running the pull are on a jump box with a token and no oc. Losing the
+     workloads is survivable; losing the findings because of it is not. */
+  const noOc = runPull(['--pin', 'sha256//' + spki]);
+  t('an oc that fails does not fail the run', noOc.code === 0);
+  t('an oc that cannot reach the cluster is reported, not swallowed',
+    /could not read workloads/.test(noOc.out));
+  t('and it says the workloads were not captured',
+    /workloads were not|were not captured/.test(noOc.out));
+  t('and prints the command to run elsewhere',
+    /oc get deployment,daemonset,statefulset,cronjob,job -A -o json/.test(noOc.out));
+  t('a half written workloads.json is removed rather than left to be loaded',
+    noOc.files.indexOf('workloads.json') === -1);
+  /* The no oc branch cannot be reached with a stub on PATH, so assert on the source. */
+  t('a host with no oc at all gets the same instruction',
+    /oc is not on PATH, so the running workloads were not captured/.test(pullSrcOf(pull)));
+
   console.log('\n  The pull cannot hang on an unrelated cluster');
-  const pullSrc = fs.readFileSync(pull, 'utf8');
+  const pullSrc = pullSrcOf(pull);
   t('the oc call that bootstraps trust is time bounded',
     /oc --request-timeout=\d+s/.test(pullSrc));
   t('and the script says it is trying that route, so a wait is explained',

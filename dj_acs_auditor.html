@@ -103,6 +103,18 @@ button.ovr.on{border-style:solid;border-color:var(--med);color:var(--med)}
 pre.cmd{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:11px 13px;overflow-x:auto;font-family:ui-monospace,Consolas,monospace;font-size:12px;white-space:pre-wrap;margin-top:10px}
 .err{border-left:3px solid var(--crit);background:var(--panel2);padding:9px 12px;border-radius:0 6px 6px 0;font-size:12.5px;margin-top:10px}
 .warn{border-left:3px solid var(--med);background:var(--panel2);padding:9px 12px;border-radius:0 6px 6px 0;font-size:12.5px;color:var(--muted);margin:10px 0}
+
+details.sec > summary{cursor:pointer;list-style:none;font-size:14px;color:var(--accent);
+  text-transform:uppercase;letter-spacing:.05em;font-weight:600;margin-bottom:11px;
+  display:flex;align-items:center;gap:9px;user-select:none}
+details.sec > summary::-webkit-details-marker{display:none}
+details.sec > summary::before{content:'\25B8';display:inline-block;transition:transform .12s;
+  font-size:11px;color:var(--muted)}
+details.sec[open] > summary::before{transform:rotate(90deg)}
+details.sec > summary:hover{color:var(--text)}
+summary .cnt{background:var(--panel2);border:1px solid var(--border);border-radius:10px;
+  padding:1px 9px;font-size:11px;color:var(--muted);text-transform:none;letter-spacing:0}
+summary .cnt.hot{color:var(--crit);border-color:var(--crit)}
 .hidden{display:none}
 a{color:var(--accent)}
 
@@ -226,14 +238,14 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
       <div id="catbars"></div>
       <p class="note">Left bar is where you are now, right bar is where you land once every automatically fixable finding is applied. Both are measured against the same total, so the two numbers are directly comparable. Apply the fixes on the remediation page.</p>
     </div>
-    <div id="acsPanel" class="section hidden">
-      <h2>Cross check against your ACS export</h2>
+    <details id="acsPanel" class="section sec hidden" open>
+      <summary>Cross check against your ACS export <span class="cnt" id="acsPanelCnt"></span></summary>
       <div id="acsSummary"></div>
       <div id="acsPlatformOut"></div>
       <div id="acsOnly"></div>
-    </div>
-    <div id="violPanel" class="section hidden">
-      <h2>Violations from ACS</h2>
+    </details>
+    <details id="violPanel" class="section sec hidden" open>
+      <summary>Violations from ACS <span class="cnt" id="violPanelCnt"></span></summary>
       <p class="note">Every violation in the export, whether or not you loaded the manifest it
         came from. The Fix column says what can be done about each one and by which route, so a
         violation is never just a number you cannot act on.</p>
@@ -277,7 +289,7 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
         near a cluster.
         A checkbox is disabled where the violation has no fix route this tool can take; hover it
         for the reason.</p>
-    </div>
+    </details>
     <div id="vulnPanel" class="section hidden">
       <h2>Image vulnerabilities</h2>
       <div class="cards" id="vulnCards"></div>
@@ -311,8 +323,8 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
         tie at the top and destroy the ordering exactly where it matters. It is CVSS plus named, bounded
         adjustments, all listed in the last column. It is not a CVSS score and should not be quoted as one.</p>
     </div>
-    <div class="section">
-      <h2>Findings</h2>
+    <details class="section sec" open>
+      <summary>Findings <span class="cnt" id="ftableCnt"></span></summary>
       <table id="ftable">
         <thead><tr>
           <th class="sortable" data-key="sev" data-label="Severity">Severity</th>
@@ -326,7 +338,7 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
         <tbody></tbody>
       </table>
       <p class="note">Click a row for the full advisory. Click a column header to sort, click again to reverse.</p>
-    </div>
+    </details>
     <div class="section">
       <h2>Export</h2>
       <div class="toolbar">
@@ -362,6 +374,7 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
           <input type="checkbox" id="skipConfirm"> Skip the confirmation prompt
         </label>
       </div>
+      <p class="note" id="modeWhy" style="margin-top:0"></p>
       <div class="warn">
         <strong>Report only is the default, and nothing on this page will change a file until you
         move off it.</strong> That is deliberate. A remediation tool that can write before you have
@@ -399,10 +412,39 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
         image once and every fixable CVE inside it clears together. A list organised by CVE looks like
         progress and cannot be actioned.</p>
     </div>
-    <div class="section">
-      <h2>Findings</h2>
+    <details class="section sec" open>
+      <summary>Findings <span class="cnt" id="rtableCnt"></span></summary>
+      <p class="note" style="margin-top:0">Narrow the list, then act on what is left. At a
+        thousand findings the only workable order is by severity band and by weakness class,
+        not one enormous list you scroll.</p>
+      <div class="toolbar">
+        <label class="chk"><input type="checkbox" class="fsev" value="Critical" checked> Critical</label>
+        <label class="chk"><input type="checkbox" class="fsev" value="High" checked> High</label>
+        <label class="chk"><input type="checkbox" class="fsev" value="Medium" checked> Medium</label>
+        <label class="chk"><input type="checkbox" class="fsev" value="Low" checked> Low</label>
+        <span style="width:14px"></span>
+        <label class="chk"><input type="checkbox" id="fkAuto" checked> Auto fixable</label>
+        <label class="chk"><input type="checkbox" id="fkGen" checked> Generates a file</label>
+        <label class="chk"><input type="checkbox" id="fkManual" checked> Needs a decision</label>
+        <label class="chk"><input type="checkbox" id="fkApplied"> Already applied</label>
+      </div>
+      <div class="toolbar" style="margin-top:0">
+        <label class="chk">Weakness class
+          <select id="fCat" style="background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:4px 8px;font-size:13px">
+            <option value="">any</option>
+          </select></label>
+        <label class="chk">Policy
+          <select id="fPolicy" style="background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:4px 8px;font-size:13px">
+            <option value="">any</option>
+          </select></label>
+        <button id="btnFSelAll">Select all shown</button>
+        <button id="btnFSelNone">Clear selection</button>
+        <button class="primary" id="btnExportFixed">Download corrected YAML</button>
+        <span class="note" id="fCount" style="margin:0"></span>
+      </div>
       <table id="rtable">
         <thead><tr>
+          <th style="width:26px"><input type="checkbox" id="fSelAll" title="Select or clear every fixable finding currently shown"></th>
           <th class="sortable" data-key="sev" data-label="Severity">Severity</th>
           <th class="sortable" data-key="id" data-label="Policy">Policy</th>
           <th class="sortable" data-key="obj" data-label="Object">Object</th>
@@ -414,7 +456,7 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
         <tbody></tbody>
       </table>
       <p class="note">Click a row to read the full advisory: the ACS policy, why it matters, what to do, and the standards behind it. Click a column header to sort.</p>
-    </div>
+    </details>
     <div class="section">
       <h2>Take the result</h2>
       <div class="toolbar">
@@ -550,6 +592,7 @@ function render() {
 
   renderAuditTab();
   renderRemediateTab();
+  refreshCounts();
 
   /* Deliberately NOT calling applyMode() here. applyMode() calls render(), so doing both
      is a cycle. render() computes the "is there work" half of the button states, applyMode
@@ -879,7 +922,7 @@ function renderFindingsRO() {
   document.querySelectorAll('#ftable th.sortable').forEach((th) => {
     th.textContent = th.dataset.label + (STATE.sort.key === th.dataset.key ? (STATE.sort.dir === 1 ? ' ▲' : ' ▼') : '');
   });
-  const rows = [...STATE.findings].sort((a, b) => {
+  const rows = [...findingRows()].sort((a, b) => {
     const x = sortVal(a, STATE.sort.key), y = sortVal(b, STATE.sort.key);
     if (x < y) return -1 * STATE.sort.dir;
     if (x > y) return 1 * STATE.sort.dir;
@@ -895,6 +938,14 @@ function renderFindingsRO() {
     const tr = document.createElement('tr');
     tr.className = 'frow';
     tr.innerHTML =
+      '<td class="selcell">' +
+        (fFixable(f)
+          ? '<input type="checkbox" class="fsel" data-fk="' + esc(findingKey(f)) + '"' +
+            (FSELECTED.has(findingKey(f)) ? ' checked' : '') + '>'
+          : '<input type="checkbox" disabled title="' +
+            (f.applied ? 'Already applied.' : 'No mechanical fix: this one needs a decision. ' + esc(f.policy.remediation)) +
+            '">') +
+      '</td>' +
       '<td><span class="sev ' + sev + '">' + sev + '</span></td>' +
       '<td><b>' + f.policy.score.toFixed(1) + '</b></td>' +
       '<td><span class="acsid">' + f.policy.id + '</span><br><span style="font-size:11.5px">' + esc(f.policy.acsPolicy) + '</span>' +
@@ -924,6 +975,7 @@ function renderFindingsRO() {
     tr.addEventListener('click', () => dr.classList.toggle('hidden'));
     tb.appendChild(tr); tb.appendChild(dr);
   });
+
 }
 
 
@@ -966,6 +1018,16 @@ function applyModeButtons() {
     if (m !== 'auto') $('skipConfirm').checked = false;
   }
   if ($('modeNote')) $('modeNote').textContent = FIX_MODE_INFO[m].summary;
+
+  /* A greyed out button with no explanation teaches people that the tool is broken. Say
+     which control is holding it and what to move. */
+  if ($('modeWhy')) {
+    $('modeWhy').textContent = canWrite ? '' :
+      'Report only, so nothing that could be applied is produced: the patch, corrected YAML ' +
+      'and step through controls are disabled. Choose Manual to get files to review, or ' +
+      'Auto to also apply fixes here. Nothing writes to your disk either way until you ' +
+      'press a download.';
+  }
 }
 
 function applyMode() {
@@ -1300,11 +1362,132 @@ function sortVal(f, key) {
   }
 }
 
+/* ----------------------------------------------- filtering the findings
+ *
+ * A real cluster produces four figures worth of findings. One flat list of those is not a
+ * work queue, it is a wall, and the honest response to a wall is to close the tab. These
+ * filters exist so you can take one severity band, or one weakness class, and finish it.
+ *
+ * Selection is held by finding key rather than row index, for the same reason the
+ * violations panel does it: filtering and sorting move rows, and a tick that follows a
+ * position rather than a finding is a tick that silently means something else.
+ */
+const FSELECTED = new Set();
+
+function findingRows() {
+  const sevs = new Set(Array.from(document.querySelectorAll('input.fsev:checked'))
+    .map((c) => c.value));
+  const wantAuto = $('fkAuto').checked, wantGen = $('fkGen').checked;
+  const wantManual = $('fkManual').checked, wantApplied = $('fkApplied').checked;
+  const cat = $('fCat').value, pol = $('fPolicy').value;
+
+  return STATE.findings.filter((f) => {
+    if (!sevs.has(sevLabel(f.policy.severity))) return false;
+    if (f.applied) { if (!wantApplied) return false; }
+    else if (f.fixKind === 'auto' && !wantAuto) return false;
+    else if (f.fixKind === 'generate' && !wantGen) return false;
+    else if (f.fixKind === 'manual' && !wantManual) return false;
+    if (cat && f.policy.categories.indexOf(cat) === -1) return false;
+    if (pol && f.policy.id !== pol) return false;
+    return true;
+  });
+}
+
+/* Only a finding with a mechanical fix can be selected for export. A manual one has
+   nothing to emit, so it gets a disabled box with the reason rather than no box, which
+   would read as an oversight rather than an answer. */
+const fFixable = (f) => !f.applied && f.fixKind !== 'manual';
+
+function syncFindingSelection() {
+  const shown = findingRows().filter(fFixable);
+  const chosen = shown.filter((f) => FSELECTED.has(findingKey(f)));
+  const box = $('fSelAll');
+  if (box) {
+    box.checked = shown.length > 0 && chosen.length === shown.length;
+    box.indeterminate = chosen.length > 0 && chosen.length < shown.length;
+    box.disabled = shown.length === 0;
+  }
+  const total = STATE.findings.length;
+  const visible = findingRows().length;
+  $('fCount').textContent =
+    'showing ' + visible + ' of ' + total + ' finding(s)' +
+    (FSELECTED.size ? ', ' + FSELECTED.size + ' selected' : ', none selected');
+  const btn = $('btnExportFixed');
+  if (btn) {
+    btn.textContent = FSELECTED.size
+      ? 'Download corrected YAML for ' + FSELECTED.size + ' selected'
+      : 'Download corrected YAML';
+    btn.disabled = FSELECTED.size === 0 || !modeAllows(currentMode(), 'patches');
+  }
+}
+
+/* The category and policy pickers are built from what was actually found, not from the
+   whole catalogue. Offering a filter that matches nothing is a small lie about the data. */
+function refreshFindingFilters() {
+  for (const [id, vals] of [
+    ['fCat', Array.from(new Set(STATE.findings.flatMap((f) => f.policy.categories))).sort()],
+    ['fPolicy', Array.from(new Set(STATE.findings.map((f) => f.policy.id))).sort()],
+  ]) {
+    const sel = $(id);
+    if (!sel) continue;
+    const keep = sel.value;
+    sel.innerHTML = '<option value="">any</option>' +
+      vals.map((v) => '<option value="' + esc(v) + '">' + esc(v) + '</option>').join('');
+    if (vals.indexOf(keep) !== -1) sel.value = keep;
+  }
+}
+
+/* Counts in the section headers.
+ *
+ * A collapsed section that says nothing is just a hidden section, and the operator has to
+ * open all of them to find out where the work is. The count is what makes collapsing
+ * useful rather than merely tidy: you can see at a glance which one to open. Critical and
+ * High are called out separately, because "1100 findings" and "1100 findings, 40 critical"
+ * lead to different next actions.
+ */
+function setCount(id, n, hot) {
+  const el = $(id);
+  if (!el) return;
+  el.textContent = n;
+  el.classList.toggle('hot', !!hot);
+}
+
+function refreshCounts() {
+  const f = STATE.findings;
+  const crit = f.filter((x) => sevLabel(x.policy.severity) === 'Critical').length;
+  const high = f.filter((x) => sevLabel(x.policy.severity) === 'High').length;
+  const openN = f.filter((x) => !x.applied).length;
+  const label = f.length
+    ? openN + ' open' + (crit ? ', ' + crit + ' critical' : '') + (high ? ', ' + high + ' high' : '')
+    : 'none';
+  setCount('ftableCnt', label, crit > 0);
+
+  /* On the Remediate tab the header has to say when a filter is hiding rows, otherwise a
+     narrowed list reads as a shorter one and people call the run clean. */
+  const shown = document.querySelectorAll('#rtable tbody tr:not(.hidden)').length;
+  setCount('rtableCnt', (shown && shown !== f.length ?
+    'showing ' + shown + ' of ' + f.length + ', ' : '') + label, crit > 0);
+
+  if (STATE.acs && STATE.acs.total) {
+    setCount('violPanelCnt', STATE.acs.total + ' total, ' + STATE.acs.user +
+      ' yours, ' + STATE.acs.platform + ' platform', STATE.acs.user > 0);
+    const confirmed = f.filter((x) => x.confirmedByAcs).length;
+    setCount('acsPanelCnt', confirmed + ' confirmed live, ' +
+      (STATE.onlyInAcs || []).length + ' only in ACS', confirmed > 0);
+  } else {
+    setCount('violPanelCnt', 'none loaded');
+    setCount('acsPanelCnt', 'none loaded');
+  }
+}
+
 function renderTable() {
   document.querySelectorAll('#rtable th.sortable').forEach((th) => {
     th.textContent = th.dataset.label + (STATE.sort.key === th.dataset.key ? (STATE.sort.dir === 1 ? ' ▲' : ' ▼') : '');
   });
-  const rows = [...STATE.findings].sort((a, b) => {
+  /* The filters above the table are what make a four figure finding list workable, so the
+     table has to honour them. Sorting the unfiltered list here while the filters only fed
+     the export was the worst of both: the controls looked live and changed nothing. */
+  const rows = [...findingRows()].sort((a, b) => {
     const x = sortVal(a, STATE.sort.key), y = sortVal(b, STATE.sort.key);
     if (x < y) return -1 * STATE.sort.dir;
     if (x > y) return 1 * STATE.sort.dir;
@@ -1341,10 +1524,18 @@ function renderTable() {
 
     const dr = document.createElement('tr');
     dr.className = 'hidden';
-    dr.innerHTML = '<td colspan="7" style="background:var(--panel2)">' + advisoryHtml(f) + '</td>';
+    dr.innerHTML = '<td colspan="8" style="background:var(--panel2)">' + advisoryHtml(f) + '</td>';
     tr.addEventListener('click', () => dr.classList.toggle('hidden'));
     tb.appendChild(tr); tb.appendChild(dr);
   });
+
+  tb.querySelectorAll('input.fsel').forEach((cb) => cb.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    if (cb.checked) FSELECTED.add(cb.dataset.fk); else FSELECTED.delete(cb.dataset.fk);
+    syncFindingSelection();
+  }));
+  refreshFindingFilters();
+  syncFindingSelection();
 }
 
 function advisoryHtml(f) {
@@ -2098,6 +2289,179 @@ if ($('btnImgWorklist')) $('btnImgWorklist').addEventListener('click', () => {
     buildVulnWorklist(STATE.vulns, STATE.vulnCorr), 'text/markdown');
   flash('Image worklist downloaded.');
 });
+
+/* ------------------------------------- exporting corrected YAML for a selection
+ *
+ * This is the artifact that matters when the tool cannot reach the cluster, which is the
+ * normal case: the scan runs on one machine, the review happens on another, and the fix is
+ * applied by a person through whatever change process they already have.
+ *
+ * It applies the selected fixes to a COPY. Nothing in STATE moves, so the page you are
+ * looking at is unchanged, the undo history is untouched, and you can export one severity
+ * band, then another, without the two interfering.
+ */
+document.querySelectorAll('input.fsev').forEach((c) =>
+  c.addEventListener('change', renderTable));
+['fkAuto', 'fkGen', 'fkManual', 'fkApplied', 'fCat', 'fPolicy'].forEach((id) => {
+  if ($(id)) $(id).addEventListener('change', renderTable);
+});
+
+if ($('fSelAll')) $('fSelAll').addEventListener('click', () => {
+  const shown = findingRows().filter(fFixable);
+  const all = shown.every((f) => FSELECTED.has(findingKey(f)));
+  for (const f of shown) {
+    if (all) FSELECTED.delete(findingKey(f)); else FSELECTED.add(findingKey(f));
+  }
+  renderTable();
+});
+if ($('btnFSelAll')) $('btnFSelAll').addEventListener('click', () => {
+  for (const f of findingRows().filter(fFixable)) FSELECTED.add(findingKey(f));
+  renderTable();
+});
+if ($('btnFSelNone')) $('btnFSelNone').addEventListener('click', () => {
+  FSELECTED.clear();
+  renderTable();
+});
+
+if ($('btnExportFixed')) $('btnExportFixed').addEventListener('click', async () => {
+  if (!requireMode('patches', 'write corrected YAML')) return;
+  if (!FSELECTED.size) { flash('Nothing selected.'); return; }
+
+  /* Work on a copy. The whole point is that exporting is not applying. */
+  const files = structuredClone(STATE.files.map((f) => ({
+    name: f.name, docs: f.docs, originalDocs: f.originalDocs, errors: [], generated: !!f.generated,
+  })));
+  const byName = {};
+  for (const f of files) byName[f.name] = f;
+
+  const wanted = STATE.findings.filter((f) => FSELECTED.has(findingKey(f)) && fFixable(f));
+  const applied = [], skipped = [], generated = [];
+
+  for (const f of wanted) {
+    if (f.fixKind === 'generate') {
+      const gen = defaultDenyPolicy(f.ns);
+      generated.push({ name: gen.name, text: gen.yaml, finding: f });
+      applied.push(f);
+      continue;
+    }
+    const target = byName[f.file];
+    if (!target) { skipped.push({ f: f, why: 'the file it belongs to is not loaded' }); continue; }
+    const res = applyOneFix(target.docs, f);
+    if (!res) { skipped.push({ f: f, why: 'the fix produced no change' }); continue; }
+    target.docs = res.docs;
+    applied.push(f);
+  }
+
+  const touched = files.filter((f) => !f.generated &&
+    JSON.stringify(f.docs) !== JSON.stringify(f.originalDocs));
+
+  if (!touched.length && !generated.length) {
+    flash('Nothing changed. ' + (skipped.length ? skipped.length + ' could not be applied.' : ''));
+    return;
+  }
+
+  const readme = buildExportReadme(applied, skipped, generated, touched);
+  const tag = stamp() + '_' + currentMode();
+
+  if (typeof JSZip === 'undefined') {
+    download('READ_THIS_FIRST_' + tag + '.md', readme, 'text/markdown');
+    touched.forEach((f, i) => setTimeout(() =>
+      download(f.name.replace(/[\/]/g, '_'), dumpDocs(f.docs), 'text/yaml'), i * 120));
+    generated.forEach((g, i) => setTimeout(() =>
+      download(g.name, g.text, 'text/yaml'), (touched.length + i) * 120));
+    flash('Downloaded ' + (touched.length + generated.length) + ' file(s) separately.');
+    return;
+  }
+
+  const zip = new JSZip();
+  zip.file('READ_THIS_FIRST.md', readme);
+  for (const f of touched) zip.file('corrected/' + f.name, dumpDocs(f.docs));
+  for (const g of generated) zip.file('corrected/' + g.name, g.text);
+  const blob = await zip.generateAsync({ type: 'blob' });
+  download('acs_corrected_yaml_' + tag + '.zip', blob);
+  flash(applied.length + ' fix(es) written across ' + (touched.length + generated.length) + ' file(s).');
+});
+
+/* What the person unzipping this needs to know, in the archive rather than in a chat
+   message they will not have. */
+function buildExportReadme(applied, skipped, generated, touched) {
+  const L = [];
+  L.push('# Corrected YAML');
+  L.push('');
+  L.push('Generated ' + new Date().toISOString() + ' by ' + ACS_TOOL + '.');
+  L.push(modeBanner(currentMode()));
+  L.push('');
+  L.push('**No command was run and no cluster was contacted.** These are files. Applying');
+  L.push('them is your decision and your change process.');
+  L.push('');
+  L.push('## What is here');
+  L.push('');
+  L.push('`corrected/` holds ' + touched.length + ' of your manifests with ' + applied.length +
+         ' fix(es) applied, in the same folder layout you loaded them in' +
+         (generated.length ? ', plus ' + generated.length + ' newly generated file(s)' : '') + '.');
+  L.push('');
+  L.push('Diff them against your originals before you do anything else:');
+  L.push('');
+  L.push('    diff -ru path/to/your/manifests corrected/');
+  L.push('');
+  L.push('## Applying them');
+  L.push('');
+  L.push('Through whatever you already use. If that is git, commit the corrected files and');
+  L.push('let your pipeline deploy them, which keeps the manifest the source of truth. If');
+  L.push('you are applying directly:');
+  L.push('');
+  L.push('    oc apply -f corrected/ --dry-run=server    # check first');
+  L.push('    oc apply -f corrected/');
+  L.push('');
+  L.push('Server side dry run tells you whether the API accepts them without changing');
+  L.push('anything, which is worth the extra command on a batch this size.');
+  L.push('');
+
+  const risky = applied.filter((f) => f.policy.runtimeRisk);
+  if (risky.length) {
+    L.push('## ' + risky.length + ' of these can stop the workload');
+    L.push('');
+    L.push('Correct hardening, and the edit is unambiguous. That says nothing about whether');
+    L.push('your application survives it. Roll these out somewhere you do not care about');
+    L.push('first, and watch the pods actually start.');
+    L.push('');
+    const seen = {};
+    for (const f of risky) {
+      const k = f.policy.id;
+      if (!seen[k]) { seen[k] = 1; L.push('* **' + k + ' ' + f.policy.acsPolicy + '** ' + f.policy.runtimeRisk); }
+    }
+    L.push('');
+  }
+
+  const ph = applied.filter((f) => f.policy.id === 'ACS.013' || f.policy.id === 'ACS.014');
+  if (ph.length) {
+    L.push('## Placeholder values');
+    L.push('');
+    L.push(ph.length + ' resource request or limit was inserted with a placeholder value.');
+    L.push('Tune them to the real workload before deploying, or you have traded a missing');
+    L.push('limit for a wrong one.');
+    L.push('');
+  }
+
+  if (skipped.length) {
+    L.push('## Not applied (' + skipped.length + ')');
+    L.push('');
+    for (const s of skipped) L.push('* ' + s.f.policy.id + ' on ' + s.f.obj + ': ' + s.why);
+    L.push('');
+  }
+
+  L.push('## Every change');
+  L.push('');
+  L.push('| Policy | Object | File | Change |');
+  L.push('|---|---|---|---|');
+  for (const f of applied) {
+    L.push('| ' + f.policy.id + ' ' + f.policy.acsPolicy + ' | ' + f.obj + ' | ' + f.file +
+           ' | ' + f.detail + ' |');
+  }
+  L.push('');
+  return L.join('\n');
+}
+
 </script>
 </body>
 </html>
