@@ -69,7 +69,7 @@ push([Tbl(['File', 'What it is for'], [
   ['acs_cli.js', 'The same engine headless, for a pipeline or a terminal. Needs Node; the page does not.'],
   ['scripts/', 'Getting the data out of ACS. Preflight, the full pull, and PowerShell, SSH and oc port forward variants. Bash and curl, no runtime.'],
   ['vendor/', 'js-yaml and JSZip, committed to the repository so the tool needs no package manager and no network access.'],
-  ['test/run_tests.js', '899 tests against the real engine, the page, the scripts and the command line.'],
+  ['test/run_tests.js', 'The whole suite, against the real engine, the page, the scripts and the command line. The count for this build is in BUILD.txt.'],
 ], [2200, 7100])]);
 body.push(P('', { spacing: { after: 120 } }));
 T('Open dj_acs_auditor.html by double clicking it. There is nothing to install, no server to start, and no package manager involved. Node is needed only for the command line runner and the test suite, never for the page.');

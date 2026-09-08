@@ -632,6 +632,158 @@ async function selectionUi() {
  * test and a flaky test gets deleted. It asserts the three structural properties that
  * make the render cheap. If any of them regresses, the page gets slow again.
  */
+/* The dwell on a flash message, which review caught as an undeclared rider.
+ *
+ * A rewrite that made refusals visible on the tab you are standing on also moved the
+ * timeout from 3000 to 6000ms for all twenty two call sites without saying so. The fix
+ * is not to pick one number, it is to stop an acknowledgement and a refusal sharing one
+ * by accident. FLASH_REFUSAL_MS is referenced inside requireMode at roughly line 1070
+ * and declared at roughly line 2260, so the first assertion here is that calling it does
+ * not throw: this file has had two temporal dead zone defects already.
+ */
+async function flashDwell() {
+  const { w, $, cleanup } = await open('dj_acs_auditor.html',
+    'window.__flash=(m,ms)=>flash(m,ms);window.__req=(w2,a)=>requireMode(w2,a);' +
+    'window.__ms=()=>({def:FLASH_MS,ref:FLASH_REFUSAL_MS});');
+
+  console.log('\n  A refusal stays up longer than an acknowledgement');
+  const ms = w.__ms();
+  t('the two durations are named rather than typed inline',
+    ms.def === 3000 && ms.ref === 6000);
+  t('the acknowledgement dwell is back to what it was before the rewrite', ms.def === 3000);
+
+  /* requireMode reads FLASH_REFUSAL_MS from an outer scope declared far below it. If that
+     were a dead zone this throws rather than returning false. */
+  let threw = null;
+  let refused = null;
+  try { refused = w.__req('writes', 'write corrected YAML'); }
+  catch (e) { threw = e.message; }
+  t('a refusal in report mode does not throw on the constant declared below it',
+    threw === null);
+  if (threw) console.log('        threw: ' + threw);
+  t('and it still refuses', refused === false);
+
+  /* flash() picks its target by which tab is visible. Query the same way it does, or
+     this reads an element it never wrote to. That is what the first version of this
+     test did, and it failed for a reason that had nothing to do with the code. */
+  const flashBox = () => {
+    const onRem = w.document.getElementById('tabRemediate') &&
+      !w.document.getElementById('tabRemediate').classList.contains('hidden');
+    return w.document.querySelector((onRem ? '#tabRemediate' : '#tabAudit') + ' .flashmsg');
+  };
+  const box = flashBox();
+  t('the refusal reached a message element', !!box && box.textContent.length > 0);
+
+  /* The race the guard exists for, driven at speeds a test can observe.
+   *
+   * The first version of this waited 120ms for clears scheduled at 3000 and 6000ms, so
+   * nothing could have fired and the assertion passed with the guard removed. Proved
+   * vacuous by deleting the guard and watching it stay green. Pass explicit short dwells
+   * instead, so the early timer really does fire while the later message is on screen.
+   */
+  console.log('\n  A short message clearing does not wipe the one that replaced it');
+  w.__flash('the refusal you must read', 400);
+  t('the first message is showing', flashBox().textContent === 'the refusal you must read');
+  w.__flash('quick acknowledgement', 50);
+  t('the second replaces it', flashBox().textContent === 'quick acknowledgement');
+  w.__flash('the refusal you must read', 400);
+  await new Promise((r) => setTimeout(r, 150));
+  t('the 50ms clear fired and left the current message alone, because it checks the text',
+    flashBox().textContent === 'the refusal you must read');
+  await new Promise((r) => setTimeout(r, 400));
+  t('and the message does clear once its own timer comes round',
+    flashBox().textContent === '');
+
+  /* The case the text based guard could not see: the SAME message twice.
+   *
+   * Comparing textContent cannot distinguish "still mine" from "posted again", so the
+   * first call's timer wiped the second call's message early. Pressing a refusing
+   * control twice is exactly what an operator does when a button looks like it did
+   * nothing, so this is a real path rather than a contrived one. */
+  console.log('\n  The same refusal posted twice keeps its full dwell');
+  w.__flash('Nothing selected.', 300);
+  await new Promise((r) => setTimeout(r, 200));
+  w.__flash('Nothing selected.', 300);      // the operator presses again
+  await new Promise((r) => setTimeout(r, 180));
+  t('the first timer has fired but did not wipe the second posting',
+    flashBox().textContent === 'Nothing selected.');
+  await new Promise((r) => setTimeout(r, 200));
+  t('and the second clears on its own schedule', flashBox().textContent === '');
+
+  cleanup();
+}
+
+/* F7 and F8. Cosmetic findings, with one real risk hidden in them: unifying the detail
+ * toggle across two tables that deliberately render DIFFERENT content is an easy way to
+ * silently change what one of them shows. The Audit tab renders runtimeRisk, the
+ * Remediate tab renders Severity and Live in ACS. These assert both still do.
+ */
+async function detailRows() {
+  const { w, $, cleanup } = await open('dj_acs_auditor.html',
+    'window.__load=(i)=>loadItems(i);window.__tab=(t)=>showTab(t);');
+  const RISKY = ['apiVersion: apps/v1', 'kind: Deployment',
+    'metadata: { name: app, namespace: prod }', 'spec:', '  template:', '    spec:',
+    '      containers:', '      - name: c', '        image: q/app:1',
+    '        securityContext: { privileged: true, readOnlyRootFilesystem: false }'].join('\n');
+  w.__load([{ name: 'm/a.yaml', text: RISKY }]);
+
+  console.log('\n  One toggle mechanism, two different advisories');
+  w.__tab('audit');
+  /* Only four policies carry runtimeRisk, and row order is by severity, so the first row
+     is not reliably one of them. Find the row that should show it rather than assuming. */
+  const arows = Array.from(w.document.querySelectorAll('#ftable tbody tr'));
+  const arow = arows.find((r) => /ACS\.002|ACS\.008|ACS\.009|ACS\.016/.test(r.textContent))
+    || arows[0];
+  t('the Audit table rendered a row with a runtime risk policy on it',
+    !!arow && /ACS\.(002|008|009|016)/.test(arow.textContent));
+  arow.click();
+  const adet = arow.nextElementSibling;
+  t('clicking it inserts a detail row', !!adet && adet.classList.contains('fdet'));
+  t('and reveals it', !!adet && !adet.classList.contains('hidden'));
+  const acells = adet.querySelectorAll('td').length;
+  t('the detail cell spans the Audit table, not some other table',
+    adet.firstElementChild.getAttribute('colspan') ===
+      String(w.document.querySelectorAll('#ftable thead th').length));
+  t('it is one cell, so the colspan was not doubled by the merge', acells === 1);
+  t('the Audit advisory still carries the runtime risk wording it is the only one to show',
+    /Can stop the workload/.test(adet.textContent));
+  arow.click();
+  t('clicking again collapses it', adet.classList.contains('hidden'));
+  t('and does not insert a second detail row',
+    w.document.querySelectorAll('#ftable tbody tr.fdet').length === 1);
+
+  w.__tab('remediate');
+  $('fixMode').value = 'manual'; $('fixMode').dispatchEvent(new w.Event('change'));
+  const rrow = w.document.querySelector('#rtable tbody tr[data-i]');
+  t('the Remediate table rendered a row', !!rrow);
+  const rcell = rrow.querySelector('td.wrapcell') ||
+    Array.from(rrow.querySelectorAll('td')).find((c) => !c.classList.contains('selcell'));
+  t('the row has a cell that is not the checkbox to click on', !!rcell);
+  rcell.click();
+  const rdet = rrow.nextElementSibling;
+  t('it gets a detail row from the same helper', !!rdet && rdet.classList.contains('fdet'));
+  t('spanning the Remediate table, which has a different column count',
+    rdet.firstElementChild.getAttribute('colspan') ===
+      String(w.document.querySelectorAll('#rtable thead th').length));
+  t('the Remediate advisory still shows Severity, which the Audit one does not',
+    /Severity/.test(rdet.textContent));
+  t('the two advisories are genuinely different, so the merge did not flatten them',
+    rdet.textContent !== adet.textContent);
+
+  console.log('\n  The dead CSS rule is gone and the notes are styled in one place');
+  const css = require('fs').readFileSync(require('path').join(ROOT, 'dj_acs_auditor.html'), 'utf8');
+  t('table-layout:auto is removed, because auto is the initial value anyway',
+    !/table-layout:auto/.test(css));
+  t('the one table that needs a fixed layout still declares it',
+    /#rtable\{table-layout:fixed/.test(css));
+  t('the mode explanation carries no inline layout',
+    !/id="fModeWhy" style=/.test(css));
+  t('and is styled with the other notes instead', /#fModeWhy\{margin:/.test(css));
+  t('the cell ceiling says where its number came from',
+    /roughly 55 characters at this font size/.test(css));
+  cleanup();
+}
+
 async function scale() {
   const { w, $, cleanup } = await open('dj_acs_auditor.html',
     'window.__S=()=>STATE;window.__load=(i)=>loadItems(i);window.__tab=(t)=>showTab(t);' +
@@ -1645,18 +1797,51 @@ async function specBudget() {
 }
 
 (async () => {
-  try {
-    await auditor();
-    await remediation();
-    await tabs();
-    await bulkExport();
-    await scale();
-    await selectionUi();
-    await specCases();
-    await specBudget();
-    await noManifests('dj_acs_auditor.html');
+  /* One try around the lot meant one throw cost every suite after it.
+   *
+   * A regression that removed a single element threw out of the block it happened in and
+   * the eight suites below it never ran. The report said "1 failed" and the real number
+   * was seventeen, so the count under-reported exactly when it mattered most: the run
+   * where something is badly broken is the run you most need an accurate list from.
+   *
+   * Each suite is isolated now. One crashing does not stop the others, its failure is
+   * attributed to it by name, and a crash is counted separately from an assertion that
+   * returned false, because those are different problems: a false assertion is a defect
+   * in the product, a throw is usually a defect in the harness or a missing element the
+   * suite assumed.
+   */
+  const suites = [
+    ['auditor', auditor],
+    ['remediation', remediation],
+    ['tabs', tabs],
+    ['bulkExport', bulkExport],
+    ['scale', scale],
+    ['detailRows', detailRows],
+    ['flashDwell', flashDwell],
+    ['selectionUi', selectionUi],
+    ['specCases', specCases],
+    ['specBudget', specBudget],
+    ['noManifests', () => noManifests('dj_acs_auditor.html')],
+  ];
+  const crashed = [];
+  for (const [name, fn] of suites) {
+    try { await fn(); }
+    catch (e) {
+      crashed.push(name);
+      F++;
+      console.log('  FAIL  ' + name + ' threw and its remaining assertions did not run');
+      console.log('        ' + (e && e.message ? e.message : String(e)));
+      if (e && e.stack) {
+        const frame = String(e.stack).split('\n').find((l) => /page\.cjs:\d+/.test(l));
+        if (frame) console.log('        ' + frame.trim());
+      }
+    }
   }
-  catch (e) { console.log('  FAIL  ' + e.message); F++; }
   console.log('\n' + P + ' passed, ' + F + ' failed');
+  if (crashed.length) {
+    console.log('SUITE(S) THAT CRASHED: ' + crashed.join(', '));
+    console.log('A crash is not one failure. Every assertion after the throw in that suite');
+    console.log('did not run, so the count above is a floor rather than the total.');
+  }
   process.exit(F ? 1 : 0);
 })();

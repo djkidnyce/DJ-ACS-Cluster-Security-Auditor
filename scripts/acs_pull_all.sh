@@ -132,9 +132,18 @@ CURL="curl -sS --fail-with-body $CURL_TLS -H @$HDR -H Accept:application/json"
 # that returned nothing at all passed every check. The query is now asserted against the
 # URL the server actually received, under both interpreters.
 #
-# jq is already a hard requirement of this script, and @uri is RFC 3986 with exactly the
-# unreserved set this needs: A-Za-z0-9 and - _ . ~ pass through, everything else is
-# percent encoded, so + becomes %2B, which ACS search syntax requires.
+# jq is already a hard requirement of this script, so @uri costs nothing extra.
+#
+# It is not strictly the RFC 3986 unreserved set, and saying so was wrong. Measured across
+# every printable byte, jq leaves A-Za-z0-9 and - _ . ~ alone as expected, and also passes
+# ! ( ) * through unencoded. Those are sub-delims, legal in a query string, and not
+# meaningful to ACS search syntax, so they are harmless here.
+#
+# What matters is that everything ACS DOES treat as syntax gets encoded, and it does:
+# + becomes %2B, : becomes %3A, space becomes %20, comma becomes %2C. The + is the one
+# that would silently change the query if it survived, because ACS reads it as a term
+# separator. That is asserted in test/scripts.cjs against the URL the server received,
+# rather than left as a claim in this comment.
 urlenc() {
   printf '%s' "$1" | jq -sRr @uri
 }

@@ -224,6 +224,12 @@ const tlsdir = fs.mkdtempSync(path.join(os.tmpdir(), 'tlss-'));
  * It presented as a macOS TLS limitation. It was a port collision. Ask the OS for a port
  * it knows is free and the whole class disappears.
  */
+/* A pull runs a real TLS handshake, several curl calls and a jq pass. Sixty seconds was
+   enough until the suite grew; on a loaded machine it started clipping the slowest run and
+   presenting the kill as a content failure. The guards above make a timeout say so, and
+   this gives it room so it should not need to. */
+const PULL_TIMEOUT_MS = 120000;
+
 const freePort = () => Number(execFileSync(process.execPath, ['-e',
   "const n=require('net');const s=n.createServer();s.listen(0,'127.0.0.1',()=>{" +
   "process.stdout.write(String(s.address().port));s.close();});"],
@@ -372,10 +378,10 @@ if (!served) {
     let r;
     try {
       r = { code: 0, out: execFileSync('sh', [pull, '-o', out].concat(args),
-        { encoding: 'utf8', env: env, timeout: 60000, stdio: ['ignore','pipe','pipe'] }) };
+        { encoding: 'utf8', env: env, timeout: PULL_TIMEOUT_MS, stdio: ['ignore','pipe','pipe'] }) };
     } catch (e) {
       if (e.killed || e.signal) {
-        r = { code: -1, out: 'TIMED OUT after 60s: ' + ((e.stdout || '') + (e.stderr || '')) };
+        r = { code: -1, out: 'TIMED OUT after ' + (PULL_TIMEOUT_MS / 1000) + 's: ' + ((e.stdout || '') + (e.stderr || '')) };
       } else {
         r = { code: e.status, out: (e.stdout || '') + (e.stderr || '') };
       }
@@ -491,9 +497,23 @@ if (!served) {
     '-out', wrongCa, '-days', '1', '-nodes', '-subj', '/CN=some other authority'],
     { stdio: 'ignore' });
   const badCa = runPull(['--cacert', wrongCa]);
-  t('a CA that does not sign this endpoint stops the run', badCa.code !== 0);
+
+  /* Assert the run finished before asserting anything about what it said.
+   *
+   * This block failed once inside the full suite and passed five times standalone. The
+   * cause was the harness timeout firing on a loaded machine, not the script: the pull
+   * exits before it ever reaches authentication on this path, so "did not blame the
+   * token" cannot fail for a content reason. A timeout reported as a content mismatch
+   * sends you reading the wrong file, which is the same defect as every other one in
+   * this suite's history.
+   */
+  const badCaRan = !/TIMED OUT/.test(badCa.out);
+  t('the CA run completed, so the assertions about its output mean something', badCaRan);
+  if (!badCaRan) console.log('        ' + String(badCa.out).slice(0, 160));
+
+  t('a CA that does not sign this endpoint stops the run', badCaRan && badCa.code !== 0);
   t('it says the CA did not verify, rather than blaming the token',
-    /CA you supplied did not verify/.test(badCa.out) &&
+    badCaRan && /CA you supplied did not verify/.test(badCa.out) &&
     !/401|token is wrong/.test(badCa.out));
   t('it quotes what curl actually said', /curl said:/.test(badCa.out));
   t('it names the curl build, because the TLS backend is often the reason',
@@ -648,7 +668,7 @@ if (!served) {
   let eres;
   try {
     eres = execFileSync('sh', [pull, '-o', evilOut, '--pin', 'sha256//' + eSpki, '--no-summary'],
-      { encoding: 'utf8', timeout: 60000, stdio: ['ignore', 'pipe', 'pipe'],
+      { encoding: 'utf8', timeout: PULL_TIMEOUT_MS, stdio: ['ignore', 'pipe', 'pipe'],
         env: Object.assign({}, process.env, { ROX_API_TOKEN: 'x',
           ROX_ENDPOINT: 'https://127.0.0.1:' + EVIL_PORT, KUBECONFIG: '/dev/null',
           PATH: stub + ':' + process.env.PATH }) });
@@ -746,11 +766,11 @@ if (!served) {
     let qout = '';
     try {
       qout = forced
-        ? execFileSync(forced, [pull].concat(argv), { encoding: 'utf8', timeout: 60000,
+        ? execFileSync(forced, [pull].concat(argv), { encoding: 'utf8', timeout: PULL_TIMEOUT_MS,
             stdio: ['ignore', 'pipe', 'pipe'], env: Object.assign({}, process.env,
             { ROX_API_TOKEN: 'x', ROX_ENDPOINT: 'https://127.0.0.1:' + QUERY_PORT,
               KUBECONFIG: '/dev/null', PATH: stub + ':' + process.env.PATH }) })
-        : execFileSync(pull, argv, { encoding: 'utf8', timeout: 60000,
+        : execFileSync(pull, argv, { encoding: 'utf8', timeout: PULL_TIMEOUT_MS,
             stdio: ['ignore', 'pipe', 'pipe'], env: Object.assign({}, process.env,
             { ROX_API_TOKEN: 'x', ROX_ENDPOINT: 'https://127.0.0.1:' + QUERY_PORT,
               KUBECONFIG: '/dev/null', PATH: stub + ':' + process.env.PATH }) });
@@ -769,6 +789,46 @@ if (!served) {
     if (!/Namespace%3Aprod/.test(alertUrl)) console.log('        saw: ' + alertUrl.slice(0, 160));
   }
   try { process.kill(-qsrv.pid); } catch (e) { /* already gone */ }
+
+  /* The encoder's contract, pinned to the characters ACS treats as syntax.
+   *
+   * The comment above urlenc claimed @uri is exactly the RFC 3986 unreserved set. It is
+   * not: jq also passes ! ( ) * through. Harmless here, wrong as documentation, and the
+   * kind of claim that should be a check rather than a sentence. What actually matters is
+   * that nothing ACS reads as syntax survives unencoded.
+   */
+  console.log('\n  Every character ACS reads as syntax is encoded');
+  /* Call the script's own urlenc, not a reimplementation of it.
+   *
+   * The first version of this block shelled out to `jq -sRr @uri` directly. Review
+   * gutted urlenc to a passthrough and all eight assertions stayed green, because they
+   * were testing jq rather than this repository. That is the seventh instance of the
+   * failure mode this project keeps hitting, and it had already been written into the
+   * CHANGELOG as the proof that the problem was fixed.
+   *
+   * The function definition is lifted out of the script and evaluated on its own, so the
+   * assertions bind to the shipped code without running the whole pull.
+   */
+  const urlencSrc = execFileSync('sh', ['-c',
+    "sed -n '/^urlenc() {/,/^}/p' \"$1\"", '_', pull], { encoding: 'utf8' });
+  t('  the urlenc function was found in the script, so these assert the shipped code',
+    /^urlenc\(\) \{/.test(urlencSrc.trim()) && /jq/.test(urlencSrc));
+  const enc = (v) => execFileSync('sh', ['-c',
+    urlencSrc + '\nurlenc "$1"', '_', v], { encoding: 'utf8' }).trim();
+  for (const [ch, want, why] of [
+    ['+', '%2B', 'ACS reads a bare + as a term separator'],
+    [':', '%3A', 'separates a search key from its value'],
+    [' ', '%20', 'separates terms'],
+    [',', '%2C', 'separates values within a term'],
+    ['&', '%26', 'would start a new query parameter'],
+    ['=', '%3D', 'would look like a parameter assignment'],
+    ['#', '%23', 'would truncate the URL at a fragment'],
+  ]) {
+    t('  ' + JSON.stringify(ch) + ' encodes to ' + want + ', because it ' + why,
+      enc(ch) === want);
+  }
+  t('and the unreserved characters are left alone, so ids stay readable',
+    enc('abcXYZ019-_.~') === 'abcXYZ019-_.~');
 
   console.log('\n  The pull cannot hang on an unrelated cluster');
   const pullSrc = pullSrcOf(pull);

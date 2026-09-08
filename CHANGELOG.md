@@ -11,6 +11,116 @@ at least; removing or renaming one is a major.
 Every release is tagged. `git tag -l` is the list, and the tag matches the version this
 tool stamps into every report and patch header it writes.
 
+## 1.6.0 - 2026-09-08
+
+The findings a review left open, closed. Nothing here changes what the tool does to your
+manifests; it closes the gaps between what the code does and what it says it does.
+
+### Fixed
+
+- **A flash message's dwell was changed for every caller as a rider on an unrelated fix
+  (F4).** Making refusals visible on the tab you are standing on was correct. Moving the
+  timeout from 3000 to 6000ms for all twenty two call sites, without saying so, was not.
+  "ZIP downloaded" and "Report only, choose Manual or Auto to write files" are not the same
+  kind of message and should not share a number by accident.
+
+  The default is back to 3000. The refusals an operator has to read and then act on ask
+  for 6000 explicitly, through named constants with the reasoning beside them. Review
+  caught that the first pass named three of them and left four more on the shortened
+  default, halving the dwell those had in 1.5.1; all of them are explicit now.
+
+  Fixing it exposed a second defect: a short acknowledgement landing after a refusal wiped
+  the refusal early, which is the exact failure the longer dwell exists to prevent.
+
+  The first fix for that was itself wrong, and review found it by pressing a button twice.
+  Comparing the message TEXT cannot tell "still mine" from "the same message posted
+  again", so the first press's timer wiped the second press's refusal early. Pressing
+  twice is exactly what an operator does when a control appears to do nothing. Each call
+  now carries a sequence token and clears only if its element still holds that token.
+
+- **The comment describing the query encoder was wrong (F5).** It claimed jq's `@uri` is
+  exactly the RFC 3986 unreserved set. Measured across every printable byte, it also passes
+  `!`, `(`, `)` and `*` through. Harmless, since those are legal in a query string and mean
+  nothing to ACS, and wrong as documentation.
+
+  The comment now says what was measured, and the claim that matters is a check rather than
+  a sentence: eight assertions pin that `+`, `:`, space, comma, `&`, `=` and `#` all encode,
+  each with the reason it matters. `+` is the one that would silently change the query,
+  because ACS reads a bare `+` as a term separator.
+
+  The first version of those assertions shelled out to `jq` directly and never touched
+  this repository. Review replaced `urlenc` with a passthrough and all eight stayed green:
+  they were testing jq. That is the seventh instance of this project's recurring failure
+  mode, and it had already been written into this file as the proof the problem was fixed.
+  They now lift the function out of the script and call it, and gutting `urlenc` turns all
+  eight red.
+
+- **One `try` around ten test suites, so a single throw skipped the rest (F6).** A
+  regression that removed one element reported `1 failed` when the true number was
+  seventeen, and eight suites never ran. The count under-reported exactly on the run where
+  an accurate list matters most.
+
+  Each suite is isolated now, a crash is attributed to it by name with the failing frame,
+  and crashes are counted separately from false assertions, because they are different
+  problems: a false assertion is usually a defect in the product, a throw is usually a
+  missing element the harness assumed. Demonstrated by making a suite throw: 357 of 380
+  assertions still ran, against 0 under the old runner.
+
+- **Two copies of the lazy detail row, one per table (F8).** Merged, carefully. The two
+  tables render deliberately different advisories: Audit shows the runtime risk wording,
+  Remediate shows Severity and Live in ACS. The mechanism is shared now and the content is
+  not, so neither tab's output changed. That is the real risk in this finding and it is the
+  part with the most coverage: two mutations, one giving both tables the same column count
+  and one pointing Audit at the Remediate advisory, both go red.
+
+- **Cosmetics that were quietly wrong (F7).** `table-layout:auto` removed, because `auto`
+  is the CSS initial value and the declaration did nothing. The 340px cell ceiling now says
+  where the number came from. `#fModeWhy` lost its inline layout and is styled with the
+  other notes, with room under it so it reads as an explanation of the button above rather
+  than a caption for the table below.
+
+- **The release notes told every downloader something false.** They said the Word guides
+  are "attached here rather than committed", which stopped being true in 1.5.1 when the
+  guides were committed. A published false statement in a security tool is small and still
+  worth removing, so it is corrected and now asserted.
+
+- **A flake found while verifying this release, and not shipped past.** One CA assertion
+  failed inside the full suite and passed five times standalone. The cause was the harness
+  timeout firing on a loaded machine, not the script: that code path exits before it ever
+  reaches authentication, so the assertion could not have failed for the reason it
+  reported. A kill presented as a content mismatch sends you reading the wrong file.
+
+  The block now asserts the run completed before asserting anything about its output, and
+  says so when it did not. The pull timeout is a named constant with room for a loaded box,
+  and the timeout message reports that constant rather than a number typed into a string
+  next to it. Five full runs clean afterwards.
+
+- **Three stale test counts in the documentation, found by asking rather than assuming.**
+  The README claimed 1173 in two places, the Administration Guide claimed 177 for a suite
+  that had grown to 399, and the User Guide claimed 899 from two releases back. Nothing
+  caught any of it, because the only freshness check in this project was for version
+  strings.
+
+  The numbers are not corrected, they are removed. A count typed into prose is stale the
+  release after it is written, and this is the third time it has happened. `BUILD.txt`
+  carries the counts, written from the run that produced the build, and the per suite
+  count column is gone from the Administration Guide because it rotted fastest and told
+  the reader least.
+
+  A check now fails the build on any three digit test count in the README, either guide,
+  the docs index or the page itself. It found the User Guide's 899 within a second of
+  being written, which is the argument for it. Its first version exempted any line
+  mentioning `BUILD.txt`, so "1242 tests, see BUILD.txt" passed, which is the exact
+  sentence somebody writes to keep the number and look compliant. Point at the file or
+  state the number, not both.
+
+### Already done in 1.5.1, confirmed rather than redone
+
+- F9, the same disproved claim about the two injection controls, removed from the CHANGELOG.
+- F10, `LC_ALL=C` on the allowlist grep. Re-measured this release: the grep and the `case`
+  guard agree on every byte from 0x20 to 0xFF, so the two controls cannot disagree at the
+  margins about what an alert id may contain.
+
 ## 1.5.1 - 2026-09-04
 
 A security fix and three defects that all shipped for the same reason: the tests read the

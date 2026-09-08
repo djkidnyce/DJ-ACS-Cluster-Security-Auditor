@@ -16,7 +16,7 @@ Audit Kubernetes and OpenShift manifests against Red Hat Advanced Cluster Securi
 | `scripts/acs_pull_all.sh` and `.ps1` | Pull every finding ACS has, all severities and states, from outside the browser |
 | `scripts/acs_pull_via_oc.sh` | Same, but reaches Central through your existing `oc` session |
 | `scripts/acs_pull_over_ssh.ps1` | PowerShell, when only a bastion can reach the cluster |
-| `test/run_tests.js` | 1173 tests against the real engine, the page, the scripts and the CLI |
+| `test/run_tests.js` | The whole suite, against the real engine, the page, the scripts and the CLI |
 
 Open either HTML file directly. There is nothing to install and no server to run.
 
@@ -532,7 +532,13 @@ node test/run_tests.js
 npm install jsdom && node test/run_tests.js
 ```
 
-802 engine, CLI and script tests, no install required, plus 371 whole page tests that need jsdom and skip without it. 1173 in total. Suites that need something the machine lacks say what is missing rather than skipping silently.
+Most of the suite needs no install. The whole page tests need jsdom and skip cleanly
+without it, so the total you see depends on whether jsdom is present. The exact counts for
+the build you are holding are in `BUILD.txt`, written from the run that produced it.
+
+Numbers are deliberately not repeated here. They were, in two places, and both were a
+release out of date before anyone noticed. Suites that need something the machine lacks
+say what is missing rather than skipping silently.
 
 They cover the policy catalogue, scanning and scoring, fix application and YAML validity, diff correctness, merge patch minimality, ACS import across every export shape the pull script writes plus renamed policy matching, the full remediation flow including that preview mutates nothing and undo restores byte for byte, and the vulnerability path end to end: NDJSON parsing, CVE deduplication, priority reasoning, manifest correlation and drift.
 

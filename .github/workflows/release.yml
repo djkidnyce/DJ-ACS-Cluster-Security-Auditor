@@ -125,8 +125,9 @@ jobs:
             libraries, both committed to the repository and verified by hash in CI.
             Nothing is fetched at build or run time.
 
-            The Word guides are generated from `docs/doc1.js` and `docs/doc2.js` and
-            are attached here rather than committed, so a documentation change is
-            reviewable as a diff.
+            The Word guides are generated from `docs/doc1.js` and `docs/doc2.js`,
+            committed to the repository so a checkout has readable documentation, and
+            attached here as well. `docs/check_docx.sh` runs in CI and fails the build
+            if a committed guide no longer matches its generator.
 
             See CHANGELOG.md for what changed.

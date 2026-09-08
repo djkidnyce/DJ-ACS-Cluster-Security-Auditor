@@ -155,6 +155,36 @@ if (fs.existsSync(chk)) {
 }
 t('  and CI runs it', /check_docx\.sh/.test(y));
 
+/* Test counts written into prose go stale the release after they are written.
+ *
+ * The README claimed 1173 and the Administration Guide claimed 177 for a suite that had
+ * grown to 399, both a release out of date, and nothing caught it because the only
+ * freshness check in this project is for version strings. Rather than update numbers that
+ * will rot again, the numbers were removed: BUILD.txt carries them, written from the run
+ * that produced the build. This stops them coming back.
+ */
+console.log('\nTest counts are not typed into prose, where they go stale');
+/* No exemption for mentioning BUILD.txt on the same line.
+ *
+ * The first version skipped any line containing "BUILD.txt", so
+ * "1242 tests, see BUILD.txt" sailed through, which is the precise sentence somebody
+ * writes when they want to keep the number AND look compliant. Review caught it. Point at
+ * the file for the number, or state the number; not both. The page and the figure index
+ * are scanned too, because they were simply omitted before rather than judged clean. */
+const countClaim = /\b\d{3,}\s+(?:tests?|assertions?|passed|in total)\b/i;
+for (const cf of ['README.md', 'docs/doc1.js', 'docs/doc2.js', 'docs/README.md',
+                  'dj_acs_auditor.html', 'docs/index.html']) {
+  if (!fs.existsSync(path.join(ROOT, cf))) { t('  ' + cf + ' exists to be checked', false); continue; }
+  const body = fs.readFileSync(path.join(ROOT, cf), 'utf8');
+  const hits = body.split('\n')
+    .map((l, n) => [n + 1, l])
+    .filter((pair) => countClaim.test(pair[1]));
+  t('  ' + cf + ' states no hardcoded test count', hits.length === 0);
+  for (const h of hits.slice(0, 3)) console.log('        line ' + h[0] + ': ' + h[1].trim().slice(0, 90));
+}
+t('  BUILD.txt is where the count actually lives',
+  /^tests\s+\d+ with jsdom, \d+ without$/m.test(fs.readFileSync(path.join(ROOT, 'BUILD.txt'), 'utf8')));
+
 console.log('\nThe generated documentation is built AND committed');
 t('the .docx files are committed rather than ignored',
   !/^docs\/\*\.docx\s*$/m.test(fs.readFileSync(path.join(ROOT, '.gitignore'), 'utf8')));
@@ -167,6 +197,14 @@ t('and fails if a committed guide goes missing',
 t('and CI verifies the committed guides against their source',
   /check_docx\.sh/.test(y));
 t('the release builds them and attaches them', /node docs\/doc1\.js/.test(r));
+/* The release notes are read by everyone who downloads a build and by nobody who
+   reviews the repository, which is how they carried "attached here rather than
+   committed" for a whole release after the guides were committed. A published false
+   statement in a security tool is small and still worth a check. */
+t('the release notes do not claim the guides are uncommitted',
+  !/attached here rather than committed/.test(r));
+t('and they point at the check that keeps the committed copies honest',
+  /check_docx\.sh/.test(r));
 
 console.log('\nThe SBOM is generated from the files, not maintained by hand');
 const gen = path.join(ROOT, 'scripts', 'make_sbom.js');

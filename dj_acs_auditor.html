@@ -44,7 +44,7 @@ button.primary:hover:not(:disabled){background:#388bfd;color:#fff}
 .card .lbl{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-top:2px}
 .card.crit .num{color:var(--crit)}.card.high .num{color:var(--high)}
 .card.med .num{color:var(--med)}.card.low .num{color:var(--low)}
-table{width:100%;border-collapse:collapse;font-size:13px;table-layout:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
 /* Cluster data does not fit an assumed width. A path, an image reference or a
    Kind/name has no spaces and no default break opportunity, so it sets a min-content
    width the table must honour and the page then scrolls sideways. Scroll the table,
@@ -59,6 +59,9 @@ table{width:100%;border-collapse:collapse;font-size:13px;table-layout:auto}
 .section,details.sec{min-width:0;max-width:100%;box-sizing:border-box}
 .tablewrap{overflow-x:auto;overflow-y:visible;max-width:100%;-webkit-overflow-scrolling:touch}
 .tablewrap > table{min-width:100%}
+/* 340px is roughly 55 characters at this font size, which fits the longest namespace and
+   image reference seen in a real pull without forcing the table wider than the panel.
+   It is a ceiling, not a width: shorter cells still shrink. */
 .tablewrap td{overflow-wrap:anywhere;word-break:break-word;max-width:340px}
 /* Two rules, not one comma separated pair. :has() is unsupported on browsers still in
    use on locked down Windows desktops, and one unknown selector in a list drops the
@@ -127,6 +130,11 @@ button.ovr.on{border-style:solid;border-color:var(--med);color:var(--med)}
 .filechip{background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:3px 10px;font-size:12px;font-family:ui-monospace,Consolas,monospace;display:inline-block;margin:3px 4px 0 0}
 .filechip.err{border-color:var(--crit);color:var(--crit)}
 .note{color:var(--muted);font-size:12.5px;margin-top:9px}
+/* The reason a control is disabled sits between the toolbar and the table it governs, so
+   it needs air under it or it reads as a caption for the table rather than an
+   explanation of the button above. Kept here rather than inline so it restyles with the
+   other notes. */
+#fModeWhy{margin:2px 0 12px;color:var(--med)}
 .tabs{display:flex;gap:7px;margin-bottom:11px;flex-wrap:wrap}
 .tab{padding:5px 13px;border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:13px;background:var(--panel2)}
 .tab.on{border-color:var(--accent);color:var(--accent);font-weight:600}
@@ -488,7 +496,7 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
         <span class="note" id="fCount" style="margin:0"></span>
         <span class="note flashmsg" style="margin:0;color:var(--accent)"></span>
       </div>
-      <p class="note hidden" id="fModeWhy" style="margin:0 0 8px;color:var(--med)"></p>
+      <p class="note hidden" id="fModeWhy"></p>
       <div class="tablewrap">
       <table id="rtable">
         <colgroup><col class="c-sel"><col class="c-sev"><col class="c-pol"><col class="c-obj"><col class="c-file"><col class="c-det"><col class="c-kind"><col class="c-act"></colgroup>
@@ -1018,7 +1026,7 @@ function renderFindingsRO() {
        Severity and Live in ACS, and merging them is a different change. */
     const advHtml = () => {
     const p = f.policy;
-    return '<td colspan="7" style="background:var(--panel2)"><div class="kv">' +
+    return '<div class="kv">' +
       '<div class="k">ACS policy</div><div>' + esc(p.acsPolicy) + '</div>' +
       '<div class="k">ACS criteria</div><div>' + esc(p.acsCriteria) + '</div>' +
       '<div class="k">Lifecycle</div><div>' + p.lifecycleStages.join(', ') + '</div>' +
@@ -1032,18 +1040,10 @@ function renderFindingsRO() {
       : '') +
       '<div class="k">Standards</div><div>' + citationsOf(p).map(esc).join(' &nbsp;|&nbsp; ') + '</div>' +
       (f.confirmedByAcs ? '<div class="k">Live in ACS</div><div>namespace ' + esc(f.acsNamespace || '?') + (f.acsCluster ? ', cluster ' + esc(f.acsCluster) : '') + '</div>' : '') +
-      '</div></td>';
+      '</div>';
     };
-    tr.addEventListener('click', () => {
-      let dr = tr.nextElementSibling;
-      if (!dr || !dr.classList.contains('fdet')) {
-        dr = document.createElement('tr');
-        dr.className = 'fdet hidden';
-        dr.innerHTML = advHtml();
-        tr.parentNode.insertBefore(dr, tr.nextSibling);
-      }
-      dr.classList.toggle('hidden');
-    });
+    tr.addEventListener('click', () => toggleFindingDetail(tr, advHtml,
+      document.querySelectorAll('#ftable thead th').length));
     frag.appendChild(tr);
   });
   tb.appendChild(frag);
@@ -1066,7 +1066,8 @@ function currentMode() {
 function requireMode(what, action) {
   const m = currentMode();
   if (modeAllows(m, what)) return true;
-  flash('Report only. Choose Manual or Auto at the top of the page to ' + action + '.');
+  flash('Report only. Choose Manual or Auto at the top of the page to ' + action + '.',
+    FLASH_REFUSAL_MS);
   return false;
 }
 
@@ -1781,17 +1782,33 @@ function renderTable() {
  * @param {Object} f the finding
  * @returns {void}
  */
-function toggleFindingDetail(tr, f) {
-  if (!tr || !tr.parentNode) return;
+/* One lazy detail row, used by both tables.
+ *
+ * Both surfaces had their own copy of this: create the row on first expand, insert it
+ * after, toggle hidden. Two copies of a mechanism drift, and the reason they were not
+ * merged before is that the CONTENT differs, not the mechanism. The Audit tab renders
+ * runtimeRisk, the Remediate tab renders Severity and Live in ACS.
+ *
+ * So the caller supplies the cell HTML and the column count, and the insert and toggle
+ * live in one place. Nothing either table displays changes.
+ *
+ * tr          the row the detail belongs under
+ * renderCell  called once, on first expand, and must return the INNER html of the cell
+ * cols        colspan for that table, which differs between the two
+ * returns     the detail row, or null if tr is not in a document
+ */
+function toggleFindingDetail(tr, renderCell, cols) {
+  if (!tr || !tr.parentNode) return null;
   let dr = tr.nextElementSibling;
   if (!dr || !dr.classList.contains('fdet')) {
-    const cols = document.querySelectorAll('#rtable thead th').length;
     dr = document.createElement('tr');
     dr.className = 'fdet hidden';
-    dr.innerHTML = '<td colspan="' + cols + '" style="background:var(--panel2)">' + advisoryHtml(f) + '</td>';
+    dr.innerHTML = '<td colspan="' + cols + '" style="background:var(--panel2)">' +
+      renderCell() + '</td>';
     tr.parentNode.insertBefore(dr, tr.nextSibling);
   }
   dr.classList.toggle('hidden');
+  return dr;
 }
 
 /* One delegated listener on the body, installed once, rather than 2n listeners rebuilt on
@@ -1819,7 +1836,8 @@ function bindFindingTable() {
     const fixBtn = ev.target.closest('button.rfix');
     if (fixBtn) { ev.stopPropagation(); if (!fixBtn.disabled) requestFix(f); return; }
 
-    toggleFindingDetail(tr, f);
+    toggleFindingDetail(tr, () => advisoryHtml(f),
+      document.querySelectorAll('#rtable thead th').length);
   });
 }
 
@@ -2243,15 +2261,43 @@ function download(name, content, mime) {
 /* A message written into the Export section is invisible to somebody who pressed a button
    in the findings table, which is how a refusal reads as a dead button. Write to the
    message slot on the tab that is actually showing. */
-function flash(msg) {
+/* How long a flash stays up, named rather than typed inline.
+ *
+ * The rewrite that made refusals visible on the tab you are standing on also changed the
+ * dwell from 3000 to 6000ms for all twenty two call sites, without saying so. Review
+ * caught it as an undeclared rider on an unrelated fix, and it was right to: "ZIP
+ * downloaded" and "Report only, choose Manual or Auto to write files" are not the same
+ * kind of message and should not share a number by accident.
+ *
+ * So the default goes back to what it was, and the longer dwell is asked for explicitly
+ * at the three places that need it. A refusal is the only message the operator has to
+ * read and then act on, and six seconds is roughly the time it takes to look away from a
+ * button, register that nothing happened, and look for why.
+ */
+let FLASH_SEQ = 0;
+const FLASH_MS = 3000;        // an acknowledgement: something worked, carry on
+const FLASH_REFUSAL_MS = 6000; // a refusal: you have to read this and do something
+
+function flash(msg, ms) {
   const onRemediate = $('tabRemediate') && !$('tabRemediate').classList.contains('hidden');
   const targets = [];
   const local = document.querySelector(
     (onRemediate ? '#tabRemediate' : '#tabAudit') + ' .flashmsg');
   if (local) targets.push(local);
   if ($('exportMsg')) targets.push($('exportMsg'));
-  targets.forEach((el) => { el.textContent = msg; });
-  setTimeout(() => { targets.forEach((el) => { el.textContent = ''; }); }, 6000);
+  /* Each call gets a token, and a clear only fires if its element still carries that
+     token. Comparing the TEXT instead was the first attempt and it is subtly wrong: it
+     cannot tell "still mine" from "the same message posted again". Press a refusing
+     control twice and the first call's timer sees its own words on screen, believes it
+     owns them, and wipes the second refusal early. Review found that by pressing twice,
+     which is exactly how an operator behaves when a button appears to do nothing. */
+  const token = String(++FLASH_SEQ);
+  targets.forEach((el) => { el.textContent = msg; el.dataset.flashId = token; });
+  setTimeout(() => {
+    targets.forEach((el) => {
+      if (el.dataset.flashId === token) { el.textContent = ''; delete el.dataset.flashId; }
+    });
+  }, ms || FLASH_MS);
 }
 
 function changeLog() {
@@ -2352,7 +2398,7 @@ $('btnPatches').addEventListener('click', async () => {
       jsyaml.dump(patch, { noRefs: true }));
     n++;
   }
-  if (!n) { flash('No changes applied yet, so there are no patches to write.'); return; }
+  if (!n) { flash('No changes applied yet, so there are no patches to write.', FLASH_REFUSAL_MS); return; }
   zip.file('README.md', '# Merge patches\n\nOne strategic merge patch per applied fix, containing only the changed fields.\nUse these when the manifests are templated by Helm or Kustomize and cannot be edited directly.\n\nGenerated by ' + ACS_TOOL + '.\n');
   download('acs_merge_patches_' + stamp() + '.zip', await zip.generateAsync({ type: 'blob' }));
   flash(n + ' patch file(s) downloaded.');
@@ -2551,14 +2597,14 @@ document.querySelectorAll('#vtable th.sortable').forEach((th) => th.addEventList
 
 /* So were these two. */
 if ($('btnVulnWorklist')) $('btnVulnWorklist').addEventListener('click', () => {
-  if (!STATE.vulns || !STATE.vulns.rows.length) { flash('No CVE data has been loaded.'); return; }
+  if (!STATE.vulns || !STATE.vulns.rows.length) { flash('No CVE data has been loaded.', FLASH_REFUSAL_MS); return; }
   download('acs_cve_worklist_' + stamp() + '.md',
     buildVulnWorklist(STATE.vulns, STATE.vulnCorr), 'text/markdown');
   flash('Image worklist downloaded.');
 });
 
 if ($('btnVulnJson')) $('btnVulnJson').addEventListener('click', () => {
-  if (!STATE.vulns || !STATE.vulns.rows.length) { flash('No CVE data has been loaded.'); return; }
+  if (!STATE.vulns || !STATE.vulns.rows.length) { flash('No CVE data has been loaded.', FLASH_REFUSAL_MS); return; }
   download('acs_cves_' + stamp() + '.json', JSON.stringify({
     tool: ACS_TOOL, generated: new Date().toISOString(),
     summary: summarizeVulns(STATE.vulns),
@@ -2581,7 +2627,7 @@ document.querySelectorAll('.tabbtn').forEach((b) =>
    replaces, which is three dead controls found by merging two files that were each
    supposed to be finished. */
 if ($('btnImgWorklist')) $('btnImgWorklist').addEventListener('click', () => {
-  if (!STATE.vulns || !STATE.vulns.rows.length) { flash('No CVE data has been loaded.'); return; }
+  if (!STATE.vulns || !STATE.vulns.rows.length) { flash('No CVE data has been loaded.', FLASH_REFUSAL_MS); return; }
   download('acs_cve_worklist_' + stamp() + '.md',
     buildVulnWorklist(STATE.vulns, STATE.vulnCorr), 'text/markdown');
   flash('Image worklist downloaded.');
@@ -2630,7 +2676,7 @@ if ($('btnFSelNone')) $('btnFSelNone').addEventListener('click', () => {
 
 if ($('btnExportFixed')) $('btnExportFixed').addEventListener('click', async () => {
   if (!requireMode('patches', 'write corrected YAML')) return;
-  if (!FSELECTED.size) { flash('Nothing selected.'); return; }
+  if (!FSELECTED.size) { flash('Nothing selected.', FLASH_REFUSAL_MS); return; }
 
   /* Work on a copy. The whole point is that exporting is not applying. */
   const files = structuredClone(STATE.files.map((f) => ({
@@ -2661,7 +2707,8 @@ if ($('btnExportFixed')) $('btnExportFixed').addEventListener('click', async () 
     JSON.stringify(f.docs) !== JSON.stringify(f.originalDocs));
 
   if (!touched.length && !generated.length) {
-    flash('Nothing changed. ' + (skipped.length ? skipped.length + ' could not be applied.' : ''));
+    flash('Nothing changed. ' + (skipped.length ? skipped.length + ' could not be applied.' : ''),
+      FLASH_REFUSAL_MS);
     return;
   }
 
