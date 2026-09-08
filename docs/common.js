@@ -139,5 +139,20 @@ function pageSetup(titleShort) {
                  new TextRun({ children: [PageNumber.TOTAL_PAGES], size: 16, color: MUT })] })] }) },
   };
 }
-module.exports = { P, Rich, Code, Note, Fig, Tbl, Bul, BulRich, NumList, NUMBERING, pageSetup,
+
+/* The date of the newest released version, read from the CHANGELOG rather than typed
+   into each guide. Both guides carried "11 August 2026" long after that stopped being
+   true. A date nobody updates is a date nobody should trust. */
+function changelogDate() {
+  const fs = require('fs');
+  const txt = fs.readFileSync(__dirname + '/../CHANGELOG.md', 'utf8');
+  const m = txt.match(/^##\s+(\d+\.\d+\.\d+)\s+-\s+(\d{4})-(\d{2})-(\d{2})/m);
+  if (!m) throw new Error('CHANGELOG.md has no dated release heading, so the guides cannot be dated');
+  const months = ['January','February','March','April','May','June','July','August',
+                  'September','October','November','December'];
+  return Number(m[4]) + ' ' + months[Number(m[3]) - 1] + ' ' + m[2];
+}
+
+module.exports = {
+  changelogDate, P, Rich, Code, Note, Fig, Tbl, Bul, BulRich, NumList, NUMBERING, pageSetup,
   LETTER, ACC, DARK, MUT, LINE, HEADBG };

@@ -28,13 +28,17 @@ central-ca.pem
 
 # Generated documentation.
 #
-# These are built from docs/doc1.js and docs/doc2.js. Committing them meant a
-# documentation change arrived as "Bin 1128727 -> 1129347 bytes", which nobody can
-# review, and the repository carried both the source and the output of the same thing.
-# They are built in CI and attached to each release instead.
+# The .docx guides ARE committed, deliberately. They were gitignored for several
+# versions on the reasoning that a binary diff reads as "Bin 1128727 -> 1129347 bytes"
+# and nobody can review that. True, and it cost more than it saved: browsing the
+# repository showed a docs/ folder of generators and figures and not one readable
+# document, while the README pointed at .docx paths that were not there. The guides are
+# meant to be read and handed to people, formatted, and that is worth more than a
+# reviewable diff on a file almost nobody edits by hand.
 #
-#   node docs/doc1.js && node docs/doc2.js
-docs/*.docx
+# They are rebuilt with `node docs/doc1.js && node docs/doc2.js`, and
+# `docs/check_docx.sh` fails the build if the committed copies no longer match what the
+# generators produce, so a stale binary cannot sit there unnoticed.
 docs/*.pdf
 
 # Tooling
@@ -58,3 +62,5 @@ dist/
 # Probe files from tooling
 .acs_write_probe
 .write_test
+.pipeline/
+node_modules/

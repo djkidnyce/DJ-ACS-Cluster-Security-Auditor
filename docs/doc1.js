@@ -5,6 +5,14 @@ const { P, Rich, Code, Note, Fig, Tbl, Bul, BulRich, NumList, NUMBERING, pageSet
         ACC, DARK, MUT, LINE } = require('./common.js');
 const F = (n) => __dirname + '/figures/' + n;
 
+/* Version and date come from the engine and the CHANGELOG, never from a literal here.
+   This file shipped saying "Version 1.0" while the tool stamped 1.5.0 into every report
+   it wrote. A guide that misstates which build it describes is worse than no guide,
+   because the reader has no reason to doubt it. doc2.js already did this. */
+globalThis.jsyaml = require('../vendor/js-yaml.min.js');
+const VERSION = require('../acs_policies.js').ACS_VERSION;
+const DOCDATE = require('./common.js').changelogDate();
+
 const title = [
   new Paragraph({ spacing: { before: 2600, after: 0 }, alignment: AlignmentType.LEFT,
     children: [new TextRun({ text: "DJ's ACS Auditor", bold: true, size: 60, color: DARK })] }),
@@ -13,8 +21,8 @@ const title = [
   new Paragraph({ spacing: { after: 400 },
     border: { bottom: { style: BorderStyle.SINGLE, size: 8, color: ACC } }, children: [new TextRun({ text: '' })] }),
   P('User Guide', { bold: true, size: 28 }),
-  P('Version 1.0', { size: 22, color: MUT }),
-  P('Document date: 11 August 2026', { size: 22, color: MUT }),
+  P("Covers DJ's ACS Auditor v" + VERSION, { size: 22, color: MUT }),
+  P('Document date: ' + DOCDATE, { size: 22, color: MUT }),
   P('Author: DJ', { size: 22, color: MUT }),
   P('Distribution: internal engineering and security teams', { size: 22, color: MUT }),
   new Paragraph({ spacing: { before: 900 }, children: [new TextRun({ text: '' })] }),
@@ -224,6 +232,10 @@ push(Note('info', 'What a failed run leaves behind', [
 H2('Step one: the preflight');
 T('Run scripts/acs_preflight.sh before anything else. It checks that the endpoint resolves and answers, that TLS verifies, that the token is valid, and, most usefully, that the token can actually read each of the three things the export needs.');
 T('That last check is worth its own paragraph. A token scoped only to Alert will pull violations perfectly and return 403 on the vulnerability export. You see violations, you see no CVEs, and nothing tells you the second half silently failed. The preflight catches it in one line.');
+push(Note('info', 'If the CA route fails, the run tells you why before the token moves', [
+  'The script makes one unauthenticated request with your CA before anything carrying the token, and reports what curl actually said. Without that, a certificate problem surfaces three steps later as an authentication failure and sends you to check a token that was never the issue.',
+  'The advice follows the error rather than the platform. An expired certificate is a different problem from a chain that does not reach the CA, which is different again from a hostname mismatch through a port forward, and each gets its own answer.',
+  'On macOS the system curl is built against Apple Secure Transport, which consults the Keychain as well as any file you pass. --cacert does work there. If you would rather trust the CA once and stop passing the flag: sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/central-ca.pem, and sudo security remove-trusted-cert -d ~/central-ca.pem to undo it.']));
 H2('Step two: the pull');
 T('scripts/acs_pull_all.sh writes seven files into a timestamped directory:');
 push([Tbl(['File', 'Endpoint', 'What it is for'], [

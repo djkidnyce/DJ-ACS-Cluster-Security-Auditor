@@ -11,6 +11,215 @@ at least; removing or renaming one is a major.
 Every release is tagged. `git tag -l` is the list, and the tag matches the version this
 tool stamps into every report and patch header it writes.
 
+## 1.5.1 - 2026-09-04
+
+A security fix and three defects that all shipped for the same reason: the tests read the
+code as text instead of running it and watching what happened.
+
+### Fixed
+
+- **Command execution through an ACS alert id.** `acs_pull_all.sh` passed alert ids from
+  Central into a shell script body via `xargs -I{}`, inside a double quoted string, where
+  `$()` and backticks are live. An id of ``aaa`touch FILE`bbb`` created FILE on the machine
+  running the pull, in a process holding `ROX_API_TOKEN` and a working kubeconfig, and the
+  run reported success. Confirmed end to end against a hostile server before and after.
+
+  Two controls, and they cover different vectors rather than being redundant. Passing the
+  id as an argument stops it being parsed as script, which closes the backtick and `$()`
+  execution path. The `^[A-Za-z0-9._-]+$` allowlist is what stops the id being used as a
+  path, and it is the only thing standing between a `/` in an id and an arbitrary file
+  write, because the id is interpolated into the `-o` target. Review demonstrated that:
+  with the allowlist removed and argument passing intact, a traversal payload still landed
+  a file outside the run directory. There is now also a guard inside the fetch body,
+  independent of the allowlist, so the redundancy is real rather than assumed. A rejected id is counted, named and explained rather than
+  dropped quietly, because a Central sending something that is not an id is itself worth
+  knowing about.
+
+  This predates 1.5.0. If you have run a pull against an endpoint you do not control,
+  that is the run to look at.
+
+- **The query encoder returned nothing under dash.** `urlenc` used bash substring syntax.
+  The shebang says bash so that was legal, but the suite invoked the script as `sh`, and
+  the encoder returned the empty string there. `-n` and `-c` were silently ignored and the
+  alert query lost its platform scope: same exit code, same files, different question. It
+  is jq `@uri` now, which behaves identically under both shells.
+
+- **`$(grep -c . f || echo 0)` produced `0\n0`.** `grep -c` prints its count and then exits
+  1 when the count is zero, so the fallback appended a second zero. Arithmetic on that is
+  an illegal number, which under dash killed the rest of the step without failing the run.
+  Six occurrences, replaced with one `countlines` helper.
+
+- **The findings table had no row checkboxes.** `renderTable` emitted seven `<td>` under
+  eight `<th>`, so the checkbox cell the header declared was never filled. Every value
+  rendered one column left of its heading, the Action column was empty in every row, and
+  the only way to select anything was the header box, which operated on a model nothing on
+  screen reflected. The Audit tab had the same fault the other way round: eight cells under
+  seven headers, the extra one holding a checkbox bound to no handler anywhere in the file.
+  Remediate gets its cell back; Audit, which is read only and has nothing to act on a
+  selection with, loses its orphan.
+
+- **Two containers of one object could not be selected apart.** Selection was keyed on
+  `findingKey`, which is `file|obj|policy.id` with no namespace and no container. A
+  two container Deployment where both containers run privileged is two findings with one
+  key; on a trivial fixture, 8 of 19 findings collide that way. Ticking one would tick the
+  other and the export would take both. The selection is now keyed on `findingRowKey`,
+  which adds namespace, path and detail. `findingKey` itself is unchanged, because
+  `STATE.applied`, the CLI and the test suite are keyed on it.
+
+- **`Fix this` looked live and did nothing in report mode.** It was never disabled, so it
+  was pressed, `requireMode` refused it, and the refusal was written to `#exportMsg` at the
+  bottom of the page, below a 750 row table, where nobody scrolled down to look for it. It
+  is disabled when the mode forbids writing, and it says which control to move in its own
+  tooltip.
+
+- **`Download corrected YAML for 750 selected` was greyed out with no reason beside it.**
+  The label came from the selection and the disabled state came from the mode, and the only
+  explanation lived in a different section far above the table. The gate is unchanged and
+  still correct. A permanent note now sits directly above the table naming the Mode
+  selector as the thing holding the button, and the button carries the same reason as a
+  tooltip. Report only is still the default and is still enforced.
+
+- **The findings table was quadratic.** It built two elements per finding, set `innerHTML`
+  on each, attached two listeners and appended into a live table, and a single checkbox
+  tick re-ran the whole thing. At 75 findings that was 440ms and nobody noticed. At 750, an
+  ordinary first run, the page was unusable: clicks queued behind a render and every button
+  looked dead. It was not dead, it was waiting.
+
+  One string assignment instead of 2n, no advisory row built until somebody opens one, one
+  delegated listener instead of per row listeners rebuilt every render, `findingRows()`
+  evaluated once per render instead of three times, the filter pickers rebuilt once per
+  scan instead of once per sort, and ticking a box repaints the boxes rather than
+  rebuilding the table.
+
+  There is deliberately no cap on how many rows are drawn. A cap would hide part of what
+  the operator came to look at, break in-page find and print for the hidden part, and make
+  "Select all shown" act on rows that are not shown, which is the same defect as a button
+  whose number disagrees with the screen. Above 2,000 rows the count line says the filters
+  will make it quicker and leaves the choice where it belongs.
+
+- **The section header counted an opened advisory as an extra finding.** `refreshCounts`
+  counted `tr:not(.hidden)` in the DOM, so reading one row made the header say 751 of 750.
+  It reads the row set the table was built from instead.
+
+- **A selection could outlive the findings in it.** Applying a fix and rescanning left keys
+  in the set for findings that were no longer fixable, so the button promised work the
+  export would not do. Stale keys are dropped on every rescan.
+
+### Changed
+
+- **Long values wrap inside their own cell instead of pushing the table off screen.** Every
+  data table sits in a wrapper that takes any remainder as its own horizontal scrollbar, so
+  a wide table never gives `<body>` one and takes the header and the controls with it. The
+  findings table is fixed layout with explicit column widths, so one 180 character path
+  widens its own column rather than every column. Values break rather than being clipped:
+  an operator deciding whether a finding applies has to read the path, two clipped paths
+  under one namespace are indistinguishable, and a tooltip is not on the printed page.
+
+- **Selection survives a mode change.** Ticking costs nothing and produces nothing, so
+  nothing about switching to Report only throws 750 ticks away. The gate sits on the two
+  controls that act -- the export and `Fix this` -- and both now say so where they are.
+
+### Fixed, after the suite failed on macOS and would not say why
+
+- **Three hardcoded ports in the test fixture, and the failure they caused.** The TLS
+  suite bound a fixed port on every run, and its readiness probe connected with
+  `rejectUnauthorized: false`, so any listener satisfied it. On a machine that had run the
+  suite before, a python server left over from an earlier run still held the port. The new
+  server failed to bind, that failure was swallowed, and every assertion afterwards talked
+  to the stale process.
+
+  The pin route still passed, because a pin runs with `-k` and never checks expiry. The CA
+  route did full verification and reported `certificate has expired`, which was exactly
+  right and described a certificate generated days earlier by a run nobody remembered.
+
+  Ports are now requested from the OS at runtime, and the fixture asserts that the
+  certificate answering the port is the one this run generated, comparing SHA-256
+  fingerprints and printing both when they differ. That check was written first and proved
+  against a deliberate squatter holding the port with an unrelated expired certificate.
+
+- **A probe before the token moves.** `--cacert` was taken at face value: if curl could not
+  use the file, the run carried on and failed later as `authentication failed`, which sends
+  you to look at the token when the problem is the certificate. It now makes one
+  unauthenticated request with the CA first and quotes curl's own verdict.
+
+  The advice follows that verdict rather than the platform. Expired, a chain that does not
+  reach the CA, and a hostname mismatch are three different problems with three different
+  answers, and the script now distinguishes them.
+
+- **A wrong diagnosis, corrected.** The first version of that guidance decided what to say
+  from `curl -V`, on the theory that Apple's Secure Transport ignores `--cacert`. The probe
+  disproved it: on stock macOS curl the CA was read, the chain was evaluated, and the
+  answer was a specific and correct `certificate has expired`. The theory reached the
+  script, the README and the User Guide before the evidence arrived, and all three are
+  corrected. Diagnosing from a build string rather than from the error is guessing with
+  extra confidence.
+
+- **A test that failed with no diagnosis, sitting above a test that could not fail.** The
+  suite reported `verifying against the certificate itself also completes the pull  FAIL`
+  and nothing else. The assertion directly below passed, because it checks that a phrase is
+  *absent* from the output and a run that died early prints nothing at all.
+
+  The first now prints curl's exit code, its stderr, the tail of the run and `curl -V`. The
+  second is conditional on the first having succeeded, so they go red together. Those five
+  printed lines are the only reason the real cause was found, rather than the plausible one.
+
+### Documentation
+
+- **The two Word guides are committed to the repository.** They were gitignored for
+  several versions, on the reasoning that a binary change reads as
+  `Bin 1128727 -> 1129347 bytes` and no reviewer can read that. True, and it cost more
+  than it saved: browsing the repository showed a `docs/` folder of generators, figures
+  and a proposal, and not one readable document. The README named two `.docx` paths that
+  were not in git, and the route it offered for building them was
+  `npm install --no-save docx`, which is exactly what an operator on a hardened host
+  cannot run. The documentation existed and the person most likely to need it could not
+  reach it.
+
+  A guide is meant to be opened, printed and handed to somebody, formatted. That is worth
+  more than a reviewable diff on a file almost nobody edits by hand.
+
+- **`docs/check_docx.sh` keeps them honest.** The real risk with committed generated
+  output is that it silently stops matching its source. This rebuilds from the generators
+  and fails if a committed guide has drifted. CI runs it on every push.
+
+  It compares extracted text rather than bytes, deliberately: a `.docx` is a ZIP and the
+  generator writes non-deterministic content into it, so two builds of an unchanged source
+  differ every time, verified twice here before the script was written. A byte comparison
+  would fail on every run and be switched off within a week, and a check nobody runs is
+  worse than no check because it looks like coverage.
+
+  Its own restore step ran only on the happy path at first, so piping the output into
+  `head` sent SIGPIPE and left rebuilt guides sitting in the tree looking committed. Found
+  by doing exactly that. The restore is in the trap now.
+
+- **The User Guide said "Version 1.0" while the tool stamped 1.5.0 into every report it
+  wrote,** and both guides were dated 11 August 2026 regardless of when they were built.
+  Version now comes from `ACS_VERSION` and the date from the newest CHANGELOG heading, so
+  neither can be wrong without the build being wrong. The Administration Guide already
+  read the version this way; the User Guide never did.
+
+- **`docs/README.md`** explains what is in the folder, how to rebuild any of it, and why
+  the guides are committed.
+
+- CI previously failed the build if a `.docx` was tracked. That rule is why there was no
+  readable documentation, so it is inverted: the build now fails if a guide goes missing.
+
+- The README's test counts were stale in two places and its verification example named a
+  1.4.0 artifact. Corrected.
+
+### A note on the tests
+
+Every defect above was found by running something and looking, and every one of them had
+a test nearby that passed. The token check walked one line at a time, so a `-k` assigned
+on one line and expanded on another was invisible to it. The script checks asserted that
+the source mentioned the right strings, so a function returning nothing passed. The first
+version of the injection regression test passed because its server never started.
+
+The new tests assert observed behaviour: the URL the server received, the canary file that
+was or was not created, the DOM element that survived a click. Several of them assert the
+setup first, because a test that cannot reach the code it is testing reports a pass and
+means nothing.
+
 ## 1.5.0 - 2026-09-02
 
 Written for the workflow this is actually used in: scan on a Linux box, copy the files to a

@@ -118,18 +118,25 @@ trap cleanup EXIT INT TERM
 CURL="curl -sS --fail-with-body $CURL_TLS -H @$HDR -H Accept:application/json"
 
 # urlencode without python, so this works on a locked down box.
+#
+# This was written with ${#s} and ${s:i:1}, which are bash and not POSIX. The shebang
+# says bash so that was legal, but the test suite invoked the script as "sh script.sh",
+# which bypasses the shebang, and on this box sh is dash. Under dash every call printed
+# "Bad substitution" and returned the empty string, so -n and -c were silently ignored
+# and the alert query lost its platform scope. The run still exited 0 and still wrote
+# files, it just asked a different question than the one you typed.
+#
+# Two lessons, both worth more than the fix. The suite had been exercising an interpreter
+# no operator uses, so it was not testing the shipped behaviour. And nothing asserted
+# what urlenc returns, only that the script mentioned the right strings, so a function
+# that returned nothing at all passed every check. The query is now asserted against the
+# URL the server actually received, under both interpreters.
+#
+# jq is already a hard requirement of this script, and @uri is RFC 3986 with exactly the
+# unreserved set this needs: A-Za-z0-9 and - _ . ~ pass through, everything else is
+# percent encoded, so + becomes %2B, which ACS search syntax requires.
 urlenc() {
-  local s="$1" o="" c i
-  i=0
-  while [ $i -lt ${#s} ]; do
-    c="${s:$i:1}"
-    case "$c" in
-      [a-zA-Z0-9.~_-]) o="$o$c" ;;
-      *) o="$o$(printf '%%%02X' "'$c")" ;;
-    esac
-    i=$((i+1))
-  done
-  printf '%s' "$o"
+  printf '%s' "$1" | jq -sRr @uri
 }
 
 # Scope filter reused by every store. Left empty by default: no namespace filter, no
@@ -214,7 +221,70 @@ hr
 #   3. A public key pin you confirmed out of band. Verifies the exact key with no chain.
 #   4. Nothing. The run stops and tells you which of the above to do.
 resolve_tls() {
-  [ -n "$CACERT" ] && return 0
+  # A CA you supplied is trusted as your decision, but it is still worth ONE probe before
+  # the token goes anywhere. Without it a CA that curl cannot actually use surfaces three
+  # steps later as "authentication failed", which sends you looking at the token when the
+  # problem is the certificate.
+  #
+  # This is not hypothetical on macOS. Apple's curl is built against Secure Transport,
+  # which does not read a PEM CA bundle the way the OpenSSL builds do, and --cacert is
+  # the route this script and the README recommend first.
+  #
+  # The probe carries no credential: /v1/metadata is unauthenticated and the output goes
+  # to /dev/null. Nothing is disclosed by it failing.
+  if [ -n "$CACERT" ]; then
+    if curl -sS --cacert "$CACERT" -o /dev/null --max-time 15 \
+         "$ROX_ENDPOINT/v1/metadata" 2>"$OUTDIR/.ca.err"; then
+      say "  verified against the CA you supplied"
+      rm -f "$OUTDIR/.ca.err"
+      return 0
+    fi
+    say "  the CA you supplied did not verify this endpoint."
+    say "  curl said: $(head -c 200 "$OUTDIR/.ca.err" 2>/dev/null | tr -d '\n')"
+    say "  curl here is: $(curl -V 2>/dev/null | head -1)"
+    say ""
+    # Route on what curl actually said, not on which TLS backend it was built with.
+    #
+    # An earlier version of this branch asserted that Apple's Secure Transport ignores
+    # --cacert, and used the backend name to decide the advice. That was wrong, and the
+    # probe output above is what disproved it: on a stock macOS curl, --cacert was read,
+    # the chain was evaluated, and the failure returned was "certificate has expired",
+    # which is a correct and specific verdict. Diagnosing from a build string rather than
+    # from the error is guessing with extra confidence.
+    if grep -qi 'expired' "$OUTDIR/.ca.err" 2>/dev/null; then
+      say "  The certificate is out of date, not untrusted. Check the clock on this"
+      say "  machine, then re-extract the CA: the one on disk is probably from an"
+      say "  earlier rotation and Central has been reissued since."
+    elif grep -qi 'self.signed\|unable to get local issuer' "$OUTDIR/.ca.err" 2>/dev/null; then
+      say "  The file does not chain to what the endpoint presented. This usually means"
+      say "  it is the leaf certificate rather than the CA that signed it, or it is the"
+      say "  CA for a different route."
+    elif grep -qi 'host\|name' "$OUTDIR/.ca.err" 2>/dev/null; then
+      say "  The chain verified but the name did not match. Common through a port"
+      say "  forward, where the URL is 127.0.0.1 and the certificate names the service."
+      say "  Pin the key instead, which does not check the hostname."
+    else
+      say "  Check the file is the CA that signed this endpoint rather than the leaf,"
+      say "  and that it is PEM."
+    fi
+    say ""
+    say "  On macOS the system curl is built against Secure Transport, which consults the"
+    say "  Keychain as well. If you would rather trust the CA once and drop the flag:"
+    say ""
+    say "    sudo security add-trusted-cert -d -r trustRoot \\"
+    say "      -k /Library/Keychains/System.keychain $CACERT"
+    say "    sudo security remove-trusted-cert -d $CACERT   # to undo"
+    say ""
+    say "  Or pin the public key, which needs no CA bundle at all:"
+    say ""
+    say "    ./scripts/acs_pull_all.sh --pin 'sha256//<key>' -o $OUTPARENT"
+    say ""
+    say "  Run without --cacert to be shown the pin for this endpoint."
+    rm -f "$OUTDIR/.ca.err"
+    cleanup
+    rmdir "$OUTDIR" 2>/dev/null || true
+    exit 1
+  fi
   [ "$CURL_TLS" = "-k" ] && return 0
   if [ -n "$PIN" ]; then
     # -k is required here and is not a weakening.
@@ -453,17 +523,72 @@ fi
 # violation text only exists on GET /v1/alerts/{id}. Without this loop you get a
 # list of policy names with nothing explaining them, which reads as "no findings".
 say "[2/7] Fetching violation detail per alert (this is what /v1/alerts omits)"
-jq -r '.alerts[]?.id' "$OUTDIR/01_alerts_list.json" | sort -u > "$OUTDIR/.ids"
-IDCOUNT=$(wc -l < "$OUTDIR/.ids" | tr -d ' ')
+# Alert ids come from Central, so they are somebody else's data and get treated as such.
+#
+# These ids used to be substituted into a shell script body by xargs -I{} before sh
+# parsed it, which put them inside a double quoted string where $() and backticks are
+# live. An id of aaa`touch FILE`bbb created FILE on the machine running the pull, in a
+# process holding ROX_API_TOKEN and a live kubeconfig, and the run reported success.
+# Confirmed end to end against a hostile server before this was written.
+#
+# Two controls, and they cover DIFFERENT vectors. Saying they are redundant was wrong and
+# the review proved it: with the allowlist removed and argument passing intact, the
+# traversal payload still landed a file outside the run directory.
+#
+#   argument passing stops the id being parsed as script, which closes backtick and $()
+#     command execution
+#   the allowlist stops the id being used as a path, and it is the ONLY control on that,
+#     because the id is interpolated into -o "$OUTDIR/.full/$id.json" where a / is a
+#     directory separator no matter how the value arrived
+#
+# So do not widen the character class on the assumption that argument passing has you
+# covered. It does not. Adding : or / reopens arbitrary file write in a process holding
+# ROX_API_TOKEN and a live kubeconfig.
+#
+# There is now also a guard inside the sh -c body, independent of this regex, so the
+# redundancy the old comment claimed actually exists.
+#
+# Ids are UUIDs. Anything outside this character class is not an id, and a dropped id is
+# counted and reported rather than silently discarded.
+jq -r '.alerts[]?.id' "$OUTDIR/01_alerts_list.json" | sort -u > "$OUTDIR/.ids.raw"
+# LC_ALL=C so the bracket expression is bytes, not locale collation. Under a UTF-8 locale
+# grep and the case guard below disagree at the margins, and two controls that disagree
+# about what they allow is how a gap opens later.
+LC_ALL=C grep -E '^[A-Za-z0-9._-]+$' "$OUTDIR/.ids.raw" > "$OUTDIR/.ids" 2>/dev/null || : > "$OUTDIR/.ids"
+# countlines, because $(grep -c . f || echo 0) is wrong and was wrong in six places.
+# grep -c prints its count and THEN exits 1 when the count is zero, so the || fires on
+# top of the output already produced and the substitution captures "0\n0". Arithmetic on
+# that is an illegal number, which under dash kills the rest of the step without failing
+# the run. Nothing downstream ran and nothing said so.
+countlines() { c=$(grep -c . "$1" 2>/dev/null) || c=0; [ -n "$c" ] || c=0; printf '%s' "$c"; }
+
+RAWCOUNT=$(countlines "$OUTDIR/.ids.raw")
+IDCOUNT=$(countlines "$OUTDIR/.ids")
+DROPPED=$((RAWCOUNT - IDCOUNT))
+if [ "$DROPPED" -gt 0 ]; then
+  say "  $DROPPED alert id(s) discarded: did not look like an id."
+  say "  An id is letters, digits, dot, dash and underscore. Anything else is either a"
+  say "  Central that is not behaving or something trying to reach this shell, and"
+  say "  neither is a reason to keep going with it."
+  grep -Ev '^[A-Za-z0-9._-]+$' "$OUTDIR/.ids.raw" | head -5 | while IFS= read -r bad; do
+    printf '    rejected: %s\n' "$(printf '%s' "$bad" | cut -c1-80 | tr -d '\000-\037')"
+  done
+fi
+rm -f "$OUTDIR/.ids.raw"
 if [ "$IDCOUNT" != "0" ]; then
   mkdir -p "$OUTDIR/.full"
   # Bounded concurrency. Central is a security control; do not flood it.
   export ROX_ENDPOINT OUTDIR
   CURL_ARGS="$CURL_TLS"
   export CURL_ARGS HDR
-  cat "$OUTDIR/.ids" | xargs -P "$JOBS" -I{} sh -c \
-    'curl -sS --fail-with-body $CURL_ARGS -H "@$HDR" -H Accept:application/json \
-       "$ROX_ENDPOINT/v1/alerts/{}" -o "$OUTDIR/.full/{}.json" 2>/dev/null || true'
+  # The id arrives as $1 rather than being pasted into the script text. xargs substitutes
+  # into arguments, and sh never parses the value, so a metacharacter in an id is a
+  # character in a URL and nothing more.
+  xargs -P "$JOBS" -I% sh -c \
+    'id="$1"; case "$id" in *[!A-Za-z0-9._-]*|*..*|"") exit 0;; esac; \
+     curl -sS --fail-with-body $CURL_ARGS -H "@$HDR" -H Accept:application/json \
+       "$ROX_ENDPOINT/v1/alerts/$id" -o "$OUTDIR/.full/$id.json" 2>/dev/null || true' \
+    _ % < "$OUTDIR/.ids"
   find "$OUTDIR/.full" -name '*.json' -size +0 -print0 \
     | xargs -0 cat 2>/dev/null \
     | jq -s '{alerts: .}' > "$OUTDIR/02_alerts_full.json"
@@ -484,7 +609,7 @@ say "[3/7] Image CVEs for running workloads (vuln-mgmt export)"
 VQ="timeout=$TIMEOUT"
 [ -n "$SCOPE" ] && VQ="query=$SCOPE_ENC&$VQ"
 if $CURL "$ROX_ENDPOINT/v1/export/vuln-mgmt/workloads?$VQ" -o "$OUTDIR/03_vuln_workloads.ndjson" 2>"$OUTDIR/.v.err"; then
-  L=$(grep -c . "$OUTDIR/03_vuln_workloads.ndjson" 2>/dev/null || echo 0)
+  L=$(countlines "$OUTDIR/03_vuln_workloads.ndjson")
   C=$(jq -s '[.[].result.images[]?.scan.components[]?.vulns[]?.cve] | unique | length' \
         "$OUTDIR/03_vuln_workloads.ndjson" 2>/dev/null || echo "?")
   say "  $L workload(s), $C distinct CVE(s)"
@@ -502,7 +627,7 @@ rm -f "$OUTDIR/.v.err"
 # "all possible findings", you need both.
 say "[4/7] Image CVEs for every image Central knows (including non running)"
 if $CURL "$ROX_ENDPOINT/v1/export/images?timeout=$TIMEOUT" -o "$OUTDIR/04_all_images.ndjson" 2>"$OUTDIR/.i.err"; then
-  L=$(grep -c . "$OUTDIR/04_all_images.ndjson" 2>/dev/null || echo 0)
+  L=$(countlines "$OUTDIR/04_all_images.ndjson")
   C=$(jq -s '[.[].result.scan.components[]?.vulns[]?.cve] | unique | length' \
         "$OUTDIR/04_all_images.ndjson" 2>/dev/null || echo "?")
   say "  $L image(s), $C distinct CVE(s)"
@@ -514,7 +639,7 @@ rm -f "$OUTDIR/.i.err"
 # --- 5. Node CVEs -------------------------------------------------------------
 say "[5/7] Node CVEs"
 if $CURL "$ROX_ENDPOINT/v1/export/nodes?timeout=$TIMEOUT" -o "$OUTDIR/05_nodes.ndjson" 2>"$OUTDIR/.n.err"; then
-  L=$(grep -c . "$OUTDIR/05_nodes.ndjson" 2>/dev/null || echo 0)
+  L=$(countlines "$OUTDIR/05_nodes.ndjson")
   say "  $L node(s)"
 else
   say "  not available on this Central: $(head -c 160 "$OUTDIR/.n.err")"
@@ -528,7 +653,7 @@ say "[6/7] Snoozed and deferred CVEs (hidden from the default views)"
 SNZ="$(urlenc 'CVE Snoozed:true')"
 if $CURL "$ROX_ENDPOINT/v1/export/images?query=$SNZ&timeout=$TIMEOUT" \
      -o "$OUTDIR/06_snoozed.ndjson" 2>/dev/null; then
-  L=$(grep -c . "$OUTDIR/06_snoozed.ndjson" 2>/dev/null || echo 0)
+  L=$(countlines "$OUTDIR/06_snoozed.ndjson")
   say "  $L image(s) carrying snoozed CVEs"
 else
   say "  query not supported on this version, skipped"

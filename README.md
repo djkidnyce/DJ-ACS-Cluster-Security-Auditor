@@ -16,7 +16,7 @@ Audit Kubernetes and OpenShift manifests against Red Hat Advanced Cluster Securi
 | `scripts/acs_pull_all.sh` and `.ps1` | Pull every finding ACS has, all severities and states, from outside the browser |
 | `scripts/acs_pull_via_oc.sh` | Same, but reaches Central through your existing `oc` session |
 | `scripts/acs_pull_over_ssh.ps1` | PowerShell, when only a bastion can reach the cluster |
-| `test/run_tests.js` | 929 tests against the real engine, the page, the scripts and the CLI |
+| `test/run_tests.js` | 1173 tests against the real engine, the page, the scripts and the CLI |
 
 Open either HTML file directly. There is nothing to install and no server to run.
 
@@ -431,7 +431,26 @@ Confirm that fingerprint against the cluster through some channel other than the
 ./scripts/acs_pull_all.sh --pin 'sha256//<the hash it printed>' -o findings
 ```
 
-A is better where it works, because it keeps hostname verification. The script tests A against your endpoint before recommending it, so it only offers it when it actually works.
+A is better where it works, because it keeps hostname verification. The script tests A
+against your endpoint before recommending it, so it only offers it when it actually works.
+
+**If the CA route fails, the script says why before the token moves.** It makes one
+unauthenticated request with your CA first, and reports curl's own verdict rather than
+letting a certificate problem resurface three steps later as an authentication failure.
+The advice follows the error: expired is not the same problem as a chain that does not
+reach the CA, which is not the same as a hostname mismatch.
+
+On macOS the system curl is built against Apple Secure Transport, which consults the
+Keychain in addition to any file you pass. `--cacert` does work there, but if you would
+rather trust the CA once and drop the flag:
+
+```bash
+sudo security add-trusted-cert -d -r trustRoot \
+  -k /Library/Keychains/System.keychain ~/central-ca.pem
+./scripts/acs_pull_all.sh -o findings
+sudo security remove-trusted-cert -d ~/central-ca.pem   # to undo
+```
+
 
 B turns the chain check off and requires that exact public key instead. `--pinnedpubkey` on its own cannot help here: it is an additional check rather than a replacement, so curl rejects a self signed certificate before it ever looks at the pin. The pin is enforced, and a wrong key fails closed with `curl (90)`.
 
@@ -513,7 +532,7 @@ node test/run_tests.js
 npm install jsdom && node test/run_tests.js
 ```
 
-775 engine, CLI and script tests, no install required, plus 154 whole page tests that need jsdom and skip without it. 929 in total. Suites that need something the machine lacks say what is missing rather than skipping silently.
+802 engine, CLI and script tests, no install required, plus 371 whole page tests that need jsdom and skip without it. 1173 in total. Suites that need something the machine lacks say what is missing rather than skipping silently.
 
 They cover the policy catalogue, scanning and scoring, fix application and YAML validity, diff correctness, merge patch minimality, ACS import across every export shape the pull script writes plus renamed policy matching, the full remediation flow including that preview mutates nothing and undo restores byte for byte, and the vulnerability path end to end: NDJSON parsing, CVE deduplication, priority reasoning, manifest correlation and drift.
 
@@ -558,7 +577,7 @@ take the archive on trust:
 
 ```bash
 sha256sum -c SHA256SUMS
-gh attestation verify dj-acs-auditor-1.4.0.zip \
+gh attestation verify dj-acs-auditor-1.5.1.zip \
   --repo djkidnyce/DJ-ACS-Cluster-Security-Auditor
 ```
 
@@ -578,22 +597,37 @@ build or run time, which is why this works on a disconnected network. The SBOM i
 from the bytes on disk by `scripts/make_sbom.js`, so it cannot describe a dependency that
 is not there, and it refuses to run if `vendor/` gains a file it does not recognise.
 
-## The Word guides are built, not committed
+## The Word guides are committed, and checked
 
-They are generated from `docs/doc1.js` and `docs/doc2.js` and attached to each release.
-Committing them meant a documentation change arrived as `Bin 1128727 -> 1129347 bytes`,
-which nobody can review, and the repository carried both the source and the output of the
-same thing.
+The guides are generated from `docs/doc1.js` and `docs/doc2.js`, and the generated `.docx`
+files are committed rather than ignored.
 
-To read them without waiting for a release:
+They were gitignored for several versions, on the reasoning that a binary change reads as
+`Bin 1128727 -> 1129347 bytes` and no reviewer can read that. That is true, and it cost
+more than it saved. Browsing the repository showed a `docs/` folder of generators, figures
+and a proposal, and not one readable document. This README named two `.docx` paths that
+were not in git, and the route it offered for building them was `npm install --no-save
+docx`, which is exactly what an operator on a hardened host cannot run. The documentation
+existed and the person most likely to need it could not reach it. A guide is meant to be
+opened, printed and handed to somebody, and that is worth more than a reviewable diff on a
+file almost nobody edits by hand.
+
+The real risk with committed generated output is that it stops matching its source and
+nobody notices. `./docs/check_docx.sh` closes that:
 
 ```bash
-npm install --no-save docx
-node docs/doc1.js && node docs/doc2.js
+./docs/check_docx.sh              # fails if a committed guide is out of date
+./docs/check_docx.sh --rebuild    # rebuild, then commit the result
 ```
 
-CI builds them on every push, so a broken generator is caught then rather than at release
-time.
+CI runs it on every push. It compares extracted text rather than bytes, deliberately: a
+`.docx` is a ZIP and the generator writes non-deterministic content into it, so two builds
+of an unchanged source differ every time. A byte comparison would fail on every run and be
+switched off within a week, and a check nobody runs is worse than no check because it
+looks like coverage. The text is stable, and the text is what goes stale.
+
+CI also rebuilds both guides on every push, so a broken generator is caught then rather
+than at release time.
 
 ## Releasing
 
@@ -610,13 +644,28 @@ See [RELEASING.md](RELEASING.md) for the procedure.
 
 ## Documentation
 
-| Document | For |
-|---|---|
-| `docs/DJ_ACS_Auditor_User_Guide.docx` | Operators. How to scan, connect to a live cluster, apply fixes, and export. Illustrated. |
-| `docs/DJ_Security_Tooling_Administration_Guide.docx` | Maintainers. Architecture, tests, adding policies, vendoring, exceptions, CI, release. |
+Both guides are committed to this repository as Word documents, so they are formatted,
+printable, and readable without building anything. The same files are attached to every
+[release](https://github.com/djkidnyce/DJ-ACS-Cluster-Security-Auditor/releases).
 
-Figures are generated from source: `python3 docs/make_figures.py` and `python3 docs/make_admin_figures.py`.
-The documents are built with `node docs/doc1.js` and `node docs/doc2.js`.
+| Document | For | Covers |
+|---|---|---|
+| **[docs/DJ_ACS_Auditor_User_Guide.docx](docs/DJ_ACS_Auditor_User_Guide.docx)** | Operators | Loading manifests, reading the audit, pulling data out of ACS, working a large finding list, applying fixes, getting corrected YAML back out. Illustrated. |
+| **[docs/DJ_Security_Tooling_Administration_Guide.docx](docs/DJ_Security_Tooling_Administration_Guide.docx)** | Maintainers | Architecture, the fix mode gate, the two ACS data planes, the test suites, adding a policy, vendoring, waivers, CI, release. |
+| [docs/PROPOSAL_page_hardening.md](docs/PROPOSAL_page_hardening.md) | Reviewers | CSP and subresource integrity, proposed rather than applied. |
+
+GitHub does not render `.docx` in the browser. Click the file and press **Download**, or
+clone the repository and open them normally. [docs/README.md](docs/README.md) explains how
+the folder fits together and how to rebuild any of it.
+
+The guides carry the version they describe, read from `ACS_VERSION`, and their date comes
+from the newest CHANGELOG heading. Neither is typed in, so neither can be wrong without
+the build being wrong. The User Guide previously said "Version 1.0" while the tool stamped
+1.5.0 into every report it wrote.
+
+Figures: `python3 docs/make_figures.py`, `python3 docs/make_admin_figures.py` and
+`python3 docs/make_vuln_figure.py`. Guides: `./docs/check_docx.sh --rebuild`, then commit
+the result.
 
 ## Contact
 

@@ -106,12 +106,66 @@ t('the release notes say how to verify', /gh attestation verify/.test(r));
 t('and say plainly what the attestation does not mean',
   /not a claim that the tool is correct/.test(r));
 
-console.log('\nThe generated documentation is built, not committed');
-t('the .docx files are gitignored',
-  /docs\/\*\.docx/.test(fs.readFileSync(path.join(ROOT, '.gitignore'), 'utf8')));
+/* Documentation that exists but cannot be reached is documentation that does not exist.
+ *
+ * The .docx guides are gitignored on purpose, so browsing the repository showed a docs/
+ * folder of generators, figures and a proposal and not one readable document, while the
+ * README named two .docx paths that are not in git. Nothing failed, nothing was missing
+ * from a release, and the person the guides are written for could not read them. These
+ * assert reachability rather than existence, which is the property that was actually
+ * broken.
+ */
+console.log('\nThe documentation is readable from a plain checkout');
+const docsDir = path.join(ROOT, 'docs');
+const GUIDES = ['DJ_ACS_Auditor_User_Guide.docx', 'DJ_Security_Tooling_Administration_Guide.docx'];
+for (const g of GUIDES) {
+  const f = path.join(docsDir, g);
+  const ok = fs.existsSync(f);
+  t('  docs/' + g + ' is committed, so a checkout has readable documentation', ok);
+  if (ok) t('  docs/' + g + ' is a whole guide rather than a stub',
+    fs.statSync(f).size > 200000);
+}
+t('  docs/README.md points at both guides',
+  fs.existsSync(path.join(docsDir, 'README.md')) &&
+  GUIDES.every((g) => fs.readFileSync(path.join(docsDir, 'README.md'), 'utf8').indexOf(g) !== -1));
+
+/* The README is the front door. Every path it names has to exist in a checkout, or the
+   reader is sent somewhere that is not there. That was the actual defect: the guides
+   were gitignored and the README pointed at them anyway. */
+const rd = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
+const linked = Array.from(rd.matchAll(/\]\((docs\/[^)#]+)\)/g)).map((m) => m[1]);
+const dead = linked.filter((rel) => !fs.existsSync(path.join(ROOT, rel)));
+t('  every docs/ path the README links to exists (' + new Set(linked).size + ' checked)',
+  dead.length === 0);
+if (dead.length) console.log('        dead: ' + Array.from(new Set(dead)).join(', '));
+t('  the README names both guides where a reader will look', GUIDES.every((g) => rd.indexOf(g) !== -1));
+
+/* Committed generated output stops matching its source unless something checks. */
+const gi = fs.readFileSync(path.join(ROOT, '.gitignore'), 'utf8');
+t('  the guides are not gitignored, which is what made them unreachable before',
+  !/^docs\/\*\.docx\s*$/m.test(gi));
+const chk = path.join(docsDir, 'check_docx.sh');
+t('  there is a script that verifies them against their generators', fs.existsSync(chk));
+if (fs.existsSync(chk)) {
+  const cs = fs.readFileSync(chk, 'utf8');
+  t('  it compares extracted text, because .docx bytes are not reproducible',
+    /-t plain/.test(cs) && /not reproducible|non-deterministic/.test(cs));
+  t('  and it restores the tree on any exit, not just a clean one',
+    /trap restore EXIT/.test(cs));
+}
+t('  and CI runs it', /check_docx\.sh/.test(y));
+
+console.log('\nThe generated documentation is built AND committed');
+t('the .docx files are committed rather than ignored',
+  !/^docs\/\*\.docx\s*$/m.test(fs.readFileSync(path.join(ROOT, '.gitignore'), 'utf8')));
 t('CI proves the generators still run', /node docs\/doc1\.js/.test(y));
-t('and fails if a generated document gets committed again',
-  /a generated \.docx is tracked/.test(y));
+/* This used to assert the reverse: that CI failed if a .docx was tracked. That rule is
+   why the repository had no readable documentation for several versions. It now has to
+   fail if one goes MISSING. */
+t('and fails if a committed guide goes missing',
+  /has no readable documentation/.test(y));
+t('and CI verifies the committed guides against their source',
+  /check_docx\.sh/.test(y));
 t('the release builds them and attaches them', /node docs\/doc1\.js/.test(r));
 
 console.log('\nThe SBOM is generated from the files, not maintained by hand');

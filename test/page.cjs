@@ -434,6 +434,303 @@ async function tabs() {
  * the only thing that can produce one, so the export path has to work and has to be
  * usable at four figures of findings.
  */
+/* Reported from a real run of 1.5.0: one checkbox in the header and none on the rows, a
+ * Fix this button that appears dead, an export button greyed out next to the words "750
+ * selected", and a table wider than the window.
+ *
+ * Every one of these is a DOM fact. The previous selection test passed while the row
+ * checkboxes did not exist at all, because it clicked the header button and then asserted
+ * on the FSELECTED Set. Asserting on the data structure behind a control proves the
+ * structure works, not the control. These assert on elements.
+ */
+async function selectionUi() {
+  const { w, $, cleanup } = await open('dj_acs_auditor.html',
+    'window.__S=()=>STATE;window.__load=(i)=>loadItems(i);window.__tab=(t)=>showTab(t);' +
+    'window.__rows=()=>findingRows();window.__sel=()=>FSELECTED;window.__mode=()=>currentMode();');
+  const M = (n) => ['apiVersion: apps/v1', 'kind: Deployment', 'metadata:', '  name: ' + n,
+    '  namespace: prod', 'spec:', '  template:', '    spec:', '      hostNetwork: true',
+    '      hostPID: true', '      containers:', '      - name: c',
+    '        image: registry.example.internal/a-very-long-project-path/' + n + ':latest',
+    '        securityContext:', '          privileged: true'].join('\n');
+  const files = [];
+  for (let i = 0; i < 6; i++) files.push({ name: 'team/app' + i + '.yaml', text: M('app' + i) });
+  w.__load(files);
+  w.__tab('remediate');
+
+  console.log('\n  Every fixable row is selectable, on the row');
+  const fixable = w.__rows().filter((f) => !f.applied && f.fixKind !== 'manual').length;
+  t('the fixture produced fixable findings to select', fixable > 10);
+  const boxes = w.document.querySelectorAll('#rtable input.fsel');
+  t('there is a checkbox on each fixable row, not just in the header',
+    boxes.length === fixable);
+  t('and the header box is still there', !!$('fSelAll'));
+
+  /* A body row with fewer cells than the header shifts every value one column left, so
+     Severity renders under the checkbox heading. Counting them catches it. */
+  const heads = w.document.querySelectorAll('#rtable thead th').length;
+  const firstRow = w.document.querySelector('#rtable tbody tr');
+  t('the body rows have as many cells as the header has columns',
+    !!firstRow && firstRow.children.length === heads);
+  /* The detail row is built on first expand, so open one and then check its span. A
+     colspan that disagrees with the header count is how the old 7-under-8 mismatch
+     showed up in the markup. */
+  if (firstRow) firstRow.querySelector('td.wrapcell').click();
+  const detail = w.document.querySelector('#rtable tbody tr.fdet td[colspan]');
+  t('and the detail row, once opened, spans exactly that many',
+    !!detail && Number(detail.getAttribute('colspan')) === heads);
+  if (firstRow) firstRow.querySelector('td.wrapcell').click();
+
+  console.log('\n  Ticking a row is what selects a finding');
+  $('fixMode').value = 'manual';
+  $('fixMode').dispatchEvent(new w.Event('change'));
+  const one = w.document.querySelector('#rtable input.fsel');
+  t('clicking a row checkbox selects that finding',
+    !!one && (one.click(), w.__sel().size === 1));
+  t('and the export button counts it',
+    /1 selected/.test($('btnExportFixed').textContent));
+  t('clicking it again clears it',
+    !!one && (one.click(), w.__sel().size === 0));
+
+  /* Clicking a row opens its advisory. A checkbox inside that row must not do both. */
+  const before = w.document.querySelectorAll('#rtable tbody tr.hidden').length;
+  const two = w.document.querySelector('#rtable input.fsel');
+  if (two) two.click();
+  t('ticking a box does not also expand the advisory row',
+    !!two && w.document.querySelectorAll('#rtable tbody tr.hidden').length === before);
+
+  /* This used to clear the selection on the way into report mode, on the reasoning that
+     report produces nothing so a tick in it is wasted. In practice that means ticking 750
+     findings, touching the mode selector, and losing the lot. Ticks cost nothing. The
+     gate belongs on the thing that writes a file, and it has to explain itself where the
+     button is rather than leaving a grey rectangle. */
+  console.log('\n  Report mode holds the selection and explains the gate');
+  $('btnFSelAll').click();
+  const held = w.__sel().size;
+  t('there is a selection to hold', held > 0);
+  $('fixMode').value = 'report';
+  $('fixMode').dispatchEvent(new w.Event('change'));
+  t('the ticks are kept, not thrown away', w.__sel().size === held);
+  t('the row checkboxes stay usable, because ticking costs nothing',
+    Array.from(w.document.querySelectorAll('#rtable input.fsel'))
+      .filter((c) => !c.disabled).length > 0);
+  t('the export button is the thing that is gated', $('btnExportFixed').disabled);
+  t('the button itself says which control is holding it',
+    /Report only\. Choose Manual or Auto/.test($('btnExportFixed').title));
+  t('and the reason is written beside the button, not only at the top of the page',
+    /Mode is Report only/.test($('fModeWhy').textContent) &&
+    /Change Mode at the top of the page/.test($('fModeWhy').textContent));
+  t('and that note is actually visible while the gate is holding',
+    !$('fModeWhy').classList.contains('hidden'));
+  t('pressing it anyway writes nothing',
+    (function () { const n = []; const d = w.download; w.download = (x) => n.push(x);
+      $('btnExportFixed').click(); w.download = d; return n.length === 0; })());
+  t('switching back to manual turns it on with the selection intact',
+    (function () { $('fixMode').value = 'manual';
+      $('fixMode').dispatchEvent(new w.Event('change'));
+      return w.__sel().size === held && $('btnExportFixed').disabled === false; })());
+  $('btnFSelNone').click();
+  $('fixMode').value = 'report';
+  $('fixMode').dispatchEvent(new w.Event('change'));
+
+  /* The reported symptom was "the fix this button does not work". It was live, it was
+     clickable, requireMode refused it, and the refusal was written into #exportMsg at the
+     bottom of the page below a 750 row table. A control the mode forbids is disabled and
+     says why on itself, rather than looking pressable and explaining itself off screen. */
+  console.log('\n  A control the mode forbids is off, and says so on itself');
+  const btn = w.document.querySelector('#rtable tbody button.rfix');
+  t('the per row Fix this button exists', !!btn && /Fix this/.test(btn.textContent));
+  t('and in report mode it is disabled rather than live and refusing',
+    !!btn && btn.disabled === true);
+  t('every one of them, not just the first',
+    Array.from(w.document.querySelectorAll('#rtable tbody button.rfix'))
+      .every((b) => b.disabled));
+  t('the button itself names the control to move',
+    !!btn && /Report only\. Choose Manual or Auto in the Mode selector/.test(btn.title));
+  if (btn) btn.click();
+  await new Promise((r) => setTimeout(r, 40));
+  t('pressing it in report mode applies nothing', w.__S().history.length === 0);
+  t('and switching to manual turns every one of them on',
+    (function () { $('fixMode').value = 'manual';
+      $('fixMode').dispatchEvent(new w.Event('change'));
+      const bs = w.document.querySelectorAll('#rtable tbody button.rfix');
+      return bs.length > 0 && Array.from(bs).every((b) => !b.disabled); })());
+  t('and the note beside the table goes away with them',
+    $('fModeWhy').classList.contains('hidden') && $('fModeWhy').textContent === '');
+  $('fixMode').value = 'report';
+  $('fixMode').dispatchEvent(new w.Event('change'));
+
+  /* Two containers of one object under one policy are two findings with one findingKey.
+     Selection is per row, so it needs a key that separates them, or ticking one ticks
+     both and the count disagrees with the screen again. */
+  console.log('\n  Two containers of one object select independently');
+  w.__load([{ name: 'two.yaml', text: ['apiVersion: apps/v1', 'kind: Deployment',
+    'metadata: { name: web, namespace: prod }', 'spec:', '  template:', '    spec:',
+    '      containers:', '      - name: alpha', '        image: nginx:latest',
+    '        securityContext: { privileged: true }', '      - name: beta',
+    '        image: redis:latest', '        securityContext: { privileged: true }'].join('\n') }]);
+  w.__tab('remediate');
+  $('fixMode').value = 'manual';
+  $('fixMode').dispatchEvent(new w.Event('change'));
+  const fks = Array.from(w.document.querySelectorAll('#rtable tbody input.fsel'))
+    .map((c) => c.dataset.fk);
+  t('the fixture really does produce colliding finding keys',
+    w.__rows().length > new Set(w.__rows().map((f) => f.file + '|' + f.obj + '|' + f.policy.id)).size);
+  t('but every row checkbox carries a distinct key',
+    fks.length > 1 && new Set(fks).size === fks.length);
+  const c0 = w.document.querySelectorAll('#rtable tbody input.fsel')[0];
+  c0.click();
+  t('so ticking one container selects exactly one finding', w.__sel().size === 1);
+  t('and leaves the other container unticked',
+    w.document.querySelectorAll('#rtable tbody input.fsel')[1].checked === false);
+  t('and the header box reads partial, not complete',
+    $('fSelAll').indeterminate === true && $('fSelAll').checked === false);
+  $('btnFSelNone').click();
+  $('fixMode').value = 'report';
+  $('fixMode').dispatchEvent(new w.Event('change'));
+
+  console.log('\n  Wide tables are contained rather than pushing off screen');
+  /* jsdom does no layout, so this asserts the CSS contract rather than a measured width.
+     Saying that plainly is better than implying the overflow itself was reproduced. */
+  const css = w.document.querySelector('style').textContent;
+  for (const id of ['rtable', 'ftable', 'vtable', 'acsTable']) {
+    const tb = $(id);
+    if (!tb) continue;
+    t('  ' + id + ' sits in a horizontally scrollable wrapper',
+      !!tb.closest('.tablewrap'));
+  }
+  t('long unbroken values are allowed to wrap inside a cell',
+    /\.tablewrap\s+td[^}]*(overflow-wrap|word-break)/.test(css) ||
+    /(^|})\s*td\.wrapcell\s*{[^}]*(overflow-wrap|word-break)/m.test(css));
+  t('and the wrapper scrolls rather than overflowing the page',
+    /\.tablewrap\s*{[^}]*overflow-x:\s*auto/.test(css));
+
+  /* The Audit tab is read only. It had a checkbox cell its header had no column for,
+     which pushed every value one column right and left the eighth cell headerless, and
+     those boxes were bound to nothing anywhere in the file. */
+  console.log('\n  The read only table has no orphan controls');
+  w.__tab('audit');
+  const fh = w.document.querySelectorAll('#ftable thead th').length;
+  const frow = w.document.querySelector('#ftable tbody tr');
+  t('its body rows have as many cells as its header has columns',
+    !!frow && frow.children.length === fh);
+  t('it has no selection checkboxes at all',
+    w.document.querySelectorAll('#ftable input.fsel').length === 0);
+  t('and no checkbox cell',
+    w.document.querySelectorAll('#ftable td.selcell').length === 0);
+  cleanup();
+}
+
+/* The defect this suite existed to catch and did not.
+ *
+ * renderTable created two elements per finding, set innerHTML on each, attached two
+ * listeners and appended into a live table. That is quadratic. At 75 findings it took
+ * 440ms and every test passed. At 750, which is an ordinary first run against a real
+ * cluster, a single render took roughly 37 seconds, and because ticking one checkbox
+ * called renderTable(), clicks queued behind a render and every button looked dead.
+ *
+ * Nothing here asserts a wall clock number, because a timing threshold in CI is a flaky
+ * test and a flaky test gets deleted. It asserts the three structural properties that
+ * make the render cheap. If any of them regresses, the page gets slow again.
+ */
+async function scale() {
+  const { w, $, cleanup } = await open('dj_acs_auditor.html',
+    'window.__S=()=>STATE;window.__load=(i)=>loadItems(i);window.__tab=(t)=>showTab(t);' +
+    'window.__sel=()=>FSELECTED;window.__rows=()=>findingRows();window.__frows=()=>FROWS;');
+  const M = (n) => ['apiVersion: apps/v1', 'kind: Deployment',
+    'metadata: { name: app-' + n + ', namespace: ns-' + n + ' }', 'spec:', '  template:',
+    '    spec:', '      hostNetwork: true', '      hostPID: true',
+    '      automountServiceAccountToken: true', '      containers:', '      - name: c',
+    '        image: q/app-' + n + ':latest',
+    '        securityContext: { privileged: true, allowPrivilegeEscalation: true, runAsUser: 0 }',
+    '        env: [{ name: DB_PASSWORD, value: s3cret }]',
+    '        ports: [{ containerPort: 80, hostPort: 80 }]'].join('\n');
+
+  const files = [];
+  for (let i = 0; i < 50; i++) files.push({ name: 'm/app' + i + '.yaml', text: M(i) });
+  w.__load(files);
+  w.__tab('remediate');
+  const n = w.__rows().length;
+
+  console.log('\nA real sized run: ' + n + ' findings');
+  t('the run is big enough to matter', n > 400);
+
+  /* No cap. A cap would draw some of the findings and hide the rest, which breaks Ctrl+F
+     and print for the hidden ones and makes "Select all shown" act on rows that are not
+     shown -- the same "the number disagrees with the screen" defect this suite exists
+     for. The render is cheap because there is one innerHTML parse, no advisory is built
+     until it is asked for, and a tick repaints rather than rebuilds. */
+  console.log('\n  1. Every matching row is drawn, none are hidden from the operator');
+  t('the number of rows equals the number of matching findings',
+    w.document.querySelectorAll('#rtable tbody tr[data-i]').length === n);
+  t('nothing tells the operator rows were withheld',
+    !/Showing the first/.test($('rtable').textContent));
+  t('FROWS is what was drawn', w.__frows().length === n);
+  t('the count line agrees',
+    new RegExp('showing ' + n + ' of ' + n + ' finding').test($('fCount').textContent));
+
+  console.log('\n  2. Advisories are built when asked for, not all ' + n + ' up front');
+  t('no advisory row exists before anybody opens one',
+    w.document.querySelectorAll('#rtable tbody tr.fdet').length === 0);
+  const row = w.document.querySelector('#rtable tbody tr[data-i="2"]');
+  row.querySelector('td.wrapcell').click();
+  t('clicking a row builds its own advisory',
+    w.document.querySelectorAll('#rtable tbody tr.fdet').length === 1);
+  t('and fills it', row.nextElementSibling.firstElementChild.innerHTML.length > 100);
+  t('and reveals it', !row.nextElementSibling.classList.contains('hidden'));
+  row.querySelector('td.wrapcell').click();
+  t('clicking again collapses it', row.nextElementSibling.classList.contains('hidden'));
+  row.querySelector('td.wrapcell').click();
+  t('and a third click does not build a second advisory row',
+    w.document.querySelectorAll('#rtable tbody tr.fdet').length === 1);
+  row.querySelector('td.wrapcell').click();
+
+  console.log('\n  3. Ticking a checkbox updates the count, it does not rebuild the table');
+  $('fixMode').value = 'manual';
+  $('fixMode').dispatchEvent(new w.Event('change'));
+  const first = w.document.querySelector('#rtable tbody tr[data-i]');
+  first.dataset.sentinel = 'survives-a-tick';
+  const box = w.document.querySelector('#rtable tbody input.fsel:not([disabled])');
+  box.click();
+  t('the row element is the same element afterwards',
+    w.document.querySelector('#rtable tbody tr[data-i]').dataset.sentinel === 'survives-a-tick');
+  t('the count still moved, so something did happen',
+    /1 selected/.test($('fCount').textContent));
+  const openAdv = (function () { const r = w.document.querySelector('#rtable tbody tr[data-i="4"]');
+    r.querySelector('td.wrapcell').click(); return r.nextElementSibling; })();
+  box.click();
+  t('an advisory somebody opened is not closed by ticking a box elsewhere',
+    !openAdv.classList.contains('hidden'));
+
+  console.log('\n  4. Select all covers every drawn row, and every drawn row is every match');
+  $('btnFSelAll').click();
+  t('it is every fixable finding that matches the filters',
+    w.__sel().size === w.__rows().filter((f) => !f.applied && f.fixKind !== 'manual').length);
+  t('and every one of them has a ticked box on screen, so the number matches the table',
+    Array.from(w.document.querySelectorAll('#rtable tbody input.fsel:not([disabled])'))
+      .every((c) => c.checked) &&
+    w.document.querySelectorAll('#rtable tbody input.fsel:not([disabled])').length ===
+      w.__sel().size);
+  t('the same sentinel row survived select all too',
+    w.document.querySelector('#rtable tbody tr[data-i]').dataset.sentinel === 'survives-a-tick');
+
+  console.log('\n  5. Long values cannot push the table out of the frame');
+  const cells = w.document.querySelectorAll('#rtable tbody td.wrapcell');
+  t('the wide columns are marked as breakable rather than left to set their own width',
+    cells.length > 0);
+  t('and the full value is on the cell as well, for a narrow window',
+    Array.from(cells).slice(0, 30).every((c) => !c.title || c.title === c.textContent));
+  const css = require('fs').readFileSync(require('path').join(ROOT, 'dj_acs_auditor.html'), 'utf8');
+  t('the findings table is fixed layout, so one long cell cannot widen every column',
+    /#rtable\{table-layout:fixed/.test(css));
+  t('the panel cannot exceed the viewport', /\.section,details\.sec\{min-width:0;max-width:100%/.test(css));
+  t('the wrapper takes any remainder as its own scrollbar', /\.tablewrap\{overflow-x:auto/.test(css));
+  t('long values break inside the cell rather than being clipped out of sight',
+    /td\.wrapcell\{overflow-wrap:anywhere/.test(css));
+  t('and the advisory row is free to wrap',
+    /#rtable tr\.fdet td\{max-width:none;white-space:normal/.test(css));
+  cleanup();
+}
+
 async function bulkExport() {
   const { w, $, cleanup } = await open('dj_acs_auditor.html',
     'window.__S=()=>STATE;window.__load=(i)=>loadItems(i);window.__tab=(t)=>showTab(t);' +
@@ -697,12 +994,666 @@ async function remediation() {
   cleanup();
 }
 
+
+/* ---------------------------------------------------------------- spec cases
+ *
+ * Written from .pipeline/specs.md section 7, one block per numbered edge case, rather
+ * than from the code. Where the code deviates from the spec the deviation is named in
+ * the label and in .pipeline/tests.md, so a reviewer can see which of the two is being
+ * asserted.
+ *
+ * Every assertion in these two functions was proved failable: the code under test was
+ * mutated, the assertion was watched go red, and the mutation was reverted. The list of
+ * mutations is in .pipeline/tests.md.
+ */
+
+/* One Deployment that trips exactly one policy, so "1 of 1" in the count line is a real
+   1 of 1 rather than a filtered view of a longer list. */
+const SOLO = ['apiVersion: apps/v1', 'kind: Deployment',
+  'metadata: { name: solo, namespace: solons, labels: { app: solo } }', 'spec:',
+  '  template:', '    metadata: { labels: { app: solo } }', '    spec:',
+  '      automountServiceAccountToken: false', '      serviceAccountName: solo-sa',
+  '      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }',
+  '      containers:', '      - name: c',
+  '        image: q/c@sha256:' + 'a'.repeat(64),
+  '        securityContext: { privileged: false, allowPrivilegeEscalation: false,' +
+  ' runAsNonRoot: true, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }',
+  '        resources: { limits: { cpu: "1", memory: 1Gi }, requests: { cpu: "1", memory: 1Gi } }'
+].join('\n');
+
+const WIDE = (n) => ['apiVersion: apps/v1', 'kind: Deployment',
+  'metadata: { name: app-' + n + ', namespace: ns-' + n + ' }', 'spec:', '  template:',
+  '    spec:', '      hostNetwork: true', '      hostPID: true',
+  '      automountServiceAccountToken: true', '      containers:', '      - name: c',
+  '        image: q/app-' + n + ':latest',
+  '        securityContext: { privileged: true, allowPrivilegeEscalation: true, runAsUser: 0 }',
+  '        env: [{ name: DB_PASSWORD, value: s3cret }]',
+  '        ports: [{ containerPort: 80, hostPort: 80 }]'].join('\n');
+
+async function specCases() {
+  const { w, $, cleanup } = await open('dj_acs_auditor.html',
+    'window.__S=()=>STATE;window.__load=(i)=>loadItems(i);window.__tab=(t)=>showTab(t);' +
+    'window.__rows=()=>findingRows();window.__sel=()=>FSELECTED;window.__frows=()=>FROWS;' +
+    'window.__key=(f)=>findingRowKey(f);window.__render=()=>render();' +
+    'window.__reset=()=>{STATE.files=[];STATE.applied.clear();FSELECTED.clear();rescan();};');
+  const S = () => w.__S();
+  const manual = () => { $('fixMode').value = 'manual'; $('fixMode').dispatchEvent(new w.Event('change')); };
+  const report = () => { $('fixMode').value = 'report'; $('fixMode').dispatchEvent(new w.Event('change')); };
+  const sevBoxes = () => Array.from(w.document.querySelectorAll('input.fsev'));
+  const applySev = () => sevBoxes()[0].dispatchEvent(new w.Event('change'));
+  const boxes = () => Array.from(w.document.querySelectorAll('#rtable tbody input.fsel'));
+  const tbody = () => $('rtable').querySelector('tbody');
+  /* A missing element is a failure to report, not an exception that stops the suite and
+     hides every case after it. */
+  const clk = (el) => { if (el && el.click) el.click(); return !!el; };
+
+  /* Spec 7 case 1. An empty table reads as a clean scan unless it says which empty it is,
+     which is the misreading the section header already guards against. */
+  console.log('\n  Spec case 1: no findings at all');
+  w.__tab('remediate');
+  w.__render();
+  const empty = tbody().children;
+  t('an empty scan draws exactly one row rather than an empty table',
+    empty.length === 1 && empty[0].children.length === 1);
+  t('that row spans every column the header declares',
+    !!empty[0] && Number(empty[0].firstElementChild.getAttribute('colspan')) ===
+      w.document.querySelectorAll('#rtable thead th').length);
+  t('and it says there was nothing to scan, not that the scan was clean',
+    !!empty[0] && empty[0].textContent === 'No findings. Load manifests above to scan them.');
+  t('the header box is disabled, unticked and not part ticked',
+    $('fSelAll').disabled === true && $('fSelAll').checked === false &&
+    $('fSelAll').indeterminate === false);
+  t('the count line reads exactly as specified',
+    $('fCount').textContent === 'showing 0 of 0 finding(s), none selected');
+  t('and the export button is off, with no count on it',
+    $('btnExportFixed').disabled === true &&
+    $('btnExportFixed').textContent === 'Download corrected YAML');
+  t('nothing is selected before anybody has touched anything', w.__sel().size === 0);
+
+  /* Spec 7 case 2. */
+  console.log('\n  Spec case 2: exactly one finding, and it is fixable');
+  w.__load([{ name: 'solo.yaml', text: SOLO }]);
+  w.__tab('remediate');
+  manual();
+  t('the fixture really does produce exactly one finding', S().findings.length === 1);
+  t('one finding draws one data row', tbody().querySelectorAll('tr[data-i]').length === 1);
+  const solo = boxes();
+  t('with one checkbox, and it is enabled',
+    solo.length === 1 && solo[0].disabled === false);
+  clk(solo[0]);
+  t('ticking it selects exactly that finding',
+    w.__sel().size === 1 && w.__frows()[0] && w.__sel().has(w.__key(w.__frows()[0])));
+  t('and fills the header box completely rather than part way',
+    $('fSelAll').checked === true && $('fSelAll').indeterminate === false);
+  t('and the count line reads exactly as specified',
+    $('fCount').textContent === 'showing 1 of 1 finding(s), 1 selected');
+  t('and the export button carries the count',
+    $('btnExportFixed').textContent === 'Download corrected YAML for 1 selected');
+
+  /* Spec 5.7, exact strings rather than a substring match. A title that drifts to
+     "Report only." alone still matches a regex for the first three words and no longer
+     tells anybody which control to move. */
+  console.log('\n  Spec 5.7: the exact words on the gated controls');
+  t('with a selection and a mode that allows it, the export button has no excuse on it',
+    $('btnExportFixed').title === '');
+  report();
+  t('in report mode the export button names the control and where it is',
+    $('btnExportFixed').title ===
+    'Report only. Choose Manual or Auto in the Mode selector at the top of the page.');
+  t('and the note above the table carries the specified sentence, whole',
+    $('fModeWhy').textContent ===
+    'Mode is Report only, so nothing that could be applied is produced: Download ' +
+    'corrected YAML and the per row Fix this buttons are disabled. Change Mode at the ' +
+    'top of the page to Manual to get files to review, or Auto to also apply fixes ' +
+    'here. Your selection is kept either way.');
+  manual();
+  $('btnFSelNone').click();
+  t('with nothing selected the button asks for a selection rather than blaming the mode',
+    $('btnExportFixed').title === 'Nothing selected. Tick the findings you want to export.');
+  t('and the mode note is emptied and hidden once the mode allows writing',
+    $('fModeWhy').textContent === '' && $('fModeWhy').classList.contains('hidden'));
+  t('and a Fix this button that can act says what pressing it will do',
+    (function () { const b = tbody().querySelector('button.rfix');
+      return !!b && b.disabled === false &&
+        b.title === 'Preview this fix as a diff and confirm it before anything changes.';
+    })());
+
+  /* Spec 7 case 3. */
+  console.log('\n  Spec case 3: every row filtered away');
+  w.__reset();
+  w.__load([{ name: 'w/a.yaml', text: WIDE('a') }, { name: 'w/b.yaml', text: WIDE('b') }]);
+  w.__tab('remediate');
+  manual();
+  const total = S().findings.length;
+  t('the fixture is worth filtering', total > 10);
+  sevBoxes().forEach((c) => { c.checked = false; }); applySev();
+  const none = tbody().children;
+  t('a filter that matches nothing draws one row, not an empty table',
+    none.length === 1 && none[0].children.length === 1);
+  t('and it says the findings are hidden rather than absent',
+    !!none[0] && none[0].textContent === 'No findings match the current filters. ' + total +
+      ' finding(s) are hidden by them.');
+  t('the header box is disabled when there is nothing to tick',
+    $('fSelAll').disabled === true);
+  t('and the section header still reports the true total, not zero',
+    new RegExp('\\b' + total + ' open').test($('rtableCnt').textContent));
+  sevBoxes().forEach((c) => { c.checked = true; }); applySev();
+
+  /* Spec 7 case 20. */
+  console.log('\n  Spec case 20: rows on screen, but none of them selectable');
+  $('fkAuto').checked = false; $('fkGen').checked = false; $('fkManual').checked = true;
+  $('fkAuto').dispatchEvent(new w.Event('change'));
+  t('there are rows on screen', w.__frows().length > 0);
+  t('but none of them is fixable', w.__frows().every((f) => f.fixKind === 'manual'));
+  t('so the header box is disabled, unticked and not part ticked',
+    $('fSelAll').disabled === true && $('fSelAll').checked === false &&
+    $('fSelAll').indeterminate === false);
+  $('fSelAll').click();
+  t('and clicking it selects nothing', w.__sel().size === 0);
+
+  /* Spec 7 case 5. */
+  console.log('\n  Spec case 5: a finding with no mechanical fix');
+  const mrow = tbody().querySelector('tr[data-i]');
+  const mf = w.__frows()[0];
+  const mcb = mrow && mrow.querySelector('td.selcell input');
+  t('it still gets a checkbox, so the column does not read as an oversight', !!mcb);
+  t('the checkbox is disabled', !!mcb && mcb.disabled === true);
+  t('and its title is the specified sentence followed by the policy remediation',
+    !!mcb && !!mf &&
+    mcb.title === 'No mechanical fix: this one needs a decision. ' + mf.policy.remediation);
+  t('and there is no Fix this button in the action cell',
+    !!mrow && !!mrow.children[7] && mrow.children[7].innerHTML === '');
+  $('fkAuto').checked = true; $('fkGen').checked = true; $('fkManual').checked = true;
+  $('fkAuto').dispatchEvent(new w.Event('change'));
+
+  /* Spec 7 case 6. STATE.applied is keyed on findingKey, which is the contract the spec
+     deliberately left alone, so this drives it through the real restore path in rescan
+     rather than setting f.applied by hand. */
+  console.log('\n  Spec case 6: a finding already applied');
+  const target = S().findings.find((f) => f.fixKind === 'auto');
+  S().applied.add(w.findingKey(target));
+  w.__load([]);
+  $('fkApplied').checked = true;
+  $('fkApplied').dispatchEvent(new w.Event('change'));
+  const drow = tbody().querySelector('tr.done');
+  t('the applied finding comes back marked as applied',
+    S().findings.some((f) => f.applied) && !!drow);
+  const dcb = drow && drow.querySelector('td.selcell input');
+  t('its checkbox is disabled', !!dcb && dcb.disabled === true);
+  t('and says so in exactly those words', !!dcb && dcb.title === 'Already applied.');
+  t('and it offers no Fix this button',
+    !!drow && !!drow.children[7] && drow.children[7].innerHTML === '');
+  $('btnFSelAll').click();
+  t('select all shown cannot pick up an applied finding',
+    !w.__sel().has(w.__key(S().findings.find((f) => f.applied))));
+  $('btnFSelNone').click();
+  $('fkApplied').checked = false;
+  $('fkApplied').dispatchEvent(new w.Event('change'));
+  S().applied.clear();
+  w.__load([]);
+
+  /* Spec 7 cases 7, 8 and 9. The selection outlives the filters, so the count on the
+     button can legitimately exceed what is on screen. It has to say so. */
+  console.log('\n  Spec cases 7 and 8: the selection outlives the filters');
+  $('btnFSelAll').click();
+  const wide = w.__sel().size;
+  t('there is a selection to narrow', wide > 4);
+  sevBoxes().forEach((c) => { c.checked = (c.value === 'High'); }); applySev();
+  const shownNow = w.__frows().filter((f) => !f.applied && f.fixKind !== 'manual');
+  const hiddenN = wide - shownNow.length;
+  t('narrowing the filter keeps every tick', w.__sel().size === wide);
+  t('some of the selection is genuinely off screen now', hiddenN > 0);
+  t('and the count line says how many, in the specified words',
+    $('fCount').textContent === 'showing ' + w.__frows().length + ' of ' +
+      S().findings.length + ' finding(s), ' + wide + ' selected (' + hiddenN +
+      ' of them hidden by the current filters)');
+  t('the header box is fully ticked, because everything still shown is selected',
+    $('fSelAll').checked === true && $('fSelAll').indeterminate === false);
+  t('and the export button still promises the whole selection',
+    $('btnExportFixed').textContent === 'Download corrected YAML for ' + wide + ' selected');
+
+  $('btnFSelNone').click();
+  $('btnFSelAll').click();
+  const narrow = w.__sel().size;
+  t('selecting all of a narrowed list takes only what is shown', narrow < wide);
+  sevBoxes().forEach((c) => { c.checked = true; }); applySev();
+  t('widening the filter adds no key of its own', w.__sel().size === narrow);
+  t('and the header box reads part ticked rather than complete',
+    $('fSelAll').indeterminate === true && $('fSelAll').checked === false);
+
+  console.log('\n  Spec case 9: the header box acts on what is shown, and only on that');
+  $('btnFSelNone').click();
+  sevBoxes().forEach((c) => { c.checked = (c.value === 'High'); }); applySev();
+  const shownKeys = w.__frows().filter((f) => !f.applied && f.fixKind !== 'manual')
+    .map(w.__key);
+  const outsider = 'a-key-for-a-finding-that-is-not-on-screen';
+  w.__sel().add(outsider);
+  $('fSelAll').click();
+  t('one click adds exactly the keys that are drawn',
+    shownKeys.length > 0 && shownKeys.every((k) => w.__sel().has(k)) &&
+    w.__sel().size === shownKeys.length + 1);
+  $('fSelAll').click();
+  t('a second click removes exactly those and leaves the rest alone',
+    shownKeys.every((k) => !w.__sel().has(k)) && w.__sel().size === 1 &&
+    w.__sel().has(outsider));
+  w.__sel().delete(outsider);
+  sevBoxes().forEach((c) => { c.checked = true; }); applySev();
+  $('btnFSelNone').click();
+
+  /* Spec 7 case 24. */
+  console.log('\n  Spec case 24: sorting keeps the selection, on the same findings');
+  $('btnFSelAll').click();
+  const beforeSort = Array.from(w.__sel());
+  const order = () => Array.from(tbody().querySelectorAll('tr[data-i]'))
+    .map((tr) => tr.children[4].textContent).join('|');
+  const beforeOrder = order();
+  const fileTh = w.document.querySelector('#rtable th.sortable[data-key="file"]') ||
+    w.document.querySelector('#rtable th.sortable');
+  fileTh.click();
+  t('the sort actually reordered the table, so this is not a no-op',
+    order() !== beforeOrder);
+  t('the selection is the same size afterwards', w.__sel().size === beforeSort.length);
+  t('and it is the same findings, not merely the same number',
+    beforeSort.every((k) => w.__sel().has(k)));
+  const tickedAfter = boxes().filter((c) => c.checked).map((c) => c.dataset.fk);
+  t('and exactly those findings are ticked in their new positions',
+    tickedAfter.length === beforeSort.length &&
+    tickedAfter.every((k) => w.__sel().has(k)));
+
+  /* Spec 7 case 21. */
+  console.log('\n  Spec case 21: clearing the selection');
+  const sentinel = tbody().querySelector('tr[data-i]');
+  sentinel.dataset.sentinel = 'survives-a-clear';
+  $('btnFSelNone').click();
+  t('the set is empty', w.__sel().size === 0);
+  t('every checkbox on screen is unticked', boxes().every((c) => !c.checked));
+  t('the header box is clean, not part ticked',
+    $('fSelAll').checked === false && $('fSelAll').indeterminate === false);
+  t('the button label loses the count and the button goes off',
+    $('btnExportFixed').textContent === 'Download corrected YAML' &&
+    $('btnExportFixed').disabled === true);
+  t('and no row was rebuilt to do it',
+    tbody().querySelector('tr[data-i]').dataset.sentinel === 'survives-a-clear');
+  t('Clear selection disables itself once there is nothing to clear',
+    $('btnFSelNone').disabled === true);
+
+  /* Spec 7 case 13, taken past the key comparison the existing block makes: two rows of
+     one object under one policy have to be two independently exportable things. */
+  console.log('\n  Spec case 13: a multi container workload exports one container, not both');
+  w.__reset();
+  w.__load([{ name: 'two.yaml', text: ['apiVersion: apps/v1', 'kind: Deployment',
+    'metadata: { name: web, namespace: prod }', 'spec:', '  template:', '    spec:',
+    '      containers:', '      - name: alpha', '        image: nginx:latest',
+    '        securityContext: { privileged: true }', '      - name: beta',
+    '        image: redis:latest',
+    '        securityContext: { privileged: true }'].join('\n') }]);
+  w.__tab('remediate');
+  manual();
+  $('fPolicy').value = 'ACS.001';
+  $('fPolicy').dispatchEvent(new w.Event('change'));
+  t('the two containers are two separate findings on one object',
+    w.__frows().length === 2 && w.__frows()[0].obj === w.__frows()[1].obj);
+  t('and one findingKey covers both, which is why a row key was needed',
+    new Set(w.__frows().map((f) => w.findingKey(f))).size === 1);
+  const firstBox = boxes()[0];
+  const chosenRow = firstBox && w.__frows()[Number(firstBox.closest('tr').dataset.i)];
+  clk(firstBox);
+  t('ticking one selects one', w.__sel().size === 1);
+  const wanted = S().findings.filter((f) => w.__sel().has(w.__key(f)) &&
+    !f.applied && f.fixKind !== 'manual');
+  t('and the export set is that one finding, not both containers',
+    wanted.length === 1 && !!chosenRow && wanted[0].path === chosenRow.path);
+  $('fPolicy').value = ''; $('fPolicy').dispatchEvent(new w.Event('change'));
+  $('btnFSelNone').click();
+
+  /* Spec 7 case 14. The spec documents this collision as accepted, so this asserts the
+     documented behaviour: no throw, the count stays honest, and re-rendering ticks both
+     because both really are one key. */
+  console.log('\n  Spec case 14: the same document pasted twice into one file');
+  w.__reset();
+  const dupe = ['apiVersion: apps/v1', 'kind: Deployment',
+    'metadata: { name: web, namespace: prod }', 'spec:', '  template:', '    spec:',
+    '      containers:', '      - name: c', '        image: nginx:latest',
+    '        securityContext: { privileged: true }'].join('\n');
+  w.__load([{ name: 'dup.yaml', text: dupe + '\n---\n' + dupe }]);
+  w.__tab('remediate');
+  manual();
+  $('fPolicy').value = 'ACS.001';
+  $('fPolicy').dispatchEvent(new w.Event('change'));
+  const dfks = boxes().map((c) => c.dataset.fk);
+  t('two identical documents produce two rows', dfks.length === 2);
+  t('and they share one key, which the spec accepts and documents',
+    new Set(dfks).size === 1);
+  clk(boxes()[0]);
+  t('ticking one keeps the count at one rather than two', w.__sel().size === 1);
+  t('and the count line says one, not two',
+    /, 1 selected/.test($('fCount').textContent));
+  w.document.querySelector('#rtable th.sortable').click();
+  t('re-rendering ticks both, which is the documented consequence and not a crash',
+    boxes().filter((c) => c.checked).length === 2 && w.__sel().size === 1);
+  $('fPolicy').value = ''; $('fPolicy').dispatchEvent(new w.Event('change'));
+  $('btnFSelNone').click();
+
+  /* Spec 7 case 18. Cluster data is somebody else's string. */
+  console.log('\n  Spec case 18: an injection shaped string in cluster data');
+  w.__reset();
+  const evil = 'a" onclick=alert(1) <script>';
+  w.__load([{ name: 'evil.yaml', text: ['apiVersion: apps/v1', 'kind: Deployment',
+    'metadata: { name: web, namespace: prod }', 'spec:', '  template:', '    spec:',
+    '      containers:', '      - name: ' + JSON.stringify(evil),
+    '        image: nginx:latest',
+    '        securityContext: { privileged: true }'].join('\n') }]);
+  w.__tab('remediate');
+  manual();
+  t('the hostile string really did reach a finding, so the rest means something',
+    S().findings.some((f) => f.detail.indexOf('<script>') !== -1));
+  t('no script element was created inside the table',
+    w.document.querySelectorAll('#rtable tbody script').length === 0);
+  t('and nothing broke out of an attribute value into a live event handler',
+    w.document.querySelectorAll('#rtable tbody [onclick]').length === 0);
+  t('the visible text still shows the operator what is really in the cluster',
+    tbody().textContent.indexOf('<script>') !== -1);
+  const ecb = boxes()[0];
+  const erow = ecb && w.__frows()[Number(ecb.closest('tr').dataset.i)];
+  t('the row key round trips through the attribute unchanged',
+    !!ecb && !!erow && ecb.dataset.fk === w.__key(erow) &&
+    ecb.dataset.fk.indexOf('<script>') !== -1);
+  clk(ecb);
+  t('and ticking it selects that finding under that key',
+    !!erow && w.__sel().size === 1 && w.__sel().has(w.__key(erow)));
+  $('btnFSelNone').click();
+
+
+  /* Spec 7 case 15. A key for a finding that no longer exists keeps the button promising
+     work the export will not do, so rescan drops it. Driven through a real Fix this in
+     auto mode rather than by calling pruneFindingSelection directly, because the spec
+     puts the call inside rescan and a direct call would pass even if it were never
+     wired up. */
+  console.log('\n  Spec case 15: the selection goes stale after a fix is applied');
+  w.__reset();
+  w.__load([{ name: 'p/a.yaml', text: WIDE('pa') }, { name: 'p/b.yaml', text: WIDE('pb') }]);
+  w.__tab('remediate');
+  $('fixMode').value = 'auto';
+  $('fixMode').dispatchEvent(new w.Event('change'));
+  if ($('skipConfirm')) $('skipConfirm').checked = true;
+  $('btnFSelAll').click();
+  const beforeFix = w.__sel().size;
+  t('there is a selection to go stale', beforeFix > 5);
+  const firstFix = tbody().querySelector('button.rfix');
+  const doomed = firstFix &&
+    w.__key(w.__frows()[Number(firstFix.closest('tr').dataset.i)]);
+  t('and the finding about to be fixed is in it', !!doomed && w.__sel().has(doomed));
+  clk(firstFix);
+  await new Promise((r) => setTimeout(r, 200));
+  t('applying it actually changed something', S().history.length === 1);
+  t('its key is dropped from the selection', !w.__sel().has(doomed));
+  t('and only the keys that went stale were dropped',
+    w.__sel().size < beforeFix && w.__sel().size > 0);
+  t('every key left names a finding that still exists and can still be exported',
+    Array.from(w.__sel()).every((k) => S().findings
+      .some((f) => !f.applied && f.fixKind !== 'manual' && w.__key(f) === k)));
+  t('and the button promises exactly what is left',
+    $('btnExportFixed').textContent ===
+      'Download corrected YAML for ' + w.__sel().size + ' selected');
+  $('btnFSelNone').click();
+  report();
+
+  /* Spec 8, the error table. None of these may throw. */
+  console.log('\n  Spec 8: the error paths return rather than throwing');
+  t('a finding with no ns, path or detail still yields a key with no undefined in it',
+    (function () { const k = w.__key({ file: 'f', obj: 'o', policy: { id: 'p' } });
+      return typeof k === 'string' && k.indexOf('undefined') === -1; })());
+  t('removing #fModeWhy does not break the selection summary',
+    (function () { const el = $('fModeWhy'); const p = el.parentNode; p.removeChild(el);
+      let ok = true; try { report(); manual(); } catch (e) { ok = false; }
+      p.appendChild(el); report(); manual(); return ok; })());
+  t('an unrecognised mode value falls back to report rather than opening the gate',
+    (function () { $('fixMode').value = 'not-a-mode';
+      $('fixMode').dispatchEvent(new w.Event('change'));
+      const ok = $('btnExportFixed').disabled === true &&
+        Array.from(w.document.querySelectorAll('#rtable tbody button.rfix'))
+          .every((b) => b.disabled) &&
+        !$('fModeWhy').classList.contains('hidden');
+      report(); return ok; })());
+  cleanup();
+}
+
+/* The section 9 budget, asserted by counting operations rather than by timing a wall
+   clock. A threshold in milliseconds is a flaky test and a flaky test gets deleted. */
+async function specBudget() {
+  const { w, $, cleanup } = await open('dj_acs_auditor.html',
+    'window.__S=()=>STATE;window.__load=(i)=>loadItems(i);window.__tab=(t)=>showTab(t);' +
+    'window.__rows=()=>findingRows();window.__sel=()=>FSELECTED;window.__frows=()=>FROWS;' +
+    'window.__key=(f)=>findingRowKey(f);window.__rt=()=>renderTable();');
+  const S = () => w.__S();
+  const tbody = () => $('rtable').querySelector('tbody');
+  const manual = () => { $('fixMode').value = 'manual'; $('fixMode').dispatchEvent(new w.Event('change')); };
+
+  /* Spec 7 case 4. 140 manifests is 2,100 findings, which crosses the 2,000 row line the
+     spec puts a sentence behind. */
+  const files = [];
+  for (let i = 0; i < 140; i++) files.push({ name: 'm/app' + i + '.yaml', text: WIDE(i) });
+  w.__load(files);
+  w.__tab('remediate');
+  const n = S().findings.length;
+
+  console.log('\nMore rows than are comfortable to draw: ' + n + ' findings');
+  t('the fixture crosses the line the spec draws at 2,000 rows', n > 2000);
+  t('every single one of them is drawn, with no cap and no pagination',
+    tbody().querySelectorAll('tr[data-i]').length === n);
+  t('and FROWS agrees with what is on screen', w.__frows().length === n);
+  t('nothing tells the operator that rows were withheld',
+    !/Showing the first|not shown|withheld/i.test($('rtable').textContent));
+  t('the count line carries the long list sentence, in the specified words',
+    $('fCount').textContent === 'showing ' + n + ' of ' + n + ' finding(s), none selected' +
+      ' — that is a lot of rows to draw at once; the filters above will make this quicker.');
+
+  /* Spec 9: findingRows() is evaluated once per renderTable call, not three times.
+     findingRows is the only place this selector is read, so counting the selector counts
+     the calls. This is the assertion that would have caught the base branch, where one
+     render computed the same row set three times. */
+  console.log('\n  The row set is computed once per render, not three times');
+  const seen = [];
+  const real = w.document.querySelectorAll.bind(w.document);
+  w.document.querySelectorAll = function (sel) { seen.push(sel); return real(sel); };
+  w.__rt();
+  t('the counter is wired to something the render really does',
+    seen.indexOf('input.fsev:checked') !== -1);
+  t('one render reads the severity filter exactly once',
+    seen.filter((s) => s === 'input.fsev:checked').length === 1);
+
+  /* Spec 9: refreshFindingFilters is called zero times from renderTable. Marking an
+     option and watching it survive is the observable form of that: rebuilding the picker
+     destroys the option the operator has just focused. */
+  const opt = Array.from($('fCat').options).find((o) => o.value);
+  opt.dataset.probe = 'kept';
+  seen.length = 0;
+  w.document.querySelector('#rtable th.sortable').click();
+  t('sorting does not rebuild the filter pickers under the operator',
+    Array.from($('fCat').options).some((o) => o.dataset.probe === 'kept'));
+  t('and a sort also computes the row set only once',
+    seen.filter((s) => s === 'input.fsev:checked').length === 1);
+  w.document.querySelectorAll = real;
+
+  /* Spec 9: zero advisoryHtml calls per render. advisoryHtml is a top level declaration
+     and cannot be spied on from outside, so assert on what it would have produced, which
+     survives the function being renamed. */
+  console.log('\n  No advisory is built until somebody opens one');
+  t('no advisory row exists after a full render of ' + n + ' findings',
+    tbody().querySelectorAll('tr.fdet').length === 0);
+  t('and none of the advisory markup is in the table either',
+    tbody().innerHTML.indexOf('ACS criteria') === -1 &&
+    tbody().innerHTML.indexOf('ACS policy') === -1);
+  const r7 = tbody().querySelector('tr[data-i="7"]');
+  const open7 = () => { const c = r7 && r7.querySelector('td.wrapcell'); if (c) c.click(); };
+  open7();
+  t('opening one builds one, and only one',
+    tbody().querySelectorAll('tr.fdet').length === 1);
+  t('and that one carries the advisory markup',
+    !!r7 && !!r7.nextElementSibling &&
+    r7.nextElementSibling.textContent.indexOf('ACS criteria') !== -1);
+  t('its cell spans the whole table',
+    !!r7 && !!r7.nextElementSibling &&
+    Number(r7.nextElementSibling.firstElementChild.getAttribute('colspan')) ===
+      w.document.querySelectorAll('#rtable thead th').length);
+  open7(); open7();
+  t('and toggling it three times never builds a second',
+    tbody().querySelectorAll('tr.fdet').length === 1);
+  open7();
+
+  /* Spec 9: rows are inserted in one operation. The spec's words are "a single
+     appendChild of a DocumentFragment"; the code assigns one innerHTML string instead,
+     which is the coder's deviation D1. What the budget protects is that the tbody is
+     written once rather than n times, and this asserts that property, so it holds under
+     either implementation. Flagged as testing the deviation in .pipeline/tests.md. */
+  console.log('\n  The table body is written once per render, not once per row');
+  let recs = 0, added = 0;
+  const mo = new w.MutationObserver((rs) => {
+    for (const r of rs) { recs++; added += r.addedNodes.length; }
+  });
+  mo.observe(tbody(), { childList: true });
+  w.__rt();
+  await new Promise((r) => setTimeout(r, 60));
+  mo.disconnect();
+  t('all ' + n + ' rows arrive in a single batch of mutations',
+    recs === 1 && added === n);
+
+  /* Spec 9: the three selection controls call renderTable zero times. A tick that
+     rebuilds 2,100 rows is what made every button look dead. */
+  console.log('\n  Selecting does not rebuild the table');
+  manual();
+  recs = 0; added = 0;
+  const mo2 = new w.MutationObserver((rs) => {
+    for (const r of rs) { recs++; added += r.addedNodes.length; }
+  });
+  const keep = tbody().querySelector('tr[data-i]');
+  keep.dataset.sentinel = 'same-element';
+  mo2.observe(tbody(), { childList: true });
+  const cb = tbody().querySelector('input.fsel:not([disabled])');
+  if (cb) cb.click();
+  const afterTick = $('fCount').textContent;
+  $('fSelAll').click();
+  const afterAll = w.__sel().size;
+  $('btnFSelAll').click();
+  $('btnFSelNone').click();
+  await new Promise((r) => setTimeout(r, 60));
+  mo2.disconnect();
+  t('a tick, a select all and a clear insert no rows at all between them',
+    recs === 0 && added === 0);
+  t('and the rows on screen are the same elements they were before',
+    tbody().querySelector('tr[data-i]').dataset.sentinel === 'same-element');
+  t('the tick still moved the count, so the render really was skipped and not the work',
+    /, 1 selected/.test(afterTick));
+  t('and select all still took every fixable row without redrawing one of them',
+    afterAll === w.__frows().filter((f) => !f.applied && f.fixKind !== 'manual').length);
+  t('and clearing put the count back',
+    $('fCount').textContent.indexOf(', none selected') !== -1 && w.__sel().size === 0);
+
+
+  /* Spec 7 cases 16 and 17, and the definition-of-done line about all six tables.
+   *
+   * jsdom does no layout, so nothing here measures a width and nothing here should
+   * pretend to. What is asserted is the containment contract: every wide table has a
+   * scrolling ancestor, the long values are told to break rather than to set their own
+   * width, and -- the part that matters most for cases 16 and 17 -- nothing clips a
+   * value out of sight to achieve it. A measured overflow needs a headless browser,
+   * which this repository deliberately does not have. Said again in .pipeline/tests.md.
+   */
+  console.log('\n  Spec cases 16 and 17: long cluster strings are contained, not hidden');
+  const wrapped = (el) => !!el && !!el.closest('.tablewrap');
+  t('the findings table is inside a scrolling wrapper', wrapped($('rtable')));
+  t('so is the read only findings table', wrapped($('ftable')));
+  t('so is the ACS violations table', wrapped($('vtbl')));
+  t('so is the CVE table', wrapped($('vtable')));
+  t('so is the image table', wrapped($('vimgtable')));
+  t('and so is the policy catalogue, which carries the same long strings',
+    wrapped($('catbody')));
+  t('every data table on the page is wrapped, not just the ones that were reported',
+    Array.from(w.document.querySelectorAll('body > div.app table, .section table, ' +
+      'details.sec table')).every((tb) => wrapped(tb)));
+  const style = w.document.querySelector('style').textContent;
+  t('the wrapper is what scrolls, so the document does not',
+    /\.tablewrap\{[^}]*overflow-x:\s*auto/.test(style));
+  t('and it cannot grow past its own section',
+    /\.tablewrap\{[^}]*max-width:\s*100%/.test(style) &&
+    /\.section,details\.sec\{[^}]*max-width:\s*100%/.test(style));
+  t('a value with no spaces in it is allowed to break inside its cell',
+    /td\.wrapcell\{[^}]*overflow-wrap:\s*anywhere/.test(style) &&
+    /\.tablewrap td\{[^}]*overflow-wrap:\s*anywhere/.test(style));
+  t('nothing clips a cell, so no path is made unreadable to make the table fit',
+    !/text-overflow:\s*ellipsis/.test(style) &&
+    !/\.tablewrap td\{[^}]*overflow:\s*hidden/.test(style) &&
+    !/td\.wrapcell\{[^}]*white-space:\s*nowrap/.test(style));
+  t('and an opened advisory is released from the column width entirely',
+    /#rtable tr\.fdet td\{[^}]*max-width:\s*none/.test(style));
+  /* The coder kept table-layout:fixed with a colgroup, which spec 3.2 rejected and spec
+     12 lists as out of scope. Asserting what the code does, and saying so, rather than
+     asserting a spec line the code does not meet. Deviation D3 in changes.md. */
+  t('DEVIATION D3: the findings table uses fixed layout with explicit column widths, ' +
+    'which the spec rejected',
+    /#rtable\{[^}]*table-layout:\s*fixed/.test(style) &&
+    w.document.querySelectorAll('#rtable colgroup col').length ===
+      w.document.querySelectorAll('#rtable thead th').length);
+  t('and because it does, the full value is still on the cell for a narrow window',
+    Array.from(tbody().querySelectorAll('td.wrapcell')).slice(0, 40)
+      .every((c) => c.title === c.textContent));
+  const longPath = 'a/' + 'very-long-segment-with-no-spaces-in-it/'.repeat(5) + 'deployment.yaml';
+  t('the fixture for a 180 character path is genuinely that long', longPath.length > 180);
+  w.__load([{ name: longPath, text: WIDE('long') }]);
+  const longCell = Array.from(tbody().querySelectorAll('td.wrapcell'))
+    .find((c) => c.textContent === longPath);
+  t('a 180 character path is drawn in full rather than truncated',
+    !!longCell && longCell.textContent === longPath);
+  t('and it is in a cell that is told to break', !!longCell &&
+    longCell.classList.contains('wrapcell'));
+  t('and the row still has exactly as many cells as the header has columns',
+    !!longCell && longCell.closest('tr').children.length ===
+      w.document.querySelectorAll('#rtable thead th').length);
+
+  /* Spec 9 and the user's standing constraint: nothing here may run a command or reach
+     the network, in any mode. */
+  console.log('\n  The gate holds, and no path runs a command');
+  const src = fs.readFileSync(path.join(ROOT, 'dj_acs_auditor.html'), 'utf8');
+  t('report is still the option the page loads with',
+    /<option value="report" selected>/.test(src));
+  t('the page contains no network call of any kind',
+    !/[^a-zA-Z.]fetch\s*\(/.test(src) && !/XMLHttpRequest/.test(src) &&
+    !/new WebSocket/.test(src) && !/sendBeacon/.test(src));
+  t('and no way to evaluate a string as code',
+    !/[^a-zA-Z.$]eval\s*\(/.test(src) && !/new Function\s*\(/.test(src));
+  t('and it loads no script it does not ship beside it',
+    (src.match(/<script src="[^"]+"/g) || [])
+      .every((s) => /"(vendor\/[A-Za-z0-9._-]+\.js|acs_policies\.js)"/.test(s)));
+  $('fixMode').value = 'report';
+  $('fixMode').dispatchEvent(new w.Event('change'));
+  const fixButtons = Array.from(tbody().querySelectorAll('button.rfix'));
+  const fixableN = w.__frows().filter((f) => !f.applied && f.fixKind !== 'manual').length;
+  t('there is a Fix this button on every fixable row and on no other row',
+    fixButtons.length === fixableN && fixableN > 1000);
+  t('in report mode every one of the ' + fixButtons.length + ' Fix this buttons is off',
+    fixButtons.every((b) => b.disabled === true));
+  t('and every one of them names the control to move',
+    fixButtons.every((b) => b.title === 'Report only. Choose Manual or Auto in the Mode ' +
+      'selector at the top of the page to apply a fix.'));
+  const hist = S().history.length;
+  fixButtons.slice(0, 25).forEach((b) => b.click());
+  await new Promise((r) => setTimeout(r, 60));
+  t('and clicking twenty five of them applies nothing', S().history.length === hist);
+  t('the mode note above the table is showing while the gate holds',
+    !$('fModeWhy').classList.contains('hidden'));
+  cleanup();
+}
+
 (async () => {
   try {
     await auditor();
     await remediation();
     await tabs();
     await bulkExport();
+    await scale();
+    await selectionUi();
+    await specCases();
+    await specBudget();
     await noManifests('dj_acs_auditor.html');
   }
   catch (e) { console.log('  FAIL  ' + e.message); F++; }

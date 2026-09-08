@@ -10,6 +10,7 @@ const F = (n) => __dirname + '/figures/' + n;
    drift test/version.cjs exists to catch. */
 globalThis.jsyaml = require('../vendor/js-yaml.min.js');
 const VERSION = require('../acs_policies.js').ACS_VERSION;
+const DOCDATE = require('./common.js').changelogDate();
 
 const title = [
   new Paragraph({ spacing: { before: 2600, after: 0 },
@@ -20,7 +21,7 @@ const title = [
     border: { bottom: { style: BorderStyle.SINGLE, size: 8, color: ACC } }, children: [new TextRun({ text: '' })] }),
   P('For maintainers, platform engineers, and anyone who owns these tools', { bold: true, size: 24 }),
   P("Covers DJ's ACS Auditor v" + VERSION, { size: 22, color: MUT }),
-  P('Document date: 11 August 2026', { size: 22, color: MUT }),
+  P('Document date: ' + DOCDATE, { size: 22, color: MUT }),
   P('Author: DJ', { size: 22, color: MUT }),
   new Paragraph({ spacing: { before: 900 }, children: [new TextRun({ text: '' })] }),
   ...Note('info', 'Who this is for', [

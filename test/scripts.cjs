@@ -94,7 +94,7 @@ for (const f of sh) {
 
 /* ------------------------------------------------ running without Node */
 
-const { execFileSync } = require('child_process');
+const { execFileSync, spawn } = require('child_process');
 const os = require('os');
 
 console.log('\nThe tool degrades honestly when Node cannot be installed');
@@ -208,6 +208,29 @@ const walk = (d) => !fs.existsSync(d) ? [] : fs.readdirSync(d, { withFileTypes: 
 console.log('\nA self signed Central is reachable without disabling verification');
 
 const tlsdir = fs.mkdtempSync(path.join(os.tmpdir(), 'tlss-'));
+
+/* Ports asked for at runtime, rather than three hardcoded ones.
+ *
+ * This cost a real afternoon and produced a diagnosis that was completely wrong. The
+ * suite bound a fixed port every run, and the readiness probe connected with
+ * rejectUnauthorized:false, so ANY listener satisfied it. On a machine that had run the
+ * suite before, a python server left over from an earlier run still held the port: the
+ * new server failed to bind, that failure was swallowed, and every assertion afterwards
+ * talked to the stale process. The pin route still passed, because a pin runs with -k
+ * and never checks expiry. The CA route did full verification and reported "certificate
+ * has expired", which was exactly right and described a certificate generated days
+ * earlier by a run nobody remembered.
+ *
+ * It presented as a macOS TLS limitation. It was a port collision. Ask the OS for a port
+ * it knows is free and the whole class disappears.
+ */
+const freePort = () => Number(execFileSync(process.execPath, ['-e',
+  "const n=require('net');const s=n.createServer();s.listen(0,'127.0.0.1',()=>{" +
+  "process.stdout.write(String(s.address().port));s.close();});"],
+  { encoding: 'utf8' }).trim());
+const PORT = freePort();
+const EVIL_PORT = freePort();
+const QUERY_PORT = freePort();
 let served = false;
 let srv = null;
 let skipReason = '';
@@ -261,7 +284,7 @@ try {
   const errLog = path.join(tlsdir, 'server.err');
   const errFd = fs.openSync(errLog, 'a');
   srv = spawn('python3', [path.join(tlsdir, 'srv.py'), path.join(tlsdir, 'c.pem'),
-                          path.join(tlsdir, 'k.pem'), '18443'],
+                          path.join(tlsdir, 'k.pem'), String(PORT)],
               { stdio: ['ignore', 'ignore', errFd], detached: true });
 
   /* Probe with node's own TLS client rather than shelling out to openssl. One less
@@ -269,10 +292,29 @@ try {
      failing rather than openssl's opinion of it. */
   execFileSync(process.execPath, ['-e',
     "const tls=require('tls');let n=0;(function go(){" +
-    "const s=tls.connect({host:'127.0.0.1',port:18443,rejectUnauthorized:false}," +
+    "const s=tls.connect({host:'127.0.0.1',port:" + PORT + ",rejectUnauthorized:false}," +
     "()=>{s.destroy();process.exit(0);});" +
     "s.on('error',()=>{s.destroy();if(++n>=40)process.exit(1);setTimeout(go,250);});})();"],
     { timeout: 20000, stdio: 'ignore' });
+  /* Assert we are talking to the server THIS run started.
+   *
+   * The readiness probe above accepts any certificate, which is right for readiness and
+   * useless for identity. Compare the fingerprint the endpoint presents against the
+   * fixture on disk: if they differ, something else owns this port and every assertion
+   * below would be measuring it instead. That is exactly the failure this block was
+   * missing, and it is why an expired certificate from a previous run could masquerade
+   * as a TLS defect on one platform.
+   */
+  const fpOf = (src) => execFileSync('sh', ['-c', src], { encoding: 'utf8' }).trim();
+  const mine = fpOf('openssl x509 -in ' + JSON.stringify(path.join(tlsdir, 'c.pem')) +
+    ' -noout -fingerprint -sha256');
+  const served_fp = fpOf('echo | openssl s_client -connect 127.0.0.1:' + PORT +
+    ' 2>/dev/null | openssl x509 -noout -fingerprint -sha256');
+  if (!mine || mine !== served_fp) {
+    throw new Error('port ' + PORT + ' is answered by a certificate this run did not ' +
+      'create. Started: ' + mine + ' Answering: ' + served_fp +
+      '. Something else is listening, so nothing below would be testing this build.');
+  }
   served = true;
 } catch (e) { skipReason = (e && e.message ? String(e.message).split('\n')[0] : String(e)); }
 
@@ -302,7 +344,7 @@ if (!served) {
   console.log('        These run in CI on ubuntu-latest, so the coverage is not lost,');
   console.log('        but it is not being exercised on this machine.');
 } else {
-  const EP = 'https://127.0.0.1:18443';
+  const EP = 'https://127.0.0.1:' + PORT;
   const pullSrcOf = (f) => fs.readFileSync(f, 'utf8');
   const pull = path.join(DIR, 'acs_pull_all.sh');
   /* Hermetic, in two ways that both matter.
@@ -362,7 +404,7 @@ if (!served) {
 
   /* Pinning: the offered command must actually work. */
   const spki = execFileSync('sh', ['-c',
-    'echo | openssl s_client -connect 127.0.0.1:18443 2>/dev/null | openssl x509 -pubkey -noout'
+    'echo | openssl s_client -connect 127.0.0.1:' + PORT + ' 2>/dev/null | openssl x509 -pubkey -noout'
     + ' | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | openssl base64'],
     { encoding: 'utf8' }).trim();
   t('the failure output offers that exact pin', plain.out.indexOf(spki) !== -1);
@@ -390,14 +432,100 @@ if (!served) {
   t('the marker says plainly not to read it as a clean cluster',
     !!marker && /do not load it and conclude/i.test(fs.readFileSync(marker, 'utf8')));
 
-  /* The certificate is its own issuer, so it works as a CA bundle when the name matches. */
+  /* The certificate is its own issuer, so it works as a CA bundle when the name matches.
+   *
+   * This failed on macOS and said only "verifying against the certificate itself also
+   * completes the pull  FAIL", with no exit code, no curl message and no clue which of a
+   * dozen things went wrong. The assertion below it then PASSED, because it checks that
+   * the phrase "chain verification off" is absent from the output and a run that died
+   * early prints nothing at all. One failure hiding behind one vacuous pass is this
+   * project's recurring defect in miniature.
+   *
+   * So: capture curl's own words, name the TLS backend, and make the second assertion
+   * depend on the first having actually succeeded.
+   */
+  const leaf = path.join(tlsdir, 'leaf.pem');
   execFileSync('sh', ['-c',
-    'echo | openssl s_client -connect 127.0.0.1:18443 2>/dev/null | openssl x509 > '
-    + JSON.stringify(path.join(tlsdir, 'leaf.pem'))]);
-  const viaCa = runPull(['--cacert', path.join(tlsdir, 'leaf.pem')]);
-  t('verifying against the certificate itself also completes the pull', viaCa.code === 0);
+    'echo | openssl s_client -connect 127.0.0.1:' + PORT + ' 2>/dev/null | openssl x509 > '
+    + JSON.stringify(leaf)]);
+
+  /* Ask curl directly first. The pull script wraps it in trust resolution, retries and
+     token handling, any of which could be the thing that broke. One bare request with
+     the CA isolates whether curl can use a CA bundle at all on this machine. */
+  let probe = { code: 0, err: '' };
+  try {
+    execFileSync('curl', ['-sS', '--cacert', leaf, '-o', '/dev/null',
+      '--max-time', '10', 'https://127.0.0.1:' + PORT + '/v1/metadata'],
+      { encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'] });
+  } catch (e) { probe = { code: e.status, err: String(e.stderr || '').trim() }; }
+
+  const viaCa = runPull(['--cacert', leaf]);
+  const caWorks = viaCa.code === 0;
+  t('verifying against the certificate itself also completes the pull', caWorks);
+  if (!caWorks) {
+    console.log('        curl with the CA on its own: exit ' + probe.code +
+                (probe.err ? ', ' + probe.err.split('\n')[0] : ''));
+    console.log('        the pull exited ' + viaCa.code);
+    const tail = String(viaCa.out).trim().split('\n').filter(Boolean).slice(-6);
+    for (const line of tail) console.log('        | ' + line);
+    let ver = '';
+    try { ver = execFileSync('curl', ['-V'], { encoding: 'utf8' }).split('\n')[0]; }
+    catch (e) { ver = 'curl -V failed'; }
+    console.log('        ' + ver);
+    console.log('        If that names SecureTransport, Apple\'s curl does not read a');
+    console.log('        PEM CA bundle the way OpenSSL builds do, and --cacert is the');
+    console.log('        route the README recommends first. Worth knowing before you');
+    console.log('        follow it against a real Central.');
+  }
+  /* Only meaningful if the run got far enough to print anything. Asserting the absence
+     of a string in empty output is not an assertion. */
   t('with full verification, so this is the better of the two routes',
-    viaCa.out.indexOf('chain verification off') === -1);
+    caWorks && viaCa.out.length > 0 && viaCa.out.indexOf('chain verification off') === -1);
+
+  /* A CA that curl cannot use has to be reported as a CA problem, at the point the CA is
+     used, and not three steps later as "authentication failed". The token has not moved
+     at that point and the operator is looking at the wrong thing. */
+  console.log('\n  A CA that does not verify is named as such, before the token moves');
+  const wrongCa = path.join(tlsdir, 'unrelated-ca.pem');
+  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-keyout', '/dev/null',
+    '-out', wrongCa, '-days', '1', '-nodes', '-subj', '/CN=some other authority'],
+    { stdio: 'ignore' });
+  const badCa = runPull(['--cacert', wrongCa]);
+  t('a CA that does not sign this endpoint stops the run', badCa.code !== 0);
+  t('it says the CA did not verify, rather than blaming the token',
+    /CA you supplied did not verify/.test(badCa.out) &&
+    !/401|token is wrong/.test(badCa.out));
+  t('it quotes what curl actually said', /curl said:/.test(badCa.out));
+  t('it names the curl build, because the TLS backend is often the reason',
+    /curl here is:/.test(badCa.out));
+  t('it offers the pin as the route that needs no CA bundle', /--pin/.test(badCa.out));
+  /* The advice has to follow the error, not the build string.
+   *
+   * An earlier version of this branch decided what to say from `curl -V`, asserting that
+   * Apple's Secure Transport ignores --cacert. The probe disproved it: on stock macOS
+   * curl the CA was read, the chain was evaluated, and the answer was "certificate has
+   * expired", which is correct and specific. These assert the diagnosis is driven by
+   * what curl reported. Checked against the source, because this box cannot produce all
+   * four errors on demand, and saying so beats a silent skip.
+   */
+  const pullText = pullSrcOf(pull);
+  t('an expired certificate is named as expired, not as untrusted',
+    /grep -qi 'expired'/.test(pullText) && /out of date, not untrusted/.test(pullText));
+  t('a chain that does not reach the CA says the file is probably the leaf',
+    /unable to get local issuer/.test(pullText) && /leaf certificate rather than the CA/.test(pullText));
+  t('a hostname mismatch points at the pin, which does not check the name',
+    /chain verified but the name did not match/.test(pullText));
+  t('the Keychain route is offered as a way to drop the flag entirely',
+    /security add-trusted-cert/.test(pullText));
+  t('with the command to undo that trust again',
+    /security remove-trusted-cert/.test(pullText));
+  t('and the advice is no longer decided by the TLS backend name',
+    !/grep -qi 'securetransport'/.test(pullText));
+
+  t('and no findings directory is left to be mistaken for an empty pull',
+    badCa.files.filter((f) => /^0\d_/.test(f)).length === 0);
+  t('nothing was written that could carry the token',
+    badCa.files.indexOf('.hdr') === -1);
 
   /* The run has to end with something a person can read. Seven JSON files in a folder
      is not a result, and a summary written but never shown is a summary nobody reads. */
@@ -470,6 +598,177 @@ if (!served) {
   /* The no oc branch cannot be reached with a stub on PATH, so assert on the source. */
   t('a host with no oc at all gets the same instruction',
     /oc is not on PATH, so the running workloads were not captured/.test(pullSrcOf(pull)));
+
+  /* Alert ids come from Central and used to be substituted into a shell script body by
+     xargs -I{} before sh parsed it, so a backtick or $() in an id ran as a command on the
+     operator's box, in a process holding ROX_API_TOKEN and a live kubeconfig.
+     Confirmed end to end before the fix: the id `touch FILE` created FILE and the run
+     reported success. The old assertion could not see it because it read one line at a
+     time looking for -k, and never considered what a command does with server data. */
+  console.log('\n  A hostile alert id cannot run a command on the operator machine');
+  const evilDir = path.join(tlsdir, 'evil');
+  fs.mkdirSync(evilDir, { recursive: true });
+  const canary = path.join(evilDir, 'OWNED');
+  const payloads = [
+    'aaa`touch ' + canary + '.tick`bbb',
+    'ccc$(touch ' + canary + '.subst)ddd',
+    'eee; touch ' + canary + '.semi; #',
+    '../../../../' + path.basename(canary) + '.traverse',
+  ];
+  const evilSrv = path.join(evilDir, 'srv.js');
+  fs.writeFileSync(evilSrv,
+    'const https=require("https"),fs=require("fs");\n' +
+    'const P=' + JSON.stringify(payloads) + ';\n' +
+    /* k.pem and c.pem, which are what the fixture above actually writes. Naming these
+       key.pem and cert.pem meant the server never started, the pull got no alert list,
+       and the canary assertion below passed because nothing was ever fetched. A test
+       that cannot reach the code it is testing reports a pass and means nothing, which
+       is the exact defect this test exists to catch. Hence the reached() check. */
+    'https.createServer({key:fs.readFileSync(' + JSON.stringify(path.join(tlsdir, 'k.pem')) +
+      '),cert:fs.readFileSync(' + JSON.stringify(path.join(tlsdir, 'c.pem')) + ')},(q,r)=>{\n' +
+    '  r.setHeader("content-type","application/json");\n' +
+    '  if(q.url.indexOf("/v1/auth/status")===0) return r.end(JSON.stringify({userId:"x"}));\n' +
+    /* Without a count the paging loop never runs, the alert list comes back empty, and
+       every assertion below passes because no payload was ever handled. */
+    '  if(q.url.indexOf("/v1/alertscount")===0) return r.end(JSON.stringify({count:P.length}));\n' +
+    '  if(q.url.indexOf("/v1/alerts?")===0) return r.end(JSON.stringify(\n' +
+    '    {alerts:P.map((id)=>({id:id,policy:{name:"Privileged Container"},deployment:{name:"d"}}))}));\n' +
+    '  if(q.url.indexOf("/v1/alerts/")===0) return r.end(JSON.stringify({id:"x",policy:{name:"p"}}));\n' +
+    '  r.end("{}");\n' +
+    '}).listen(' + EVIL_PORT + ',"127.0.0.1",()=>console.log("up"));\n');
+
+  const esrv = spawn(process.execPath, [evilSrv], { stdio: 'ignore', detached: true });
+  execFileSync('sh', ['-c', 'sleep 1']);
+  const eSpki = execFileSync('sh', ['-c',
+    'echo | openssl s_client -connect 127.0.0.1:' + EVIL_PORT + ' 2>/dev/null | openssl x509 -pubkey -noout'
+    + ' | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | openssl base64'],
+    { encoding: 'utf8' }).trim();
+
+  const evilOut = path.join(evilDir, 'run');
+  let eres;
+  try {
+    eres = execFileSync('sh', [pull, '-o', evilOut, '--pin', 'sha256//' + eSpki, '--no-summary'],
+      { encoding: 'utf8', timeout: 60000, stdio: ['ignore', 'pipe', 'pipe'],
+        env: Object.assign({}, process.env, { ROX_API_TOKEN: 'x',
+          ROX_ENDPOINT: 'https://127.0.0.1:' + EVIL_PORT, KUBECONFIG: '/dev/null',
+          PATH: stub + ':' + process.env.PATH }) });
+  } catch (e) { eres = (e.stdout || '') + (e.stderr || ''); }
+  try { process.kill(-esrv.pid); } catch (e) { /* already gone */ }
+
+  /* Assert the setup before asserting the result. If the hostile server never came up,
+     or the pull stopped before step 2, no payload was ever handled and a clean canary
+     proves nothing at all. */
+  /* The run writes into a timestamped subdirectory of -o, so look for the file rather
+     than assuming the path. And the file existing is not enough: an empty alert list is
+     written on a run that fetched nothing, which would make every assertion below pass
+     for the wrong reason. Assert the payloads are actually in it. */
+  const listFile = walk(evilOut).find((f) => /01_alerts_list\.json$/.test(f));
+  const listed = listFile ? fs.readFileSync(listFile, 'utf8') : '';
+  const reached = /\[2\/7\]/.test(eres) &&
+    payloads.every((p) => listed.indexOf(JSON.stringify(p).slice(1, -1)) !== -1);
+  t('every hostile id actually reached the fetch loop, so the rest means something',
+    reached);
+  if (!reached) console.log('        the run did not get that far. list bytes: ' +
+    listed.length + ' | ' + String(eres).replace(/\n/g, ' | ').slice(0, 200));
+
+  const fired = ['.tick', '.subst', '.semi', '.traverse']
+    .filter((sfx) => fs.existsSync(canary + sfx));
+  t('no payload in an alert id executed anything',
+    reached && fired.length === 0);
+  if (fired.length) console.log('        EXECUTED: ' + fired.join(', '));
+  /* The traversal payload is written by the fetch loop as "$OUTDIR/.full/<id>.json", so
+     with an id of ../../../../OWNED.traverse the file lands four levels above .full --
+     that is tlsdir -- and carries a .json suffix the id did not have. An earlier version
+     of this assertion looked for evilDir/OWNED.traverse: the wrong directory and the
+     wrong name, so it could not fail even while the unfixed script was writing the file.
+     Search the whole fixture tree for the basename instead, which is the only form of
+     this check that a real escape cannot slip past. Verified red against
+     `git show main:scripts/acs_pull_all.sh`. */
+  const escaped = walk(tlsdir).filter((f) => /OWNED\.traverse/.test(path.basename(f)));
+  t('and nothing escaped the run directory',
+    escaped.length === 0);
+  if (escaped.length) console.log('        ESCAPED TO: ' + escaped.join(', '));
+  t('and the run says how many ids it dropped, so a filtered id is visible not silent',
+    /\d+ alert id\(s\) discarded/i.test(eres));
+  t('it says why, rather than leaving a number nobody can act on',
+    /did not look like an id/i.test(eres));
+  t('the fetch loop no longer substitutes the id into shell text',
+    !/-I\{\}[\s\S]{0,400}\{\}\.json/.test(pullSrcOf(pull)));
+  t('and the id is validated against an allowlist before it is used',
+    /grep -E ['"]\^\[A-Za-z0-9._-\]\+\$['"]/.test(pullSrcOf(pull)));
+
+  /* What query did the pull actually send?
+   *
+   * urlenc was written with bash substring syntax, ${#s} and ${s:i:1}. The script's
+   * shebang is bash so that was legal, but this harness invoked it as sh, which is dash
+   * here, where every call printed "Bad substitution" and returned the empty string. So
+   * a hundred assertions in this file were exercising an interpreter no operator uses,
+   * and the one difference that mattered, a silently empty scope, was invisible because
+   * nothing asserted the query. It is now jq @uri, which behaves the same under both.
+   *
+   * This asserts the URL the server received, under both interpreters, which is the only
+   * form of this test that cannot be satisfied by the wrong thing.
+   */
+  console.log('\n  The scope you ask for is the scope that gets sent');
+  const qDir = path.join(tlsdir, 'q');
+  fs.mkdirSync(qDir, { recursive: true });
+  const qLog = path.join(qDir, 'urls.txt');
+  const qSrv = path.join(qDir, 'srv.js');
+  fs.writeFileSync(qSrv,
+    'const https=require("https"),fs=require("fs");\n' +
+    'https.createServer({key:fs.readFileSync(' + JSON.stringify(path.join(tlsdir, 'k.pem')) +
+      '),cert:fs.readFileSync(' + JSON.stringify(path.join(tlsdir, 'c.pem')) + ')},(q,r)=>{\n' +
+    '  fs.appendFileSync(' + JSON.stringify(qLog) + ', q.url + "\\n");\n' +
+    '  r.setHeader("content-type","application/json");\n' +
+    '  if(q.url.indexOf("/v1/auth/status")===0) return r.end(JSON.stringify({userId:"x"}));\n' +
+    /* alertscount has to answer with a count. The script probes it to find out whether
+       this ACS understands the Platform Component search term, and drops the term when
+       the probe fails, which is correct behaviour against ACS older than 4.6. A fixture
+       that returns {} exercises the degraded path and then the test blames the script. */
+    '  if(q.url.indexOf("/v1/alertscount")===0) return r.end(JSON.stringify({count:1}));\n' +
+    '  r.end("{}");\n' +
+    '}).listen(' + QUERY_PORT + ',"127.0.0.1",()=>{});\n');
+
+  const qsrv = spawn(process.execPath, [qSrv], { stdio: 'ignore', detached: true });
+  execFileSync('sh', ['-c', 'sleep 1']);
+  const qSpki = execFileSync('sh', ['-c',
+    'echo | openssl s_client -connect 127.0.0.1:' + QUERY_PORT + ' 2>/dev/null | openssl x509 -pubkey -noout'
+    + ' | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | openssl base64'],
+    { encoding: 'utf8' }).trim();
+
+  /* Once through the shebang, the way an operator runs it, and once forced through dash,
+     because a script that only works under one of them is a script that works by luck. */
+  const interpreters = [['its own shebang', null], ['dash', 'sh']];
+  for (const [label, forced] of interpreters) {
+    fs.writeFileSync(qLog, '');
+    const argv = ['-o', path.join(qDir, 'run-' + (forced || 'shebang')),
+      '--pin', 'sha256//' + qSpki, '-n', 'prod', '--no-summary'];
+    let qout = '';
+    try {
+      qout = forced
+        ? execFileSync(forced, [pull].concat(argv), { encoding: 'utf8', timeout: 60000,
+            stdio: ['ignore', 'pipe', 'pipe'], env: Object.assign({}, process.env,
+            { ROX_API_TOKEN: 'x', ROX_ENDPOINT: 'https://127.0.0.1:' + QUERY_PORT,
+              KUBECONFIG: '/dev/null', PATH: stub + ':' + process.env.PATH }) })
+        : execFileSync(pull, argv, { encoding: 'utf8', timeout: 60000,
+            stdio: ['ignore', 'pipe', 'pipe'], env: Object.assign({}, process.env,
+            { ROX_API_TOKEN: 'x', ROX_ENDPOINT: 'https://127.0.0.1:' + QUERY_PORT,
+              KUBECONFIG: '/dev/null', PATH: stub + ':' + process.env.PATH }) });
+    } catch (e) { qout = (e.stdout || '') + (e.stderr || ''); }
+
+    const urls = fs.readFileSync(qLog, 'utf8');
+    const alertUrl = urls.split('\n').find((u) => u.indexOf('/v1/alerts?') === 0) || '';
+    t('  under ' + label + ': the namespace reaches the server, percent encoded',
+      /Namespace%3Aprod/.test(alertUrl));
+    t('  under ' + label + ': it is not sent as an empty scope',
+      alertUrl.indexOf('query=&') === -1 && !/query=$/.test(alertUrl));
+    t('  under ' + label + ': the platform scope is still on the query',
+      /Platform%20Component%3Atrue%2Cfalse/.test(alertUrl));
+    t('  under ' + label + ': nothing printed a shell error into the run',
+      !/Bad substitution|command not found|unexpected/i.test(qout));
+    if (!/Namespace%3Aprod/.test(alertUrl)) console.log('        saw: ' + alertUrl.slice(0, 160));
+  }
+  try { process.kill(-qsrv.pid); } catch (e) { /* already gone */ }
 
   console.log('\n  The pull cannot hang on an unrelated cluster');
   const pullSrc = pullSrcOf(pull);

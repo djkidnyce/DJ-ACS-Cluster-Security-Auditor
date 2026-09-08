@@ -153,15 +153,28 @@ jobs:
             echo "built $f ($(wc -c < "$f") bytes)"
           done
 
-      - name: The generated documents are not committed
+      - name: The committed guides match their generators
         run: |
           set -eu
-          if git ls-files --error-unmatch docs/DJ_ACS_Auditor_User_Guide.docx >/dev/null 2>&1; then
-            echo "::error::a generated .docx is tracked. It is built in CI and attached to"
-            echo "::error::releases; committing it makes documentation changes unreviewable."
-            exit 1
-          fi
-          echo "generated documents are not in the tree"
+          sudo apt-get update -qq && sudo apt-get install -y -qq pandoc
+          ./docs/check_docx.sh
+
+      - name: The guides are committed, so a checkout has readable documentation
+        run: |
+          set -eu
+          # They were gitignored for several versions, which left docs/ holding
+          # generators and figures and not one readable document while the README
+          # pointed at .docx paths that were not there. This is the check that would
+          # have caught it.
+          for f in docs/DJ_ACS_Auditor_User_Guide.docx \
+                   docs/DJ_Security_Tooling_Administration_Guide.docx \
+                   docs/README.md; do
+            git ls-files --error-unmatch "$f" >/dev/null 2>&1 || {
+              echo "::error::$f is not committed, so the repository has no readable documentation"
+              exit 1
+            }
+          done
+          echo "documentation is present and readable without a build"
 
       - name: The figures still render
         run: |

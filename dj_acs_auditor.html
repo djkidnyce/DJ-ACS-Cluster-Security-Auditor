@@ -44,7 +44,41 @@ button.primary:hover:not(:disabled){background:#388bfd;color:#fff}
 .card .lbl{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-top:2px}
 .card.crit .num{color:var(--crit)}.card.high .num{color:var(--high)}
 .card.med .num{color:var(--med)}.card.low .num{color:var(--low)}
-table{width:100%;border-collapse:collapse;font-size:13px}
+table{width:100%;border-collapse:collapse;font-size:13px;table-layout:auto}
+/* Cluster data does not fit an assumed width. A path, an image reference or a
+   Kind/name has no spaces and no default break opportunity, so it sets a min-content
+   width the table must honour and the page then scrolls sideways. Scroll the table,
+   never the page: a horizontal scrollbar on <body> takes the header and the controls
+   with it.
+
+   Three rules together: the panel never grows past the viewport, the wrapper takes any
+   remainder as a scrollbar of its own, and long values break inside their own cell.
+   Breaking rather than clipping is deliberate. An operator deciding whether a finding
+   applies has to read the path, two clipped paths under one namespace are
+   indistinguishable, and a title tooltip is not on the printed page. */
+.section,details.sec{min-width:0;max-width:100%;box-sizing:border-box}
+.tablewrap{overflow-x:auto;overflow-y:visible;max-width:100%;-webkit-overflow-scrolling:touch}
+.tablewrap > table{min-width:100%}
+.tablewrap td{overflow-wrap:anywhere;word-break:break-word;max-width:340px}
+/* Two rules, not one comma separated pair. :has() is unsupported on browsers still in
+   use on locked down Windows desktops, and one unknown selector in a list drops the
+   whole rule, which would silently take the .mono width with it. */
+.tablewrap td.mono{max-width:280px}
+.tablewrap td:has(> .acsid){max-width:280px}
+th.selcell,td.selcell{width:26px;padding-right:0}
+td.selcell input{margin:0;cursor:pointer}
+td.selcell input:disabled{cursor:not-allowed}
+td.wrapcell{overflow-wrap:anywhere;word-break:break-word;white-space:normal}
+.kv > div{overflow-wrap:anywhere;min-width:0}
+/* Fixed layout plus explicit column widths, so one 180 character path widens its own
+   column and not every other one. The wrapcell rule above is what keeps the value
+   readable inside that width. */
+#rtable{table-layout:fixed;width:100%;min-width:900px}
+#rtable td,#rtable th{vertical-align:top}
+#rtable tr.fdet td{max-width:none;white-space:normal;overflow:visible}
+#rtable col.c-sel{width:30px} #rtable col.c-sev{width:86px} #rtable col.c-pol{width:190px}
+#rtable col.c-obj{width:19%} #rtable col.c-file{width:15%} #rtable col.c-det{width:auto}
+#rtable col.c-kind{width:92px} #rtable col.c-act{width:78px}
 th{color:var(--muted);text-align:left;padding:8px 9px;border-bottom:1px solid var(--border);font-size:11px;text-transform:uppercase;letter-spacing:.05em;white-space:nowrap}
 th.sortable{cursor:pointer;user-select:none}
 th.sortable:hover{color:var(--accent)}
@@ -257,6 +291,7 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
         <label class="chk"><input type="checkbox" id="vfUnmatched"> Unmatched</label>
         <span class="note" id="violCount"></span>
       </div>
+      <div class="tablewrap">
       <table id="vtbl">
         <thead><tr>
           <th style="width:26px"><input type="checkbox" id="vSelAll" title="Select or clear every fixable violation currently shown"></th>
@@ -273,6 +308,7 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
         </tr></thead>
         <tbody></tbody>
       </table>
+      </div>
       <p class="note">Click a row for the full detail and the reasoning behind the fix route.
         Tick the ones you want to act on. The box in the header takes every fixable violation
         currently shown, which is not the same as every violation imported.</p>
@@ -307,6 +343,7 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
         <button id="btnVulnWorklist">Download the image worklist</button>
         <button id="btnVulnJson">Download CVEs as JSON</button>
       </div>
+      <div class="tablewrap">
       <table id="vtable">
         <thead><tr>
           <th class="sortable" data-vkey="sev" data-label="Severity">Severity</th>
@@ -319,12 +356,14 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
         </tr></thead>
         <tbody></tbody>
       </table>
+      </div>
       <p class="note">Priority runs 0 to 15, not 0 to 10, because clamping to 10 would make every critical
         tie at the top and destroy the ordering exactly where it matters. It is CVSS plus named, bounded
         adjustments, all listed in the last column. It is not a CVSS score and should not be quoted as one.</p>
     </div>
     <details class="section sec" open>
       <summary>Findings <span class="cnt" id="ftableCnt"></span></summary>
+      <div class="tablewrap">
       <table id="ftable">
         <thead><tr>
           <th class="sortable" data-key="sev" data-label="Severity">Severity</th>
@@ -337,7 +376,9 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
         </tr></thead>
         <tbody></tbody>
       </table>
-      <p class="note">Click a row for the full advisory. Click a column header to sort, click again to reverse.</p>
+      </div>
+      <p class="note">Click a row for the full advisory. Click a column header to sort, click again to reverse.
+        <span class="flashmsg" style="color:var(--accent)"></span></p>
     </details>
     <div class="section">
       <h2>Export</h2>
@@ -356,8 +397,10 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
     </div>
     <div id="catalogue" class="section hidden">
       <h2>Policy catalogue</h2>
+      <div class="tablewrap">
       <table><thead><tr><th>ID</th><th>ACS policy</th><th>Severity</th><th>Score</th><th>Category</th><th>Fix</th><th>CIS</th><th>NIST 800-53</th><th>STIG</th></tr></thead>
       <tbody id="catbody"></tbody></table>
+      </div>
     </div>
     </div>
 
@@ -398,6 +441,7 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
         other and gets the same preview, confirmation and undo as every other fix on this page.
       </div>
       <div id="vulnSummary"></div>
+      <div class="tablewrap">
       <table id="vimgtable">
         <thead><tr>
           <th>Image</th><th>Critical</th><th>Fixable</th><th>CVEs</th>
@@ -405,6 +449,7 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
         </tr></thead>
         <tbody></tbody>
       </table>
+      </div>
       <div class="toolbar">
         <button id="btnImgWorklist">Download the image worklist</button>
       </div>
@@ -441,10 +486,14 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
         <button id="btnFSelNone">Clear selection</button>
         <button class="primary" id="btnExportFixed">Download corrected YAML</button>
         <span class="note" id="fCount" style="margin:0"></span>
+        <span class="note flashmsg" style="margin:0;color:var(--accent)"></span>
       </div>
+      <p class="note hidden" id="fModeWhy" style="margin:0 0 8px;color:var(--med)"></p>
+      <div class="tablewrap">
       <table id="rtable">
+        <colgroup><col class="c-sel"><col class="c-sev"><col class="c-pol"><col class="c-obj"><col class="c-file"><col class="c-det"><col class="c-kind"><col class="c-act"></colgroup>
         <thead><tr>
-          <th style="width:26px"><input type="checkbox" id="fSelAll" title="Select or clear every fixable finding currently shown"></th>
+          <th class="selcell"><input type="checkbox" id="fSelAll" title="Select or clear every fixable finding currently shown"></th>
           <th class="sortable" data-key="sev" data-label="Severity">Severity</th>
           <th class="sortable" data-key="id" data-label="Policy">Policy</th>
           <th class="sortable" data-key="obj" data-label="Object">Object</th>
@@ -455,6 +504,7 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
         </tr></thead>
         <tbody></tbody>
       </table>
+      </div>
       <p class="note">Click a row to read the full advisory: the ACS policy, why it matters, what to do, and the standards behind it. Click a column header to sort.</p>
     </details>
     <div class="section">
@@ -557,6 +607,10 @@ function rescan() {
   for (const f of STATE.findings) f.applied = STATE.applied.has(findingKey(f));
   STATE.onlyInAcs = STATE.acs ? correlate(STATE.findings, STATE.acs.imported).onlyInAcs : [];
   STATE.vulnCorr = STATE.vulns ? correlateVulns(STATE.files, STATE.vulns) : null;
+  /* A key for a finding that no longer exists, or that has just been applied, would keep
+     the button promising work the export will not do. Drop those before anything renders
+     a count from them. */
+  pruneFindingSelection();
   render();
 }
 
@@ -589,6 +643,11 @@ function render() {
               !!(STATE.acs && STATE.acs.total);
   $('app').classList.toggle('hidden', !has);
   if (!has) return;
+
+  /* Once per render, not once per renderTable(). The option set only changes when
+     STATE.findings changes, and rebuilding both <select> elements on every sort or filter
+     change destroyed the option the operator had just focused. */
+  refreshFindingFilters();
 
   renderAuditTab();
   renderRemediateTab();
@@ -930,6 +989,7 @@ function renderFindingsRO() {
   });
   const tb = $('ftable').querySelector('tbody');
   tb.innerHTML = '';
+  const frag = document.createDocumentFragment();
   rows.forEach((f) => {
     const sev = sevLabel(f.policy.severity);
     const kind = f.fixKind === 'auto' ? '<span class="pill auto">Auto</span>'
@@ -938,26 +998,27 @@ function renderFindingsRO() {
     const tr = document.createElement('tr');
     tr.className = 'frow';
     tr.innerHTML =
-      '<td class="selcell">' +
-        (fFixable(f)
-          ? '<input type="checkbox" class="fsel" data-fk="' + esc(findingKey(f)) + '"' +
-            (FSELECTED.has(findingKey(f)) ? ' checked' : '') + '>'
-          : '<input type="checkbox" disabled title="' +
-            (f.applied ? 'Already applied.' : 'No mechanical fix: this one needs a decision. ' + esc(f.policy.remediation)) +
-            '">') +
-      '</td>' +
+      /* No checkbox here. This table had one and the header had no column for it, so
+         every value sat one column right of its heading and the eighth cell had no
+         header at all. Deleting the cell rather than adding a th is the right way round:
+         the Audit tab is read only, and every control that consumes a selection --
+         #fSelAll, #btnFSelAll, #btnFSelNone, #fCount, #btnExportFixed -- is on the
+         Remediate tab. A checkbox with no select all, no count and nothing to act on is
+         the same class of dead control this change exists to remove. */
       '<td><span class="sev ' + sev + '">' + sev + '</span></td>' +
       '<td><b>' + f.policy.score.toFixed(1) + '</b></td>' +
       '<td><span class="acsid">' + f.policy.id + '</span><br><span style="font-size:11.5px">' + esc(f.policy.acsPolicy) + '</span>' +
         (f.confirmedByAcs ? '<br><span class="pill acs">live in ACS</span>' : '') + '</td>' +
-      '<td>' + esc(f.obj) + '</td>' +
-      '<td style="font-family:ui-monospace,Consolas,monospace;font-size:11.5px">' + esc(f.file) + '</td>' +
-      '<td style="color:var(--muted)">' + esc(f.detail) + '</td>' +
+      '<td class="wrapcell">' + esc(f.obj) + '</td>' +
+      '<td class="wrapcell mono" style="font-family:ui-monospace,Consolas,monospace;font-size:11.5px">' + esc(f.file) + '</td>' +
+      '<td class="wrapcell" style="color:var(--muted)">' + esc(f.detail) + '</td>' +
       '<td>' + kind + '</td>';
-    const dr = document.createElement('tr');
-    dr.className = 'hidden';
+    /* Built on first expand, like the Remediate table. This block is not advisoryHtml():
+       the two have already drifted, this one renders runtimeRisk and advisoryHtml renders
+       Severity and Live in ACS, and merging them is a different change. */
+    const advHtml = () => {
     const p = f.policy;
-    dr.innerHTML = '<td colspan="7" style="background:var(--panel2)"><div class="kv">' +
+    return '<td colspan="7" style="background:var(--panel2)"><div class="kv">' +
       '<div class="k">ACS policy</div><div>' + esc(p.acsPolicy) + '</div>' +
       '<div class="k">ACS criteria</div><div>' + esc(p.acsCriteria) + '</div>' +
       '<div class="k">Lifecycle</div><div>' + p.lifecycleStages.join(', ') + '</div>' +
@@ -972,9 +1033,20 @@ function renderFindingsRO() {
       '<div class="k">Standards</div><div>' + citationsOf(p).map(esc).join(' &nbsp;|&nbsp; ') + '</div>' +
       (f.confirmedByAcs ? '<div class="k">Live in ACS</div><div>namespace ' + esc(f.acsNamespace || '?') + (f.acsCluster ? ', cluster ' + esc(f.acsCluster) : '') + '</div>' : '') +
       '</div></td>';
-    tr.addEventListener('click', () => dr.classList.toggle('hidden'));
-    tb.appendChild(tr); tb.appendChild(dr);
+    };
+    tr.addEventListener('click', () => {
+      let dr = tr.nextElementSibling;
+      if (!dr || !dr.classList.contains('fdet')) {
+        dr = document.createElement('tr');
+        dr.className = 'fdet hidden';
+        dr.innerHTML = advHtml();
+        tr.parentNode.insertBefore(dr, tr.nextSibling);
+      }
+      dr.classList.toggle('hidden');
+    });
+    frag.appendChild(tr);
   });
+  tb.appendChild(frag);
 
 }
 
@@ -1372,6 +1444,25 @@ function sortVal(f, key) {
  * violations panel does it: filtering and sorting move rows, and a tick that follows a
  * position rather than a finding is a tick that silently means something else.
  */
+/* A row key, not a finding key.
+ *
+ * findingKey() is file|obj|policy.id, and obj is Kind/name with no namespace. scanFiles
+ * emits one finding per container, so a two container Deployment where both containers
+ * run privileged produces two findings carrying one identical findingKey. On a trivial
+ * two container fixture, 8 of 19 findings collide that way. That was invisible while the
+ * rows had no checkboxes; the moment they have one, ticking one container's box would
+ * tick the other, the header box would flip to fully checked with a count of 1, and the
+ * export would quietly pick up both. Selection, the count on the button and the header
+ * box's all-or-some state are per row, so they need a key that separates rows.
+ *
+ * findingKey() is deliberately not changed. STATE.applied, acs_cli.js and test/flow.cjs
+ * are keyed on it, and widening it to fix a selection bug would move a contract three
+ * consumers depend on.
+ */
+function findingRowKey(f) {
+  return findingKey(f) + '|' + (f.ns || '') + '|' + (f.path || '') + '|' + (f.detail || '');
+}
+
 const FSELECTED = new Set();
 
 function findingRows() {
@@ -1398,27 +1489,127 @@ function findingRows() {
    would read as an oversight rather than an answer. */
 const fFixable = (f) => !f.applied && f.fixKind !== 'manual';
 
-function syncFindingSelection() {
-  const shown = findingRows().filter(fFixable);
-  const chosen = shown.filter((f) => FSELECTED.has(findingKey(f)));
+/* The row set currently drawn in #rtable, in draw order. renderTable computes it once;
+   the selection handlers, refreshCounts and the delegated click handler read it rather
+   than recomputing findingRows(). Initialised empty so a handler that fires before the
+   first render is a no-op rather than a TypeError.
+
+   There is deliberately no render cap.
+   ---------------------------------------
+   renderViolations and renderVulns both slice(0, 500) with a footer row, so the
+   convention exists in this file. It is the wrong convention here. The operator has ~750
+   findings and the whole task is to look at them and decide; a cap draws 400 and hides
+   350 of the findings they came for, breaks Ctrl+F and breaks print for those 350, and
+   makes "Select all shown" select rows that are not shown. That last part is the exact
+   defect this change exists to fix: a control whose number disagrees with the screen.
+   Saying "selection is not capped" in a footer documents the contradiction rather than
+   removing it, and it is the same fault selectableRows() already has in the violations
+   panel.
+
+   The cap was also not what made the page fast. The old render cost came from 2n
+   createElement plus 2n innerHTML, an eagerly built advisory for every finding, per row
+   listeners rebuilt on every render, and a full rebuild on every checkbox tick. Those
+   are all gone. What is left at 750 rows is one innerHTML parse of about 9,000 elements,
+   which is an ordinary DOM, and at 5,000 rows it is one parse of about 60,000 elements,
+   paid once per render rather than once per click. Everything above 2,000 rows gets a
+   sentence saying the filters will make it quicker, which leaves the choice with the
+   operator instead of making it for them. */
+let FROWS = [];
+
+/**
+ * Reconcile the header box, the count text, the export button and the mode note with
+ * FSELECTED. Pure DOM writes: no row is created, destroyed or reordered here.
+ * @param {Array<Object>} [rows] the findings currently drawn; defaults to FROWS.
+ * @returns {void}
+ */
+function syncFindingSelection(rows) {
+  const drawn = rows || FROWS;
+  const shown = drawn.filter(fFixable);
+  const chosen = shown.filter((f) => FSELECTED.has(findingRowKey(f)));
+
+  /* Selection is allowed in every mode. Ticking costs nothing and produces nothing, so
+     there is no reason for the mode to throw somebody's 750 ticks away. The gate belongs
+     on the export, which is the only thing here that writes a file, and on Fix this,
+     which is the only thing that changes state. Both are gated below. */
+  const canExport = modeAllows(currentMode(), 'patches');
+
   const box = $('fSelAll');
   if (box) {
     box.checked = shown.length > 0 && chosen.length === shown.length;
     box.indeterminate = chosen.length > 0 && chosen.length < shown.length;
     box.disabled = shown.length === 0;
   }
-  const total = STATE.findings.length;
-  const visible = findingRows().length;
-  $('fCount').textContent =
-    'showing ' + visible + ' of ' + total + ' finding(s)' +
-    (FSELECTED.size ? ', ' + FSELECTED.size + ' selected' : ', none selected');
+  if ($('btnFSelAll')) $('btnFSelAll').disabled = shown.length === 0;
+  if ($('btnFSelNone')) $('btnFSelNone').disabled = FSELECTED.size === 0;
+
+  /* The selection outlives the filters, so it can be larger than what is on screen. Say
+     so, in the same words the violations panel uses, rather than letting the button
+     promise a number the table appears to contradict. */
+  const hidden = FSELECTED.size - chosen.length;
+  if ($('fCount')) {
+    $('fCount').textContent =
+      'showing ' + drawn.length + ' of ' + STATE.findings.length + ' finding(s)' +
+      (FSELECTED.size
+        ? ', ' + FSELECTED.size + ' selected' +
+          (hidden > 0 ? ' (' + hidden + ' of them hidden by the current filters)' : '')
+        : ', none selected') +
+      (drawn.length > 2000
+        ? ' \u2014 that is a lot of rows to draw at once; the filters above will make this quicker.'
+        : '');
+  }
+
   const btn = $('btnExportFixed');
   if (btn) {
     btn.textContent = FSELECTED.size
       ? 'Download corrected YAML for ' + FSELECTED.size + ' selected'
       : 'Download corrected YAML';
-    btn.disabled = FSELECTED.size === 0 || !modeAllows(currentMode(), 'patches');
+    btn.disabled = FSELECTED.size === 0 || !canExport;
+    /* A disabled button with no reason on it reads as a broken tool. Two different things
+       can be holding it and they need different actions, so name the one that applies. */
+    btn.title = !canExport
+      ? 'Report only. Choose Manual or Auto in the Mode selector at the top of the page.'
+      : !FSELECTED.size ? 'Nothing selected. Tick the findings you want to export.'
+      : '';
   }
+
+  /* #modeWhy already says this, but it lives in a different section above a 750 row
+     table, so a user scrolled down to the findings never sees it. This one sits between
+     the toolbar and the table, where the greyed out button is. */
+  const why = $('fModeWhy');
+  if (why) {
+    why.textContent = canExport ? '' :
+      'Mode is Report only, so nothing that could be applied is produced: Download ' +
+      'corrected YAML and the per row Fix this buttons are disabled. Change Mode at the ' +
+      'top of the page to Manual to get files to review, or Auto to also apply fixes ' +
+      'here. Your selection is kept either way.';
+    why.classList.toggle('hidden', canExport);
+  }
+}
+
+/**
+ * Write FSELECTED back onto the checkboxes already in the DOM and refresh the summary.
+ * Used by every selection control instead of a full renderTable(): Select all used to
+ * rebuild every row to change a boolean on some of them, which discarded the scroll
+ * position and closed every open advisory to do it.
+ * @returns {void}
+ */
+function paintFindingChecks() {
+  document.querySelectorAll('#rtable tbody input.fsel').forEach((cb) => {
+    if (!cb.disabled) cb.checked = FSELECTED.has(cb.dataset.fk);
+  });
+  syncFindingSelection();
+}
+
+/**
+ * Drop selection keys whose finding no longer exists or is no longer fixable, so the
+ * number on the button cannot promise work the export will not do. Called from rescan()
+ * after the applied flags are restored and before render().
+ * @returns {void}
+ */
+function pruneFindingSelection() {
+  if (!FSELECTED.size) return;
+  const live = new Set(STATE.findings.filter(fFixable).map(findingRowKey));
+  for (const k of Array.from(FSELECTED)) if (!live.has(k)) FSELECTED.delete(k);
 }
 
 /* The category and policy pickers are built from what was actually found, not from the
@@ -1464,7 +1655,9 @@ function refreshCounts() {
 
   /* On the Remediate tab the header has to say when a filter is hiding rows, otherwise a
      narrowed list reads as a shorter one and people call the run clean. */
-  const shown = document.querySelectorAll('#rtable tbody tr:not(.hidden)').length;
+  /* FROWS is what renderTable actually drew. Counting rows in the DOM counted an opened
+     advisory as an extra finding, so reading one row made the header say 751 of 750. */
+  const shown = FROWS.length;
   setCount('rtableCnt', (shown && shown !== f.length ?
     'showing ' + shown + ' of ' + f.length + ', ' : '') + label, crit > 0);
 
@@ -1482,11 +1675,15 @@ function refreshCounts() {
 
 function renderTable() {
   document.querySelectorAll('#rtable th.sortable').forEach((th) => {
-    th.textContent = th.dataset.label + (STATE.sort.key === th.dataset.key ? (STATE.sort.dir === 1 ? ' ▲' : ' ▼') : '');
+    th.textContent = th.dataset.label + (STATE.sort.key === th.dataset.key ? (STATE.sort.dir === 1 ? ' \u25b2' : ' \u25bc') : '');
   });
   /* The filters above the table are what make a four figure finding list workable, so the
      table has to honour them. Sorting the unfiltered list here while the filters only fed
-     the export was the worst of both: the controls looked live and changed nothing. */
+     the export was the worst of both: the controls looked live and changed nothing.
+
+     findingRows() is evaluated exactly once. It used to run three times per render, once
+     here and twice inside syncFindingSelection, which is 2,250 predicate evaluations and
+     three rounds of DOM reads of seven filter controls to produce one row set. */
   const rows = [...findingRows()].sort((a, b) => {
     const x = sortVal(a, STATE.sort.key), y = sortVal(b, STATE.sort.key);
     if (x < y) return -1 * STATE.sort.dir;
@@ -1494,48 +1691,136 @@ function renderTable() {
     return b.policy.score - a.policy.score;
   });
 
-  const tb = $('rtable').querySelector('tbody');
-  tb.innerHTML = '';
-  rows.forEach((f) => {
+  /* Built as one string and assigned once.
+   *
+   * This used to create two elements per finding, set innerHTML on each, attach two
+   * listeners and appendChild into a live table. At 75 findings that took 440ms and
+   * nobody noticed. At 750, which is an ordinary first run against a real cluster, the
+   * page was unusable: every tick of a checkbox re-ran the whole thing, so clicks queued
+   * behind a render and the buttons looked dead. They were not dead, they were waiting.
+   *
+   * Four changes, all needed, none of them a cap on how much is shown:
+   *   one innerHTML assignment instead of 2n, so the parser runs once
+   *   no advisory row at all until somebody opens one
+   *   one delegated listener instead of 2n listeners rebuilt every render
+   *   ticking a checkbox repaints the boxes, it does not rebuild the table
+   */
+  FROWS = rows;
+  const cols = document.querySelectorAll('#rtable thead th').length;
+  /* Read once, outside the loop. Per row it would be 750 identical resolutions of the
+     mode through a DOM read of #fixMode. */
+  const canWrite = modeAllows(currentMode(), 'writes');
+  const writeTitle = canWrite
+    ? 'Preview this fix as a diff and confirm it before anything changes.'
+    : 'Report only. Choose Manual or Auto in the Mode selector at the top of the page to apply a fix.';
+
+  const html = new Array(rows.length);
+  for (let i = 0; i < rows.length; i++) {
+    const f = rows[i];
     const sev = sevLabel(f.policy.severity);
-    const tr = document.createElement('tr');
-    if (f.applied) tr.className = 'done';
     const kindPill = f.applied
       ? '<span class="pill fixed">Fixed</span>'
       : f.fixKind === 'auto' ? '<span class="pill auto">Auto</span>'
       : f.fixKind === 'generate' ? '<span class="pill gen">Generate</span>'
       : '<span class="pill manual">Manual</span>';
-    tr.innerHTML =
+    /* The header declared a checkbox column and the rows never filled it, so every value
+       rendered one column left of its heading, the Action column was empty in every row,
+       and there was nothing to tick. The cell count is asserted against the header count
+       now, because that is the shape of the defect: not a wrong value, a missing cell. */
+    const fk = findingRowKey(f);
+    html[i] =
+      '<tr data-i="' + i + '"' + (f.applied ? ' class="done"' : '') + '>' +
+      '<td class="selcell">' + (fFixable(f)
+        ? '<input type="checkbox" class="fsel" data-fk="' + esc(fk) + '"' +
+          (FSELECTED.has(fk) ? ' checked' : '') +
+          ' title="Include this finding in the corrected YAML export">'
+        : '<input type="checkbox" disabled title="' + esc(
+            f.applied ? 'Already applied.'
+            : 'No mechanical fix: this one needs a decision. ' + f.policy.remediation) + '">') + '</td>' +
       '<td><span class="sev ' + sev + '">' + sev + '</span></td>' +
       '<td><span class="acsid">' + f.policy.id + '</span><br><span style="font-size:11.5px">' + esc(f.policy.acsPolicy) + '</span>' +
         (f.confirmedByAcs ? '<br><span class="pill acs">live in ACS</span>' : '') + '</td>' +
-      '<td>' + esc(f.obj) + '</td>' +
-      '<td style="font-family:ui-monospace,Consolas,monospace;font-size:11.5px">' + esc(f.file) + '</td>' +
-      '<td style="color:var(--muted)">' + esc(f.detail) + '</td>' +
-      '<td>' + kindPill + '</td><td></td>';
-    const cell = tr.lastElementChild;
-    if (!f.applied && f.fixKind !== 'manual') {
-      const b = document.createElement('button');
-      b.className = 'small';
-      b.textContent = 'Fix this';
-      b.addEventListener('click', (ev) => { ev.stopPropagation(); requestFix(f); });
-      cell.appendChild(b);
+      '<td class="wrapcell" title="' + esc(f.obj) + '">' + esc(f.obj) + '</td>' +
+      '<td class="wrapcell mono" style="font-family:ui-monospace,Consolas,monospace;font-size:11.5px" title="' + esc(f.file) + '">' + esc(f.file) + '</td>' +
+      '<td class="wrapcell" style="color:var(--muted)" title="' + esc(f.detail) + '">' + esc(f.detail) + '</td>' +
+      '<td>' + kindPill + '</td>' +
+      /* Disabled rather than live and refusing. A button that looks pressable, is
+         pressed, and then explains itself somewhere off screen is the reported defect,
+         and this file already argues against it where requireMode is defined. */
+      '<td>' + (fFixable(f)
+        ? '<button class="small rfix"' + (canWrite ? '' : ' disabled') +
+          ' title="' + esc(writeTitle) + '">Fix this</button>'
+        : '') + '</td>' +
+      '</tr>';
+  }
+
+  /* An empty table reads as a clean scan, which is the misreading the section header
+     already guards against. Say which of the two empties this is. */
+  if (!rows.length) {
+    html.push('<tr><td colspan="' + cols + '" class="note">' + (STATE.findings.length
+      ? 'No findings match the current filters. ' + STATE.findings.length +
+        ' finding(s) are hidden by them.'
+      : 'No findings. Load manifests above to scan them.') + '</td></tr>');
+  }
+
+  const tb = $('rtable').querySelector('tbody');
+  tb.innerHTML = html.join('');
+
+  /* refreshFindingFilters() is deliberately NOT called here. The option set only changes
+     when STATE.findings changes, render() calls it once for that, and rebuilding both
+     <select> elements on every sort or filter change destroyed the option the operator
+     had just focused. */
+  syncFindingSelection(rows);
+}
+
+/**
+ * Build the advisory row for a finding on first expand, then toggle it. Building all of
+ * them up front meant paying for 750 advisories, about 30,000 regex passes through esc(),
+ * to read one.
+ * @param {HTMLTableRowElement} tr the finding's visible row, already in the table
+ * @param {Object} f the finding
+ * @returns {void}
+ */
+function toggleFindingDetail(tr, f) {
+  if (!tr || !tr.parentNode) return;
+  let dr = tr.nextElementSibling;
+  if (!dr || !dr.classList.contains('fdet')) {
+    const cols = document.querySelectorAll('#rtable thead th').length;
+    dr = document.createElement('tr');
+    dr.className = 'fdet hidden';
+    dr.innerHTML = '<td colspan="' + cols + '" style="background:var(--panel2)">' + advisoryHtml(f) + '</td>';
+    tr.parentNode.insertBefore(dr, tr.nextSibling);
+  }
+  dr.classList.toggle('hidden');
+}
+
+/* One delegated listener on the body, installed once, rather than 2n listeners rebuilt on
+   every render. It also survives the innerHTML assignment above, which per row listeners
+   did not: they had to be reattached, which is half of why rendering was so expensive. */
+function bindFindingTable() {
+  const tb = $('rtable') && $('rtable').querySelector('tbody');
+  if (!tb || tb.dataset.bound) return;
+  tb.dataset.bound = '1';
+
+  tb.addEventListener('click', (ev) => {
+    const tr = ev.target.closest('tr[data-i]');
+    if (!tr) return;
+    const f = FROWS[Number(tr.dataset.i)];
+    if (!f) return;
+
+    const cb = ev.target.closest('input.fsel');
+    if (cb) {
+      ev.stopPropagation();
+      if (cb.disabled) return;
+      if (cb.checked) FSELECTED.add(cb.dataset.fk); else FSELECTED.delete(cb.dataset.fk);
+      syncFindingSelection();          // count and buttons only, no re-render
+      return;
     }
+    const fixBtn = ev.target.closest('button.rfix');
+    if (fixBtn) { ev.stopPropagation(); if (!fixBtn.disabled) requestFix(f); return; }
 
-    const dr = document.createElement('tr');
-    dr.className = 'hidden';
-    dr.innerHTML = '<td colspan="8" style="background:var(--panel2)">' + advisoryHtml(f) + '</td>';
-    tr.addEventListener('click', () => dr.classList.toggle('hidden'));
-    tb.appendChild(tr); tb.appendChild(dr);
+    toggleFindingDetail(tr, f);
   });
-
-  tb.querySelectorAll('input.fsel').forEach((cb) => cb.addEventListener('click', (ev) => {
-    ev.stopPropagation();
-    if (cb.checked) FSELECTED.add(cb.dataset.fk); else FSELECTED.delete(cb.dataset.fk);
-    syncFindingSelection();
-  }));
-  refreshFindingFilters();
-  syncFindingSelection();
 }
 
 function advisoryHtml(f) {
@@ -1955,7 +2240,19 @@ function download(name, content, mime) {
   a.href = URL.createObjectURL(blob); a.download = name; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 }
-function flash(msg) { $('exportMsg').textContent = msg; setTimeout(() => { $('exportMsg').textContent = ''; }, 3000); }
+/* A message written into the Export section is invisible to somebody who pressed a button
+   in the findings table, which is how a refusal reads as a dead button. Write to the
+   message slot on the tab that is actually showing. */
+function flash(msg) {
+  const onRemediate = $('tabRemediate') && !$('tabRemediate').classList.contains('hidden');
+  const targets = [];
+  const local = document.querySelector(
+    (onRemediate ? '#tabRemediate' : '#tabAudit') + ' .flashmsg');
+  if (local) targets.push(local);
+  if ($('exportMsg')) targets.push($('exportMsg'));
+  targets.forEach((el) => { el.textContent = msg; });
+  setTimeout(() => { targets.forEach((el) => { el.textContent = ''; }); }, 6000);
+}
 
 function changeLog() {
   let md = '# ACS remediation change log\n\nGenerated ' + new Date().toISOString().slice(0, 19).replace('T', ' ') + ' UTC by ' + ACS_TOOL + '.\n\n';
@@ -2306,21 +2603,29 @@ document.querySelectorAll('input.fsev').forEach((c) =>
   if ($(id)) $(id).addEventListener('change', renderTable);
 });
 
+/* Installed once, before anything renders. The table body keeps this listener across
+   every innerHTML assignment, which is what makes a single string render possible. */
+bindFindingTable();
+
+/* All three act on FROWS, which is exactly what is drawn, so "every fixable finding
+   currently shown" means the rows on screen and nothing else. None of them calls
+   renderTable(): repainting 750 checkboxes does not require rebuilding 750 rows, and
+   rebuilding them threw away the scroll position and closed every open advisory. */
 if ($('fSelAll')) $('fSelAll').addEventListener('click', () => {
-  const shown = findingRows().filter(fFixable);
-  const all = shown.every((f) => FSELECTED.has(findingKey(f)));
+  const shown = FROWS.filter(fFixable);
+  const all = shown.length > 0 && shown.every((f) => FSELECTED.has(findingRowKey(f)));
   for (const f of shown) {
-    if (all) FSELECTED.delete(findingKey(f)); else FSELECTED.add(findingKey(f));
+    if (all) FSELECTED.delete(findingRowKey(f)); else FSELECTED.add(findingRowKey(f));
   }
-  renderTable();
+  paintFindingChecks();
 });
 if ($('btnFSelAll')) $('btnFSelAll').addEventListener('click', () => {
-  for (const f of findingRows().filter(fFixable)) FSELECTED.add(findingKey(f));
-  renderTable();
+  for (const f of FROWS.filter(fFixable)) FSELECTED.add(findingRowKey(f));
+  paintFindingChecks();
 });
 if ($('btnFSelNone')) $('btnFSelNone').addEventListener('click', () => {
   FSELECTED.clear();
-  renderTable();
+  paintFindingChecks();
 });
 
 if ($('btnExportFixed')) $('btnExportFixed').addEventListener('click', async () => {
@@ -2334,7 +2639,7 @@ if ($('btnExportFixed')) $('btnExportFixed').addEventListener('click', async () 
   const byName = {};
   for (const f of files) byName[f.name] = f;
 
-  const wanted = STATE.findings.filter((f) => FSELECTED.has(findingKey(f)) && fFixable(f));
+  const wanted = STATE.findings.filter((f) => FSELECTED.has(findingRowKey(f)) && fFixable(f));
   const applied = [], skipped = [], generated = [];
 
   for (const f of wanted) {
