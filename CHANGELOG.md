@@ -11,6 +11,62 @@ at least; removing or renaming one is a major.
 Every release is tagged. `git tag -l` is the list, and the tag matches the version this
 tool stamps into every report and patch header it writes.
 
+## 1.7.0 - 2026-09-16
+
+### Added
+
+- **A Diff tab.** Left is the YAML you loaded, right is the same objects with the fixes
+  applied to a copy, side by side, the way a diff reads on GitHub. A file list down the
+  side with added and removed counts, click a file to see it, and unchanged lines collapse
+  to "N unchanged line(s)" so a one line fix does not render four hundred lines of context.
+
+  It renders in every mode, including report, on purpose. A diff is analysis, not an
+  artifact: you cannot apply a rendered table, nothing is written, and seeing what a fix
+  would do is exactly what helps somebody decide whether to leave report mode. The gate
+  stays where it belongs, on the things that produce files.
+
+  Two views: everything the fixes would change, or only the findings you have ticked. The
+  filter says which one you are looking at, and when the filtered view is empty it says
+  why rather than going blank.
+
+- **`buildFixedCopy`, one function both the Diff tab and the corrected YAML export call.**
+  A diff that showed something the export does not write would be worse than no diff,
+  because you would review the wrong thing and believe otherwise. Same reasoning as the
+  page and the CLI sharing one policy engine.
+
+- **`handoff.md`.** What the next person needs before touching anything: the constraints
+  that are defects rather than tradeoffs, the build and test commands, the eight confirmed
+  instances of this project's recurring failure mode with the instruction to prove every
+  new assertion can fail, the traps that have cost real time, and what is genuinely open.
+
+  It is checked. `test/ci.cjs` fails the build if the file goes missing or stops carrying
+  the no command guarantee, the mode gate, the no package manager constraint, how to run
+  the tests, the failure mode, or the manual check that no assertion can cover. A handoff
+  nothing verifies is a handoff that quietly stops being true, which is the same defect as
+  everything else in this list.
+
+### Fixed
+
+- **The corrected YAML export wrote a file called `undefined` containing the word
+  `undefined`, and had done since 1.5.0.** Selecting any Generate finding, which is the
+  default deny NetworkPolicy, triggered it. `defaultDenyPolicy` returns a Kubernetes
+  object, and the export read `.name` and `.yaml` off it, neither of which exists.
+  `previewFix` had built the name correctly all along, so the two paths disagreed.
+
+  It surfaced the moment a second caller existed, which is the argument for the refactor
+  above rather than a coincidence alongside it.
+
+  The test that should have caught it asserted `yamls.length === 2` on a list filtered by
+  `/\.ya?ml$/`. A file named `undefined` does not match that filter, so the count was
+  right past it for four releases. An equality check on a filtered count cannot see what
+  the filter excludes. It now asserts that every written file has a real name and real
+  content, and that a Generate finding produces a named NetworkPolicy.
+
+- **`showTab` treated any unrecognised name as the Audit tab**, because it encoded "not
+  remediate means audit" as a boolean. With a third tab that would have made Diff
+  unreachable by a single typo. It is a lookup now, and an unknown name still falls back
+  to Audit deliberately rather than by accident.
+
 ## 1.6.0 - 2026-09-08
 
 The findings a review left open, closed. Nothing here changes what the tool does to your

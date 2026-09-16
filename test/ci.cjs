@@ -173,7 +173,7 @@ console.log('\nTest counts are not typed into prose, where they go stale');
  * are scanned too, because they were simply omitted before rather than judged clean. */
 const countClaim = /\b\d{3,}\s+(?:tests?|assertions?|passed|in total)\b/i;
 for (const cf of ['README.md', 'docs/doc1.js', 'docs/doc2.js', 'docs/README.md',
-                  'dj_acs_auditor.html', 'docs/index.html']) {
+                  'dj_acs_auditor.html', 'docs/index.html', 'handoff.md']) {
   if (!fs.existsSync(path.join(ROOT, cf))) { t('  ' + cf + ' exists to be checked', false); continue; }
   const body = fs.readFileSync(path.join(ROOT, cf), 'utf8');
   const hits = body.split('\n')
@@ -182,6 +182,23 @@ for (const cf of ['README.md', 'docs/doc1.js', 'docs/doc2.js', 'docs/README.md',
   t('  ' + cf + ' states no hardcoded test count', hits.length === 0);
   for (const h of hits.slice(0, 3)) console.log('        line ' + h[0] + ': ' + h[1].trim().slice(0, 90));
 }
+/* The handoff is the first thing a cold agent reads, so it has to actually be there and
+   has to carry the parts that are expensive to rediscover rather than a file listing. */
+t('  handoff.md exists, because a cold start without it repeats a week of mistakes',
+  fs.existsSync(path.join(ROOT, 'handoff.md')));
+if (fs.existsSync(path.join(ROOT, 'handoff.md'))) {
+  const h = fs.readFileSync(path.join(ROOT, 'handoff.md'), 'utf8');
+  for (const [what, re] of [
+    ['the no command guarantee', /command to remediate/i],
+    ['the mode gate', /mode gate/i],
+    ['the no package manager constraint', /package manager/i],
+    ['how to run the tests', /test\/run_tests\.js/],
+    ['the recurring failure mode', /asserting nothing/i],
+    ['the instruction to prove a test can fail', /can fail/i],
+    ['the open manual check', /jsdom performs\s+no layout|no layout/i],
+  ]) t('  handoff.md carries ' + what, re.test(h));
+}
+
 t('  BUILD.txt is where the count actually lives',
   /^tests\s+\d+ with jsdom, \d+ without$/m.test(fs.readFileSync(path.join(ROOT, 'BUILD.txt'), 'utf8')));
 

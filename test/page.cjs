@@ -784,6 +784,102 @@ async function detailRows() {
   cleanup();
 }
 
+/* The Diff tab: what the fixes would change, side by side, before anything is written.
+ *
+ * The valuable assertion in here is not any single row. It is that the Diff tab and the
+ * corrected YAML export are computed by the same buildFixedCopy, so a review on this tab
+ * is a review of exactly what the export writes. A diff showing something the export does
+ * not produce would be worse than no diff, because you would review the wrong thing and
+ * believe otherwise.
+ */
+async function diffTab() {
+  const { w, $, cleanup } = await open('dj_acs_auditor.html',
+    'window.__load=(i)=>loadItems(i);window.__tab=(t)=>showTab(t);' +
+    'window.__S=()=>STATE;window.__sel=()=>FSELECTED;window.__key=(f)=>findingRowKey(f);' +
+    'window.__built=(x)=>buildFixedCopy(x);window.__fix=(f)=>fFixable(f);');
+  const M = (n) => ['apiVersion: apps/v1', 'kind: Deployment',
+    'metadata: { name: app-' + n + ', namespace: ns-' + n + ' }', 'spec:', '  template:',
+    '    spec:', '      hostNetwork: true', '      containers:', '      - name: c',
+    '        image: q/app-' + n + ':1',
+    '        env: [{ name: DB_PASSWORD, value: s3cret }]',
+    '        securityContext: { privileged: true }'].join('\n');
+w.__load([{name:'m/a.yaml',text:M(1)},{name:'m/b.yaml',text:M(2)}]);
+console.log('\nThe Diff tab');
+t('the tab button exists', !!$('tabDiffBtn'));
+w.__tab('diff');
+t('showTab reveals the pane', !$('tabDiff').classList.contains('hidden'));
+t('and hides the others', $('tabAudit').classList.contains('hidden') && $('tabRemediate').classList.contains('hidden'));
+t('an unknown tab name falls back to audit rather than showing nothing',
+  (w.__tab('nonsense'), !$('tabAudit').classList.contains('hidden')));
+w.__tab('diff');
+
+let files=w.document.querySelectorAll('#dFiles button.dfile');
+const names=Array.from(files).map(b=>b.dataset.f);
+t('both loaded manifests appear', names.indexOf('m/a.yaml')!==-1 && names.indexOf('m/b.yaml')!==-1);
+t('the generated NetworkPolicies appear as new files',
+  names.filter(n=>/networkpolicy-default-deny-.*\.yaml/.test(n)).length>0);
+t('and none of them is called undefined, which is what shipped from 1.5.0 to 1.6.0',
+  names.every(n=>n.indexOf('undefined')===-1));
+const gen=names.find(n=>/networkpolicy/.test(n));
+t('a generated file has real YAML on the right, not the word undefined',
+  (function(){ const b=Array.from(files).find(x=>x.dataset.f===gen); b.click();
+    const txt=$('dtable').textContent;
+    return /kind: NetworkPolicy/.test(txt) && txt.indexOf('undefined')===-1; })());
+files=w.document.querySelectorAll('#dFiles button.dfile');
+Array.from(files).find(x=>x.dataset.f==='m/a.yaml').click();
+files=w.document.querySelectorAll('#dFiles button.dfile');
+t('with an added and a removed count', /\+\d+/.test($('dFiles').textContent) && /-\d+/.test($('dFiles').textContent));
+t('the count line says how many files and fixes', /file\(s\) would change/.test($('dCount').textContent));
+
+const rows=w.document.querySelectorAll('#dtable tbody tr');
+t('the first file renders rows', rows.length>0);
+t('every row has four cells, so the columns cannot slip',
+  Array.from(rows).filter(r=>!r.classList.contains('skip')).every(r=>r.querySelectorAll('td').length===4));
+const chg=w.document.querySelectorAll('#dtable tbody tr.chg');
+t('a changed value is one row with both sides, not two rows', chg.length>0);
+const anyRow=chg[0];
+t('left holds the old text and right the new',
+  anyRow.querySelectorAll('td')[1].textContent!==anyRow.querySelectorAll('td')[3].textContent);
+t('privileged true is on the left somewhere', /privileged: true/.test($('dtable').textContent));
+t('and privileged false on the right', /privileged: false/.test($('dtable').textContent));
+
+console.log('\n  Nothing is applied by looking');
+t('STATE has no history', w.__S().history.length===0);
+t('no finding is marked applied', w.__S().findings.filter(f=>f.applied).length===0);
+t('the loaded YAML still says privileged: true',
+  /privileged: true/.test(w.jsyaml.dump(w.__S().files[0].docs[0])));
+
+console.log('\n  It works in report mode, because a diff is not an artifact');
+t('the mode is report', $('fixMode').value==='report');
+t('and rows are still rendered', w.document.querySelectorAll('#dtable tbody tr').length>0);
+
+console.log('\n  Switching files');
+files[1].click();
+t('clicking the second file changes the pane',
+  w.document.querySelectorAll('#dFiles button.dfile.on')[0].dataset.f==='m/b.yaml');
+
+console.log('\n  The selection filter');
+$('dSelOnly').checked=true; $('dSelOnly').dispatchEvent(new w.Event('change'));
+t('with nothing ticked the filter empties the view',
+  w.document.querySelectorAll('#dFiles button.dfile').length===0);
+t('and says why rather than going blank', /Nothing is ticked/.test($('dEmpty').textContent));
+const one=w.__S().findings.filter(f=>f.file==='m/a.yaml'&&!f.applied&&f.fixKind!=='manual')[0];
+w.__sel().add(w.__key(one));
+$('dSelOnly').dispatchEvent(new w.Event('change'));
+t('ticking one finding brings back exactly its file',
+  w.document.querySelectorAll('#dFiles button.dfile').length===1);
+
+console.log('\n  Hide unchanged lines');
+$('dCtx').checked=false; $('dCtx').dispatchEvent(new w.Event('change'));
+const all=w.document.querySelectorAll('#dtable tbody tr').length;
+$('dCtx').checked=true; $('dCtx').dispatchEvent(new w.Event('change'));
+const few=w.document.querySelectorAll('#dtable tbody tr').length;
+t('hiding context shows fewer rows', few<all);
+t('and says how many it hid', /unchanged line\(s\)/.test($('dtable').textContent));
+
+  cleanup();
+}
+
 async function scale() {
   const { w, $, cleanup } = await open('dj_acs_auditor.html',
     'window.__S=()=>STATE;window.__load=(i)=>loadItems(i);window.__tab=(t)=>showTab(t);' +
@@ -948,7 +1044,21 @@ async function bulkExport() {
 
   const yamls = got.filter((g) => /\.ya?ml$/.test(g.name));
   t('corrected YAML is written', yamls.length > 0);
-  t('one file per manifest that changed', yamls.length === 2);
+  /* This asserted exactly 2 and passed for four releases while the export was writing a
+     third file called "undefined" containing the word "undefined", produced whenever a
+     Generate finding was selected. The count was right past it: "undefined" does not
+     match /\.ya?ml$/, so the filter above never saw it. An equality check on a filtered
+     count cannot see what the filter excludes. */
+  t('one file per manifest that changed, plus the generated ones',
+    yamls.filter((g) => !/networkpolicy-default-deny/.test(g.name)).length === 2);
+  if (yamls.filter((g) => !/networkpolicy-default-deny/.test(g.name)).length !== 2) {
+    console.log('        wrote: ' + yamls.map((g) => g.name).join(', '));
+  }
+  t('every file written has a real name', got.every((g) => g.name.indexOf('undefined') === -1));
+  t('and real content', got.every((g) => typeof g.text === 'string' && g.text.length > 0));
+  const np = yamls.filter((g) => /networkpolicy-default-deny/.test(g.name));
+  t('a Generate finding writes a named NetworkPolicy rather than a file called undefined',
+    np.length > 0 && /kind: NetworkPolicy/.test(np[0].text));
   const doc = w.jsyaml.load(yamls[0].text);
   t('the fixes are actually in it',
     doc.spec.template.spec.containers[0].securityContext.privileged === false &&
@@ -1816,6 +1926,7 @@ async function specBudget() {
     ['tabs', tabs],
     ['bulkExport', bulkExport],
     ['scale', scale],
+    ['diffTab', diffTab],
     ['detailRows', detailRows],
     ['flashDwell', flashDwell],
     ['selectionUi', selectionUi],

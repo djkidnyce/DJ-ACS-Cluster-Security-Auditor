@@ -135,6 +135,34 @@ button.ovr.on{border-style:solid;border-color:var(--med);color:var(--med)}
    explanation of the button above. Kept here rather than inline so it restyles with the
    other notes. */
 #fModeWhy{margin:2px 0 12px;color:var(--med)}
+/* The Diff tab. A file list on the left, the chosen file side by side on the right.
+   Two columns of YAML need room, so the pane takes the remaining width and scrolls
+   horizontally inside itself rather than widening the page. */
+.dgrid{display:grid;grid-template-columns:minmax(180px,260px) minmax(0,1fr);gap:14px;align-items:start}
+@media(max-width:900px){.dgrid{grid-template-columns:1fr}}
+.dfiles{border:1px solid var(--border);border-radius:8px;overflow:hidden;max-height:70vh;overflow-y:auto}
+.dfile{display:block;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--border);
+  color:var(--text);padding:8px 10px;cursor:pointer;font-size:12.5px;font-family:inherit}
+.dfile:hover{background:var(--panel2)}
+.dfile.on{background:var(--panel2);box-shadow:inset 3px 0 0 var(--accent)}
+.dfile .dpath{display:block;overflow-wrap:anywhere;word-break:break-word}
+.dfile .dstat{font-family:ui-monospace,Consolas,monospace;font-size:11.5px}
+.dadd{color:var(--ok)} .ddel{color:var(--crit)}
+.dpane{min-width:0}
+.dhead{display:grid;grid-template-columns:1fr 1fr;gap:0;font-size:12px;color:var(--muted);
+  border:1px solid var(--border);border-bottom:0;border-radius:8px 8px 0 0}
+.dhead span{padding:6px 10px}
+.dhead span+span{border-left:1px solid var(--border)}
+#dtable{table-layout:fixed;width:100%;min-width:640px;font-family:ui-monospace,Consolas,monospace;font-size:11.5px}
+#dtable td{vertical-align:top;padding:1px 6px;white-space:pre-wrap;overflow-wrap:anywhere;border:0}
+#dtable col.dnum{width:44px}
+#dtable td.dnum{color:var(--muted);text-align:right;user-select:none}
+#dtable td.dl{border-right:1px solid var(--border)}
+#dtable tr.rem td.dl{background:rgba(220,60,60,.14)}
+#dtable tr.add td.dr{background:rgba(60,170,90,.14)}
+#dtable tr.chg td.dl{background:rgba(220,60,60,.14)}
+#dtable tr.chg td.dr{background:rgba(60,170,90,.14)}
+#dtable tr.skip td{color:var(--muted);background:var(--panel2);text-align:center;font-style:italic}
 .tabs{display:flex;gap:7px;margin-bottom:11px;flex-wrap:wrap}
 .tab{padding:5px 13px;border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:13px;background:var(--panel2)}
 .tab.on{border-color:var(--accent);color:var(--accent);font-weight:600}
@@ -271,6 +299,7 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
     <div class="tabbar">
       <button class="tabbtn on" id="tabAuditBtn" data-tab="audit">Audit</button>
       <button class="tabbtn" id="tabRemediateBtn" data-tab="remediate">Remediate</button>
+      <button class="tabbtn" id="tabDiffBtn" data-tab="diff">Diff</button>
     </div>
     <p class="tabhint" id="tabHint"></p>
 
@@ -412,6 +441,28 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
     </div>
     </div>
 
+    <div id="tabDiff" class="hidden">
+      <div class="section">
+        <h2>What the fixes would change</h2>
+        <p class="note" style="margin-top:4px">Left is the YAML you loaded. Right is the same
+          objects with the fixes applied to a copy. Nothing here writes anything, and nothing
+          you see on this tab has been applied to your files or to a cluster: it is the same
+          computation the corrected YAML export runs, shown before you commit to it.</p>
+        <div class="toolbar">
+          <label class="chk"><input type="checkbox" id="dSelOnly"> Only the findings I have ticked</label>
+          <label class="chk"><input type="checkbox" id="dCtx" checked> Hide unchanged lines</label>
+          <span class="note" id="dCount" style="margin:0"></span>
+        </div>
+        <p class="note hidden" id="dEmpty"></p>
+        <div class="dgrid">
+          <div class="dfiles" id="dFiles"></div>
+          <div class="dpane">
+            <div class="dhead"><span>before, as loaded</span><span>after, with fixes</span></div>
+            <div class="tablewrap"><table id="dtable"><tbody></tbody></table></div>
+          </div>
+        </div>
+      </div>
+    </div>
     <div id="tabRemediate" class="hidden">
     <div class="section">
       <h2>How do you want to work through these</h2>
@@ -823,16 +874,25 @@ const TAB_HINT = {
     'touch anything you loaded.',
   remediate: 'Edits the YAML you loaded, with a diff and a confirmation for every change, ' +
     'and undo all the way back. What it will let you do depends on the mode above.',
+  diff: 'Read only. What your YAML looks like now against what it would look like with the ' +
+    'fixes applied, side by side. Nothing here is applied, to your files or to a cluster.',
 };
 
 function showTab(name) {
-  const audit = name !== 'remediate';
-  $('tabAudit').classList.toggle('hidden', !audit);
-  $('tabRemediate').classList.toggle('hidden', audit);
-  $('tabAuditBtn').classList.toggle('on', audit);
-  $('tabRemediateBtn').classList.toggle('on', !audit);
-  $('tabHint').textContent = audit ? TAB_HINT.audit : TAB_HINT.remediate;
-  try { localStorage.setItem('acsTab', audit ? 'audit' : 'remediate'); } catch (e) { /* private mode */ }
+  /* Three tabs now, so this is a lookup rather than a boolean. Written as a list because
+     the two tab version encoded "not remediate means audit", which silently made every
+     unknown name mean audit and would have made the Diff tab unreachable by typo. */
+  const tabs = ['audit', 'remediate', 'diff'];
+  const want = tabs.indexOf(name) === -1 ? 'audit' : name;
+  for (const t of tabs) {
+    const pane = $('tab' + t.charAt(0).toUpperCase() + t.slice(1));
+    const btn = $('tab' + t.charAt(0).toUpperCase() + t.slice(1) + 'Btn');
+    if (pane) pane.classList.toggle('hidden', t !== want);
+    if (btn) btn.classList.toggle('on', t === want);
+  }
+  $('tabHint').textContent = TAB_HINT[want] || '';
+  if (want === 'diff') renderDiffTab();
+  try { localStorage.setItem('acsTab', want); } catch (e) { /* private mode */ }
 }
 
 function renderAcs() {
@@ -1841,6 +1901,107 @@ function bindFindingTable() {
   });
 }
 
+/* ------------------------------------------------------------------ the Diff tab
+ *
+ * Left is what you loaded, right is the same objects after the fixes, computed by the
+ * same buildFixedCopy the corrected YAML export uses. If these two ever showed different
+ * things, the review would be of something you were not about to download.
+ *
+ * It renders in every mode on purpose. A diff is analysis, not an artifact: you cannot
+ * oc apply a rendered table, nothing is written, and being able to see what a fix would
+ * do is exactly what helps somebody decide whether to leave report mode at all. The gate
+ * stays where it belongs, on the things that produce files.
+ */
+let DIFF_FILE = null;
+
+function diffRows(before, after) {
+  /* Turn a unified diff into aligned rows. A run of removals followed by a run of
+     additions is the common case for a changed value, so pair them up rather than
+     stacking them: a value that changed should read as one row, not two. */
+  const d = diffLines(before, after);
+  const rows = [];
+  let i = 0;
+  while (i < d.length) {
+    if (d[i].t === ' ') { rows.push({ t: 'ctx', l: d[i], r: d[i] }); i++; continue; }
+    const rem = [], add = [];
+    while (i < d.length && d[i].t === '-') { rem.push(d[i]); i++; }
+    while (i < d.length && d[i].t === '+') { add.push(d[i]); i++; }
+    const n = Math.max(rem.length, add.length);
+    for (let k = 0; k < n; k++) {
+      const l = rem[k] || null, r = add[k] || null;
+      rows.push({ t: l && r ? 'chg' : (l ? 'rem' : 'add'), l: l, r: r });
+    }
+  }
+  return rows;
+}
+
+function renderDiffTab() {
+  const only = $('dSelOnly') && $('dSelOnly').checked;
+  const wanted = STATE.findings.filter((f) =>
+    fFixable(f) && (!only || FSELECTED.has(findingRowKey(f))));
+  const built = buildFixedCopy(wanted);
+
+  const changed = built.touched.map((f) => {
+    const before = dumpDocs((built.byName[f.name] || {}).originalDocs || []);
+    const after = dumpDocs(f.docs);
+    const d = diffLines(before, after);
+    return { name: f.name, before: before, after: after,
+             add: d.filter((x) => x.t === '+').length,
+             del: d.filter((x) => x.t === '-').length };
+  }).concat(built.generated.map((g) => ({
+    name: g.name + '  (new file)', before: '', after: g.text,
+    add: g.text.split('\n').length, del: 0 })));
+
+  const tb = $('dtable').querySelector('tbody');
+  setCount('dCount', changed.length
+    ? changed.length + ' file(s) would change, ' + built.applied.length + ' fix(es)'
+    : (wanted.length ? 'no file would change' : 'nothing selected'), false);
+
+  if (!changed.length) {
+    $('dFiles').innerHTML = '';
+    tb.innerHTML = '';
+    $('dEmpty').classList.remove('hidden');
+    $('dEmpty').textContent = !STATE.files.length
+      ? 'No manifests are loaded, so there is nothing to compare. Drop your YAML on the Audit tab first.'
+      : (only && !FSELECTED.size
+        ? 'Nothing is ticked on the Remediate tab, and this view is filtered to your selection. Untick the filter to see every change.'
+        : 'The fixes produce no change to the files you loaded.');
+    return;
+  }
+  $('dEmpty').classList.add('hidden');
+
+  if (!changed.some((c) => c.name === DIFF_FILE)) DIFF_FILE = changed[0].name;
+  $('dFiles').innerHTML = changed.map((c) =>
+    '<button class="dfile' + (c.name === DIFF_FILE ? ' on' : '') + '" data-f="' + esc(c.name) + '">' +
+    '<span class="dpath">' + esc(c.name) + '</span>' +
+    '<span class="dstat"><span class="dadd">+' + c.add + '</span> ' +
+    '<span class="ddel">-' + c.del + '</span></span></button>').join('');
+
+  const cur = changed.find((c) => c.name === DIFF_FILE);
+  const rows = diffRows(cur.before, cur.after);
+  const hide = $('dCtx') && $('dCtx').checked;
+  const keep = new Set();
+  if (hide) {
+    rows.forEach((r, i) => {
+      if (r.t === 'ctx') return;
+      for (let k = Math.max(0, i - 3); k <= Math.min(rows.length - 1, i + 3); k++) keep.add(k);
+    });
+  }
+  const out = [];
+  let skipped = 0;
+  rows.forEach((r, i) => {
+    if (hide && !keep.has(i)) { skipped++; return; }
+    if (skipped) { out.push('<tr class="skip"><td colspan="4">' + skipped + ' unchanged line(s)</td></tr>'); skipped = 0; }
+    out.push('<tr class="' + r.t + '">' +
+      '<td class="dnum">' + (r.l ? r.l.an : '') + '</td>' +
+      '<td class="dl">' + (r.l ? esc(r.l.text) : '') + '</td>' +
+      '<td class="dnum">' + (r.r ? r.r.bn : '') + '</td>' +
+      '<td class="dr">' + (r.r ? esc(r.r.text) : '') + '</td></tr>');
+  });
+  if (skipped) out.push('<tr class="skip"><td colspan="4">' + skipped + ' unchanged line(s)</td></tr>');
+  tb.innerHTML = out.join('');
+}
+
 function advisoryHtml(f) {
   const p = f.policy;
   return '<div class="kv">' +
@@ -2653,6 +2814,18 @@ document.querySelectorAll('input.fsev').forEach((c) =>
    every innerHTML assignment, which is what makes a single string render possible. */
 bindFindingTable();
 
+/* Diff tab wiring. The file list is delegated, so re-rendering it never leaves a dead
+   button behind, which is the defect this page has shipped twice. */
+for (const id of ['dSelOnly', 'dCtx']) {
+  if ($(id)) $(id).addEventListener('change', renderDiffTab);
+}
+if ($('dFiles')) $('dFiles').addEventListener('click', (ev) => {
+  const b = ev.target.closest('button.dfile');
+  if (!b) return;
+  DIFF_FILE = b.dataset.f;
+  renderDiffTab();
+});
+
 /* All three act on FROWS, which is exactly what is drawn, so "every fixable finding
    currently shown" means the rows on screen and nothing else. None of them calls
    renderTable(): repainting 750 checkboxes does not require rebuilding 750 rows, and
@@ -2674,24 +2847,39 @@ if ($('btnFSelNone')) $('btnFSelNone').addEventListener('click', () => {
   paintFindingChecks();
 });
 
-if ($('btnExportFixed')) $('btnExportFixed').addEventListener('click', async () => {
-  if (!requireMode('patches', 'write corrected YAML')) return;
-  if (!FSELECTED.size) { flash('Nothing selected.', FLASH_REFUSAL_MS); return; }
-
-  /* Work on a copy. The whole point is that exporting is not applying. */
+/* One place that turns a set of findings into corrected files.
+ *
+ * The Diff tab and the corrected YAML export must never disagree about what a fix does.
+ * The only way to guarantee that is for both to call the same function, the same way the
+ * page and the CLI share one policy engine. A diff that shows something the export does
+ * not write would be worse than no diff, because you would review the wrong thing and
+ * believe you had reviewed the right one.
+ *
+ * It works on a structuredClone, so STATE is never touched no matter who calls it.
+ */
+function buildFixedCopy(wanted) {
   const files = structuredClone(STATE.files.map((f) => ({
     name: f.name, docs: f.docs, originalDocs: f.originalDocs, errors: [], generated: !!f.generated,
   })));
   const byName = {};
   for (const f of files) byName[f.name] = f;
 
-  const wanted = STATE.findings.filter((f) => FSELECTED.has(findingRowKey(f)) && fFixable(f));
   const applied = [], skipped = [], generated = [];
-
   for (const f of wanted) {
     if (f.fixKind === 'generate') {
-      const gen = defaultDenyPolicy(f.ns);
-      generated.push({ name: gen.name, text: gen.yaml, finding: f });
+      /* defaultDenyPolicy returns a Kubernetes object, not a { name, yaml } wrapper.
+         Reading gen.name and gen.yaml off it produced a file called "undefined"
+         containing the word "undefined", and it shipped that way from 1.5.0 to 1.6.0.
+         Nothing caught it because only one caller existed and the export test matched
+         downloaded files on /\.ya?ml$/, which a file named "undefined" does not match,
+         so the assertion counted right past it. previewFix built the name correctly all
+         along; this is the same construction. */
+      const doc = defaultDenyPolicy(f.ns);
+      generated.push({
+        name: 'networkpolicy-default-deny-' + f.ns + '.yaml',
+        text: jsyaml.dump(doc, { noRefs: true }),
+        finding: f,
+      });
       applied.push(f);
       continue;
     }
@@ -2702,9 +2890,19 @@ if ($('btnExportFixed')) $('btnExportFixed').addEventListener('click', async () 
     target.docs = res.docs;
     applied.push(f);
   }
-
   const touched = files.filter((f) => !f.generated &&
     JSON.stringify(f.docs) !== JSON.stringify(f.originalDocs));
+  return { files, byName, applied, skipped, generated, touched };
+}
+
+if ($('btnExportFixed')) $('btnExportFixed').addEventListener('click', async () => {
+  if (!requireMode('patches', 'write corrected YAML')) return;
+  if (!FSELECTED.size) { flash('Nothing selected.', FLASH_REFUSAL_MS); return; }
+
+  const wanted = STATE.findings.filter((f) => FSELECTED.has(findingRowKey(f)) && fFixable(f));
+  const built = buildFixedCopy(wanted);
+  const files = built.files, applied = built.applied,
+        skipped = built.skipped, generated = built.generated, touched = built.touched;
 
   if (!touched.length && !generated.length) {
     flash('Nothing changed. ' + (skipped.length ? skipped.length + ' could not be applied.' : ''),
