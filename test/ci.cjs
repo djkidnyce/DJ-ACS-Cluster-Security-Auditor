@@ -174,7 +174,13 @@ console.log('\nTest counts are not typed into prose, where they go stale');
 const countClaim = /\b\d{3,}\s+(?:tests?|assertions?|passed|in total)\b/i;
 for (const cf of ['README.md', 'docs/doc1.js', 'docs/doc2.js', 'docs/README.md',
                   'dj_acs_auditor.html', 'docs/index.html', 'handoff.md']) {
-  if (!fs.existsSync(path.join(ROOT, cf))) { t('  ' + cf + ' exists to be checked', false); continue; }
+  if (!fs.existsSync(path.join(ROOT, cf))) {
+    /* handoff.md is gitignored on purpose, so a CI checkout will not have it. Absence is
+       correct there and a defect nowhere, but say which file was skipped rather than
+       quietly checking one fewer thing than the label claims. */
+    if (cf === 'handoff.md') { console.log('        skipped ' + cf + ', not present in this checkout'); continue; }
+    t('  ' + cf + ' exists to be checked', false); continue;
+  }
   const body = fs.readFileSync(path.join(ROOT, cf), 'utf8');
   const hits = body.split('\n')
     .map((l, n) => [n + 1, l])
@@ -182,11 +188,19 @@ for (const cf of ['README.md', 'docs/doc1.js', 'docs/doc2.js', 'docs/README.md',
   t('  ' + cf + ' states no hardcoded test count', hits.length === 0);
   for (const h of hits.slice(0, 3)) console.log('        line ' + h[0] + ': ' + h[1].trim().slice(0, 90));
 }
-/* The handoff is the first thing a cold agent reads, so it has to actually be there and
-   has to carry the parts that are expensive to rediscover rather than a file listing. */
-t('  handoff.md exists, because a cold start without it repeats a week of mistakes',
-  fs.existsSync(path.join(ROOT, 'handoff.md')));
-if (fs.existsSync(path.join(ROOT, 'handoff.md'))) {
+/* The handoff is a working document, not a release artifact.
+ *
+ * What CI can assert is the policy: that it stays out of the published repository. What
+ * it cannot assert is the content, because a fresh checkout does not have the file. So
+ * the content checks run only where the file exists, which is a working tree, and the run
+ * says plainly when it skipped them. A check that silently examines nothing is the defect
+ * this project keeps finding in itself. */
+t('  handoff.md is gitignored, so it is never published',
+  /^handoff\.md\s*$/m.test(fs.readFileSync(path.join(ROOT, '.gitignore'), 'utf8')));
+if (!fs.existsSync(path.join(ROOT, 'handoff.md'))) {
+  console.log('        handoff.md is not in this checkout, so its content was not checked.');
+  console.log('        That is expected in CI and a problem in a working tree.');
+} else {
   const h = fs.readFileSync(path.join(ROOT, 'handoff.md'), 'utf8');
   for (const [what, re] of [
     ['the no command guarantee', /command to remediate/i],

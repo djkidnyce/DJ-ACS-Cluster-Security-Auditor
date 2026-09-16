@@ -34,16 +34,18 @@ tool stamps into every report and patch header it writes.
   because you would review the wrong thing and believe otherwise. Same reasoning as the
   page and the CLI sharing one policy engine.
 
-- **`handoff.md`.** What the next person needs before touching anything: the constraints
-  that are defects rather than tradeoffs, the build and test commands, the eight confirmed
-  instances of this project's recurring failure mode with the instruction to prove every
-  new assertion can fail, the traps that have cost real time, and what is genuinely open.
+- **`handoff.md`, gitignored and deliberately unpublished.** What the next person needs
+  before touching anything: the constraints that are defects rather than tradeoffs, the
+  build and test commands, the eight confirmed instances of this project's recurring
+  failure mode with the instruction to prove every new assertion can fail, the traps that
+  have cost real time, and what is genuinely open.
 
-  It is checked. `test/ci.cjs` fails the build if the file goes missing or stops carrying
-  the no command guarantee, the mode gate, the no package manager constraint, how to run
-  the tests, the failure mode, or the manual check that no assertion can cover. A handoff
-  nothing verifies is a handoff that quietly stops being true, which is the same defect as
-  everything else in this list.
+  It is a working document, not a release artifact, so it stays out of the repository and
+  out of the release. That split what CI can check. It asserts the policy, that the file
+  remains ignored, which holds in a fresh checkout. It asserts the content only where the
+  file exists, which is a working tree, and it prints which checks it skipped and why.
+  A check that silently examines nothing is the defect this project keeps finding in
+  itself, so it does not get to be silent here either.
 
 ### Fixed
 

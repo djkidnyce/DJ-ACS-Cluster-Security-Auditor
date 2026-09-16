@@ -59,6 +59,17 @@ Thumbs.db
 *.tar.gz
 dist/
 
+# The working handoff, deliberately not published.
+#
+# It is the notes another agent or another person needs to pick this up: the constraints,
+# the traps, the failure mode, what is genuinely open. Useful to whoever is working on the
+# tool, not to whoever downloads it, and it is the kind of document that ends up carrying
+# environment detail that has no business in a public repository.
+#
+# test/ci.cjs asserts it stays ignored, and checks its contents only when it is present,
+# so the build does not depend on a file the build cannot see.
+handoff.md
+
 # Probe files from tooling
 .acs_write_probe
 .write_test
