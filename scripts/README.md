@@ -9,6 +9,55 @@ Pull every finding ACS has, low to critical, from outside the browser.
 | `acs_pull_over_ssh.ps1` | PowerShell. Runs the commands on an SSH bastion and brings the output back. |
 | `acs_pull_all.sh` | macOS, Linux, WSL, Git Bash. Written for bash 3.2 so it runs on a stock macOS shell. |
 | `acs_pull_all.ps1` | Windows PowerShell and PowerShell 7. |
+| `acs_rollout.sh` | After the fixes are applied: what is running, which revision it is on, what changed it, and the command to put it back. Prints commands, never runs them. |
+
+## acs_rollout.sh
+
+This is the one you reach for after applying fixes, when pods are in CrashLoopBackOff and
+you need to know what to put back.
+
+It never writes. Every call it makes is a read: `get`, `rollout history`. It does not run
+`rollout undo`, `rollback`, `apply`, `patch`, `delete` or `scale`. It prints the commands
+and you run the ones you want. The test suite drives it against a fake `oc` that refuses
+every write verb and asserts none was ever issued, because on this script that promise is
+the whole design rather than a nice property.
+
+```sh
+./acs_rollout.sh plan                       # start here
+./acs_rollout.sh broken -n prod             # workloads with unhealthy pods, and why
+./acs_rollout.sh touched                    # workloads the auditor changed, healthy or not
+./acs_rollout.sh history -n prod deployment/api
+./acs_rollout.sh snapshot -o ./rollback     # write the lot to files, reads only
+./acs_rollout.sh undo -n prod deployment/api --to-revision 6
+./acs_rollout.sh restore ./rollback/workloads.json -n prod cronjob/nightly
+```
+
+`broken` and `touched` answer different questions and the difference matters. `broken` is
+triage by symptom whatever the cause, so it includes workloads this tool never touched.
+`touched` reads the `acs-auditor/applied` annotation, so it includes a workload that took a
+bad fix and has not restarted yet. `plan` prints both and calls out the overlap, which is
+where to start.
+
+It handles Deployment, StatefulSet, DaemonSet and DeploymentConfig, and does not pretend
+they roll back the same way. Deployments, StatefulSets and DaemonSets take
+`oc rollout undo`. A DeploymentConfig takes `oc rollback` with `--to-version`, and printing
+the wrong verb for one is worse than printing nothing because it looks authoritative and
+fails at the worst moment.
+
+`restore` is for the kinds with no rollout at all, CronJobs and Jobs, and for a workload
+whose old revisions `revisionHistoryLimit` already pruned. It reads a capture rather than
+the cluster, strips the fields the server owns, and needs no `oc` on PATH, which is the
+point: it has to work on the machine that cannot reach the cluster.
+
+Two things about revisions that cost people time:
+
+A rollback does not delete revisions. It creates a new one carrying the old spec, so the
+numbers keep climbing and the revision you rolled back from is still there. Roll back from
+7 to 3 and you get an 8 that looks like 3.
+
+`revisionHistoryLimit` defaults to 10 and prunes silently. `--to-revision` on a revision
+that has been pruned answers `unable to find specified revision in history`, and no flag
+brings it back. That is what `snapshot` is for: capture the history while it still exists.
 
 ## PowerShell through an SSH bastion
 

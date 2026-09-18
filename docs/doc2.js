@@ -31,15 +31,15 @@ const title = [
   new Paragraph({ children: [new PageBreak()] }),
 ];
 
-const tocItems = ['1. What you are maintaining', '2. Repository layout', '3. The one architectural rule',
-  '4. The fix mode gate', '5. The two ACS data planes', '6. Running the test suites',
-  '7. Adding or changing a policy', '8. Keeping the standards current', '9. Vendored dependencies',
-  '10. Waivers and accepted risk', '11. CI integration', '12. Release procedure',
-  '13. Security posture of the tooling itself', '14. Maintainer troubleshooting',
-  '15. Ownership and escalation'];
+/* Derived from the headings rather than typed out beside them. Kept by hand, it had
+   already drifted: it listed fifteen sections against a document with nineteen, and the
+   last three numbers pointed at the wrong sections. A contents page that disagrees with
+   the document is worse than none, because a reader trusts it. */
+const TOC_ITEMS = [];
+const TOC_PLACEHOLDER = Symbol('toc');
 const toc = [
   P('Contents', { heading: HeadingLevel.HEADING_1 }),
-  ...tocItems.map((t) => P(t, { spacing: { after: 90 }, size: 22 })),
+  TOC_PLACEHOLDER,
   P('Figures', { bold: true, size: 22, spacing: { before: 240, after: 90 } }),
   ...['Figure 5. Architecture of both toolsets (section 3)',
       'Figure 7. The two ACS data planes (section 5)',
@@ -48,7 +48,7 @@ const toc = [
 ];
 
 const body = [];
-const H1 = (t) => body.push(P(t, { heading: HeadingLevel.HEADING_1, spacing: { before: 320, after: 140 } }));
+const H1 = (t) => (TOC_ITEMS.push(t), body).push(P(t, { heading: HeadingLevel.HEADING_1, spacing: { before: 320, after: 140 } }));
 const H2 = (t) => body.push(P(t, { heading: HeadingLevel.HEADING_2, spacing: { before: 240, after: 100 } }));
 const T = (t) => body.push(P(t));
 const push = (a) => a.forEach((x) => body.push(x));
@@ -208,6 +208,13 @@ push([Tbl(['Suite', 'Covers'], [
   ['page.cjs', 'The pages in a real DOM, driven end to end. Needs jsdom, skips cleanly without it.'],
 ], [2200, 7100])]);
 body.push(P('', { spacing: { after: 140 } }));
+H2('Running one suite instead of all of them');
+push(Code(['node test/page.cjs annotations optOuts filesPanel']));
+T('The page suites take minutes together, which is long enough that a maintainer iterating on one of them will be tempted to stop running the others. Named suites run alone, and the run ends with PARTIAL RUN naming what was selected so a filtered result cannot be mistaken for a full one. A name that does not exist exits 2 and prints the real ones rather than quietly running everything.');
+push(Note('warn', 'Mutate every assertion you add, before you trust it', [
+  'The filter exists chiefly for this. Break the code the new test covers on purpose, run that one suite, and watch it fail. If it still passes, the test asserts nothing, and this project has shipped eight of those.',
+  'Two examples from the 1.8.0 work alone. The exception tests all passed against an engine that never applied a stored exception to a rescan, because the click handler stamped the finding directly and nothing re-derived it. The file list tests all passed against a version that counted files where it claimed to count documents, because the fixture happened to have one document per file.']));
+
 H2('The optional whole page tests');
 T('test/page.cjs loads each HTML file from disk in a real DOM, with the actual script tags resolving to the actual files in document order, then drives it: drops an export, checks the panel unhides, clicks the filters, expands a violation row, drafts the fixes and inspects the YAML that would have been downloaded, and walks the image replacement dialog through preview, confirm and undo, and exports corrected YAML for a filtered selection then reads back what came out of the ZIP. The count for any given build is in BUILD.txt.');
 T('It catches a class of defect the engine tests structurally cannot see. An element id that does not exist, a handler never bound, a panel that never unhides, a filter wired to the wrong checkbox. The engine can be perfect and the page still show nothing.');
@@ -325,6 +332,25 @@ push(Code(['waivers:',
 H2('The expiry field is not optional, and that is deliberate');
 T('On the expiry date the finding returns automatically, the build gate counts it again, and the summary flags it as expired. Security exceptions granted without a deadline become permanent, and years later nobody remembers why the exception exists or whether the reason still applies. A date forces a fresh decision by someone who is still around to make it.');
 T('Waived findings still appear in the report, marked as waived with the justification, so an auditor sees exactly what was accepted and why. They do not lower the score, because a documented decision was made. Expired ones do.');
+H2('Namespace scope, and the one invariant that matters');
+T('The page can take a namespace out of scope. When it does, two things move together: the findings and the objects. scopedFindings() filters the findings, scopedFiles() filters the documents inside each file, and computePosture receives both. STATE.scanned holds everything the scan found and STATE.findings holds what is in scope, so the thirty seven places that read STATE.findings are scoped without each of them remembering to be.');
+push(Note('crit', 'Never scope one half of the score', [
+  'A posture score is passed weight over total applicable weight, and the denominator is built from the scanned objects. Scope the findings and not the objects and every excluded object keeps its weight in the denominator with none of its failures in the numerator. Deselecting a namespace would then raise the score, which is a security control that rewards looking away.',
+  'The regression test excludes one of two identical namespaces and asserts the score does not move. Mutating computePosture back to the unscoped file list fails it. If you touch scoping, run that test and watch it fail against the mutation before you trust it.']));
+push(Note('warn', 'The empty denominator guard is on the scope, not the load', [
+  'This project already fixed a defect where a score over zero manifests rendered as 100 out of 100, Grade A. Namespace scoping reopened it through a new door: files loaded, every namespace deselected, denominator empty, Grade A. The guard reads scopedFiles().length for that reason, and test/posture_platform.cjs asserts the guard sits before the scoring rather than after it.',
+  'That engine test found the regression, and it found it only because it checks source order rather than behaviour. It had also silently stopped matching when the call signature changed, so it was passing on an indexOf of -1. Both are fixed. Treat source order assertions as fragile and give them something to fail against.']));
+
+H2('Per finding exceptions in the page');
+T('Since 1.8.0 the page carries its own exception mechanism, which is narrower than a waiver file and deliberately so. An operator can opt a single finding out of the corrected YAML, one policy against one object, with a reason that is required rather than optional. Empty reasons, reasons too short to be an audit record, and a list of non answers are refused at the point of entry.');
+push([Bul('The engine owns the rule. optOutReasonProblem() in acs_policies.js is the single definition of what counts as documented, so the page and anything built on the CLI cannot disagree about it.'),
+      Bul('Excepted findings stay in the report and in the JSON, carrying their reason in an exception field. They are excluded from the corrected YAML and from Select all. Nothing is deleted from the record.'),
+      Bul('The register travels as acs_exceptions_<stamp>.json and is carried inside the corrected YAML export. Entries with the reason removed by hand are rejected on import rather than accepted blank.'),
+      Bul('There is no expiry field, unlike the waiver model above. That is a known gap rather than a decision, and it is the obvious next change to this feature.')]);
+push(Note('warn', 'The browser copy is not the record', [
+  'The page keeps a copy in localStorage, but a page opened from a file:// URL has an opaque origin and touching localStorage throws rather than returning nothing. That is the normal way this tool is used, so the storage path is wrapped everywhere and the feature falls back to its defaults without it.',
+  'Treat the JSON file as the record. It belongs in the repository beside the manifests, where it is reviewed like any other change.']));
+
 H2('Per resource waivers');
 T('The ACS Auditor does not read a waiver file today. The exception mechanism that applies to it is the one in ACS itself: a policy exception with an expiry, which the tool then sees reflected in the export as a deferred violation and reports as accepted rather than active. Use that rather than inventing a local override, because an exception ACS does not know about does not stop ACS alerting on it.');
 push(Note('warn', 'Review waivers on a schedule', [
@@ -436,7 +462,20 @@ push(Note('crit', 'If you extend the summary script', [
   'Keep it to counts of what ACS reported. Nothing inferred, nothing weighted, nothing called a score.',
   'test/scripts.cjs asserts that its output contains no grade and no score, and that it states what it cannot tell you. Those assertions are the guard rail; do not relax them to make a nicer looking report.']));
 
-H1('17. Maintainer troubleshooting');
+H1('17. The rollout script');
+T('scripts/acs_rollout.sh is the only script in this repository whose entire purpose is deciding what to change back, which is why it is the only one driven under execution in the test suite rather than read statically. test/scripts.cjs stands up a fake oc on PATH that answers reads from fixtures and exits 99 on any write verb, then drives every subcommand and asserts that no write was ever issued and that the fake never had to refuse anything.');
+push([Bul('It prints commands. It does not run oc rollout undo, rollback, apply, patch, delete or scale, and a mutation that makes it execute the command instead of printing it fails six assertions.'),
+      Bul('A broken pod is mapped through its ReplicaSet or ReplicationController to the workload that owns it. Mutating that resolution away fails five.'),
+      Bul('Deployment, StatefulSet and DaemonSet take oc rollout undo. DeploymentConfig takes oc rollback with --to-version. Printing the wrong verb for a DeploymentConfig looks authoritative and fails at the worst moment, so it has its own assertions.'),
+      Bul('restore deliberately does not require oc on PATH. It reads a capture file, and the one subcommand meant for a machine that cannot reach the cluster was briefly the only one that refused to run there.')]);
+push(Note('warn', 'It is written for dash as well as bash, and that is tested', [
+  'This repository has already shipped a script that worked under bash and silently dropped arguments under dash. No mapfile, no associative arrays, no process substitution, no bash only parameter expansion. The suite runs plan and touched under /bin/dash and asserts the same output.',
+  'Two dash incompatibilities were caught while writing it: comm with process substitution, and a counter set inside a while loop on the right of a pipe, which runs in a subshell and loses the value the moment the loop ends.']));
+push(Note('crit', 'A crash is not a failure, including in your own mutation harness', [
+  'While mutation testing this script, one mutation appeared to survive. It had not: it threw a TypeError out of an assertion, which killed the test file before it printed a single FAIL line, and the harness counted FAIL lines. The suite exited non zero the whole time and the count said zero.',
+  'The assertions were made defensive so the mutation now produces two named failures. When you mutation test anything here, check the exit code, not the count.']));
+
+H1('18. Maintainer troubleshooting');
 push([Tbl(['Symptom', 'Diagnosis'], [
   ['mapfile: command not found', 'bash 3.2 on macOS. See section 10.'],
   ['A test passes against known broken code', 'The fixture cancels the error out. Rebuild it so the defect is observable, then confirm the test fails against the old code.'],
@@ -455,7 +494,7 @@ push([Tbl(['Symptom', 'Diagnosis'], [
 ], [3200, 6100])]);
 
 // 13
-H1('18. Ownership and escalation');
+H1('19. Ownership and escalation');
 T('Both toolsets are maintained by DJ. Issues, policy suggestions, and pull requests: github.com/djkidnyce');
 H2('What to include in a report');
 push([Bul('For a scoring or matching problem: the manifest set, and the ACS export if you can share it. A match failure cannot be reproduced without both.'),
@@ -476,6 +515,10 @@ const doc = new Document({
   } },
   features: { updateFields: true },
   sections: [Object.assign({}, pageSetup('Administration Guide  |  ACS Auditor'),
-    { children: [...title, ...toc, ...body] })],
+    { children: [...title,
+      ...toc.flatMap((n) => (n === TOC_PLACEHOLDER
+        ? TOC_ITEMS.map((x) => P(x, { spacing: { after: 90 }, size: 22 }))
+        : [n])),
+      ...body] })],
 });
 Packer.toBuffer(doc).then((b) => { fs.writeFileSync(__dirname + '/DJ_Security_Tooling_Administration_Guide.docx', b); console.log('WROTE', b.length, 'bytes'); });

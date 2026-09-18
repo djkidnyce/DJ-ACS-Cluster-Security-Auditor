@@ -11,6 +11,133 @@ at least; removing or renaming one is a major.
 Every release is tagged. `git tag -l` is the list, and the tag matches the version this
 tool stamps into every report and patch header it writes.
 
+## 1.8.0 - 2026-09-18
+
+### Added
+
+- **Opt out of a fix, with a reason on the record.** Any finding can be excepted from the
+  corrected YAML, one policy against one object at a time. Excepting
+  `automountServiceAccountToken` on a batch job says nothing about the same policy on the
+  deployment next to it. The reason is required: an empty one, a reason too short to be an
+  audit record, and a list of non answers (`n/a`, `none`, `by design`, `wont fix`) are
+  refused in place, next to the box, rather than accepted and filed. An exception with no
+  reason cannot be told apart from a finding nobody looked at, which is the state this
+  exists to prevent.
+
+  An excepted finding is excluded from the corrected YAML and from Select all, and it is
+  still in the report, still in the JSON, and now carries its reason there. It is
+  recorded, not hidden.
+
+- **Exceptions travel as a file.** `Save exceptions` writes `acs_exceptions_<stamp>.json`,
+  which the corrected YAML export also carries. `Load exceptions` reads one back on any
+  machine running the auditor, and entries whose reason was deleted by hand are rejected
+  on the way in rather than imported blank. The browser copy is a convenience; this file
+  is the record, and it can sit in the same repository as the manifests and be reviewed
+  like anything else.
+
+- **Every fixed object says which run changed it.** Two annotations are written: the
+  object gets `kubernetes.io/change-cause`, which is the column `oc rollout history`
+  prints, and the pod template gets `acs-auditor/applied`, which is what travels into the
+  ReplicaSet or ControllerRevision for that revision. The object level annotation alone
+  does not survive into a revision, so both are required.
+
+  The value reads `2026-09-18 14:40Z / DJ ACS Auditor 1.8.0 / ACS-20260918-1440-001`.
+  Short enough for the column that prints it. The reference resolves to a register in
+  `READ_THIS_FIRST.md` and in the change log, which says which object it was, which
+  policies were applied, and which of them can stop the workload. Objects that were not
+  changed are not annotated: stamping them would alter the pod template hash and restart a
+  workload to record that nothing happened to it.
+
+- **The loaded file list folds.** Twelve files or fewer it stays open, past that it folds
+  itself, and the summary carries the file count, the document count and the finding count
+  so folding it costs nothing. The choice is remembered where the browser allows it. A
+  file that failed to parse forces the list open and is counted in the summary: a parse
+  error behind a fold reads as a clean scan of a file that was never scanned.
+
+- **Suite filter in the page tests.** `node test/page.cjs annotations optOuts` runs those
+  suites and says `PARTIAL RUN` so a filtered run cannot be mistaken for a full one. An
+  unknown name exits 2 with the list of real ones instead of quietly running everything.
+
+- **Namespace scope on the Audit tab.** Every loaded namespace is listed with its object
+  and finding counts, and unticking one takes it out of scope: out of the findings, out of
+  the posture score, out of the report and out of the JSON. Both halves are scoped
+  together. Scoping the findings but not the objects would leave every excluded object in
+  the denominator with none of its failures in the numerator, so deselecting a namespace
+  would raise the score. The test for this excludes one of two identical namespaces and
+  asserts the score does not move.
+
+  The report says so where a reader cannot miss it. The HTML report opens with a note
+  naming every excluded namespace and how many findings and objects went with it, above
+  the score rather than below it, and the JSON carries the same under `scope`. A posture
+  number for part of an estate is fine to publish and dishonest to publish silently.
+
+- **Deselect platform namespaces in one click.** openshift, kube, stackrox, rhacs and the
+  rest, out of scope together.
+
+- **A Namespace column on both tables, sortable, with a platform mark.** Platform
+  namespaces carry a pill on every row explaining that operators and control plane
+  components there need the Kubernetes API and that a fix removing their access will stop
+  them. Fixes on them remain available: the mark is advisory, and the namespace selector
+  is the control that actually removes them from reach.
+
+- **Namespace filter on the Remediate tab.** Work one namespace at a time. Select all
+  shown then takes only that namespace.
+
+- **Namespace coverage in the export.** `READ_THIS_FIRST.md` and the change log now carry
+  a row for every namespace that was in scope, whether or not anything was applied to it,
+  with how many findings were fixed, excepted, left for a human and left. The namespaces
+  that received no fixes are named again underneath, because a reader scanning a long
+  table will not do the subtraction. Namespaces excluded before the scan get their own
+  section saying they were not examined.
+
+- **`scripts/acs_rollout.sh`.** The other half of the annotations: what is running, which
+  revision it is on, what changed it, and the command to put it back.
+
+  It never writes. Every call is a read, and the test suite drives it against a fake `oc`
+  that refuses every write verb and asserts none was ever issued. Making it execute the
+  command instead of printing it fails six assertions.
+
+  `plan` prints two lists and their overlap. `broken` is triage by symptom whatever the
+  cause, and reports the workload that owns an unhealthy pod rather than the ReplicaSet in
+  between. `touched` reads the `acs-auditor/applied` annotation, so it catches a workload
+  that took a bad fix and has not restarted yet. `history`, `snapshot`, `undo` and
+  `restore` do what they say.
+
+  Deployment, StatefulSet, DaemonSet and DeploymentConfig are each given the command they
+  actually take: `oc rollout undo` for the first three, `oc rollback --to-version` for a
+  DeploymentConfig. `restore` handles the kinds with no rollout at all, reads a capture
+  rather than the cluster, strips the fields the server owns, and needs no `oc` on PATH.
+
+  Written for dash as well as bash, and the suite runs it under both. This repository has
+  already shipped a script that worked under bash and silently dropped arguments under
+  dash.
+
+- **Contents pages derived from the headings.** Both guides built their contents from a
+  hand kept list beside the document. The administration guide's had already drifted: it
+  listed fifteen sections against a document with nineteen, and the last three numbers
+  pointed at the wrong sections.
+
+### Fixed
+
+- **A posture score of 100, Grade A, over an empty scope.** The guard that refuses to
+  score zero manifests was checking the loaded file list. Namespace scoping reopened the
+  defect through a new door: files loaded, every namespace deselected, denominator empty,
+  Grade A. The guard now runs on the scoped file set and the page says which of the two
+  empties it is.
+
+### Changed
+
+- A finding with no mechanical fix now has something in its action cell: the opt out
+  button. It has no Fix this button, which is what the spec says and what the test now
+  checks, rather than checking that the cell is empty.
+
+### Notes
+
+- Opened from a `file://` URL the page has an opaque origin and `localStorage` throws
+  rather than returning nothing. Every read and write of it is wrapped, and the features
+  that would use it fall back to their defaults. This is the normal case for this tool,
+  not an edge case, which is why the exceptions register is also a file.
+
 ## 1.7.0 - 2026-09-16
 
 ### Added

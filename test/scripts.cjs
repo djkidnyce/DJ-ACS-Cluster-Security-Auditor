@@ -843,5 +843,269 @@ if (!served) {
 }
 fs.rmSync(tlsdir, { recursive: true, force: true });
 
+
+/* ------------------------------------------------------------------ acs_rollout.sh
+ *
+ * This one is executed rather than read, against a fake oc on PATH that answers reads
+ * from fixtures and refuses every write verb loudly. Static assertions were not enough
+ * here: the script's entire purpose is deciding what to roll back, so the property worth
+ * proving is behavioural. It never issues a write, and it maps a broken pod to the
+ * workload that owns it rather than to the ReplicaSet in between.
+ *
+ * It is driven under dash as well as bash. An earlier script in this repo worked under
+ * bash and silently dropped arguments under dash, and nothing caught it for two releases.
+ */
+console.log('\nacs_rollout.sh, driven against a fake cluster');
+{
+  const os = require('os');
+  const { execFileSync } = require('child_process');
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'rollout-'));
+  const bin = path.join(work, 'bin');
+  const data = path.join(work, 'data');
+  fs.mkdirSync(bin); fs.mkdirSync(data);
+  const LOG = path.join(work, 'calls.log');
+
+  const write = (f, o) => fs.writeFileSync(path.join(data, f), JSON.stringify(o));
+  write('workloads.json', { items: [
+    { kind: 'Deployment', metadata: { name: 'payments-api', namespace: 'prod',
+        annotations: { 'deployment.kubernetes.io/revision': '7',
+          'kubernetes.io/change-cause': '2026-09-18 14:40Z / DJ ACS Auditor 1.8.0 / ACS-20260918-1440-001' } },
+      spec: { replicas: 3, template: { metadata: { annotations:
+        { 'acs-auditor/applied': '2026-09-18 14:40Z / DJ ACS Auditor 1.8.0 / ACS-20260918-1440-001' } } } },
+      status: { readyReplicas: 0 } },
+    { kind: 'StatefulSet', metadata: { name: 'clustersync', namespace: 'prod' },
+      spec: { replicas: 1, template: { metadata: { annotations:
+        { 'acs-auditor/applied': '2026-09-18 14:40Z / DJ ACS Auditor 1.8.0 / ACS-20260918-1440-002' } } } },
+      status: { readyReplicas: 1 } },
+    { kind: 'DaemonSet', metadata: { name: 'log-shipper', namespace: 'prod' },
+      spec: { template: { metadata: {} } },
+      status: { numberReady: 6, desiredNumberScheduled: 6 } },
+  ] });
+  write('dc.json', { items: [
+    { kind: 'DeploymentConfig', metadata: { name: 'legacy-web', namespace: 'prod' },
+      spec: { replicas: 2, template: { metadata: { annotations:
+        { 'acs-auditor/applied': '2026-09-18 14:40Z / DJ ACS Auditor 1.8.0 / ACS-20260918-1440-003' } } } },
+      status: { readyReplicas: 2 } },
+  ] });
+  write('pods.json', { items: [
+    { kind: 'Pod', metadata: { name: 'payments-api-abc-1', namespace: 'prod',
+        ownerReferences: [{ kind: 'ReplicaSet', name: 'payments-api-abc' }] },
+      status: { containerStatuses: [{ name: 'api', ready: false, restartCount: 9,
+        state: { waiting: { reason: 'CrashLoopBackOff', message: 'back-off 5m0s\nsecond line' } } }] } },
+    { kind: 'Pod', metadata: { name: 'legacy-web-1-a', namespace: 'prod',
+        ownerReferences: [{ kind: 'ReplicationController', name: 'legacy-web-1' }] },
+      status: { containerStatuses: [{ name: 'web', ready: false, restartCount: 1,
+        state: { waiting: { reason: 'CreateContainerConfigError', message: 'secret "db" not found' } } }] } },
+    { kind: 'Pod', metadata: { name: 'orphan-pod', namespace: 'prod' },
+      status: { containerStatuses: [{ name: 'c', ready: false, restartCount: 0,
+        state: { waiting: { reason: 'ImagePullBackOff' } } }] } },
+    /* A pod with no status at all. Real clusters produce these while scheduling, and a
+       triage script that throws on one is useless exactly when it is needed. */
+    { kind: 'Pod', metadata: { name: 'no-status', namespace: 'prod' }, status: {} },
+    { kind: 'ReplicaSet', metadata: { name: 'payments-api-abc', namespace: 'prod',
+        ownerReferences: [{ kind: 'Deployment', name: 'payments-api' }] } },
+    { kind: 'ReplicationController', metadata: { name: 'legacy-web-1', namespace: 'prod',
+        ownerReferences: [{ kind: 'DeploymentConfig', name: 'legacy-web' }] } },
+  ] });
+
+  fs.writeFileSync(path.join(bin, 'oc'), [
+    '#!/bin/sh',
+    'echo "$@" >> "$OC_LOG"',
+    'case "$1 $2" in',
+    '  "get deployment,statefulset,daemonset") cat "$OC_DATA/workloads.json"; exit 0 ;;',
+    '  "get deploymentconfig") cat "$OC_DATA/dc.json"; exit 0 ;;',
+    '  "get pods,replicasets,replicationcontrollers") cat "$OC_DATA/pods.json"; exit 0 ;;',
+    'esac',
+    'case "$1" in',
+    '  rollout)',
+    '    case "$2" in',
+    '      history) echo "REVISION  CHANGE-CAUSE"; echo "6         <none>"; exit 0 ;;',
+    '      *) echo "FAKE OC REFUSED A WRITE: $*" >&2; exit 99 ;;',
+    '    esac ;;',
+    '  get|describe) echo "{\\"items\\":[]}"; exit 0 ;;',
+    '  *) echo "FAKE OC REFUSED A WRITE: $*" >&2; exit 99 ;;',
+    'esac',
+  ].join('\n'), { mode: 0o755 });
+
+  const SCRIPT = path.join(DIR, 'acs_rollout.sh');
+  const run = (args, shell) => {
+    try {
+      const out = execFileSync(shell || 'bash', [SCRIPT].concat(args), {
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60000,
+        env: Object.assign({}, process.env, {
+          PATH: bin + ':' + process.env.PATH, OC_LOG: LOG, OC_DATA: data,
+        }),
+      });
+      return { out: out, code: 0 };
+    } catch (e) {
+      return { out: (e.stdout || '') + (e.stderr || ''), code: e.status === undefined ? -1 : e.status };
+    }
+  };
+  const calls = () => (fs.existsSync(LOG) ? fs.readFileSync(LOG, 'utf8') : '');
+
+  console.log('\n  It maps a broken pod to the workload that owns it');
+  const broken = run(['broken']);
+  t('it runs', broken.code === 0);
+  t('the deployment is named, not the ReplicaSet in between',
+    /deployment\/payments-api/.test(broken.out) && !/payments-api-abc\b/.test(broken.out));
+  t('and the DeploymentConfig, not the ReplicationController',
+    /deploymentconfig\/legacy-web/.test(broken.out) && !/legacy-web-1\b/.test(broken.out));
+  t('it says why, using the container reason', /CrashLoopBackOff/.test(broken.out));
+  t('and carries the message, which is what separates a missing Secret from a bad fix',
+    /secret "db" not found/.test(broken.out));
+  t('a multi line message is cut to its first line rather than wrapping the output',
+    !/second line/.test(broken.out));
+
+  console.log('\n  A pod nothing owns is not offered a rollout it does not have');
+  t('the unowned pod is still reported', /orphan-pod/.test(broken.out));
+  t('but no rollout history command is printed for it',
+    !/rollout history pod\//.test(broken.out));
+  t('and no undo command either', !/rollout undo pod\//.test(broken.out));
+  t('it says what to do instead', /nothing owns this pod/.test(broken.out));
+  t('a pod with no container statuses does not appear at all',
+    !/no-status/.test(broken.out));
+
+  console.log('\n  A DeploymentConfig does not take rollout undo');
+  const undoDc = run(['undo', '-n', 'prod', 'deploymentconfig/legacy-web', '--to-revision', '4']);
+  t('it prints oc rollback for it', /oc rollback dc\/legacy-web/.test(undoDc.out));
+  t('with the version flag that command actually takes',
+    /--to-version=4/.test(undoDc.out) && !/rollout undo.*legacy-web/.test(undoDc.out));
+  const undoDep = run(['undo', '-n', 'prod', 'deployment/payments-api', '--to-revision', '5']);
+  t('and rollout undo with --to-revision for a Deployment',
+    /oc rollout undo deployment\/payments-api -n prod --to-revision=5/.test(undoDep.out));
+  t('it warns about the revision that revisionHistoryLimit already pruned',
+    /unable to find specified revision in history/.test(undoDep.out) &&
+    /revisionHistoryLimit/.test(undoDep.out));
+
+  console.log('\n  Touched is the blast radius, not the symptom list');
+  const touched = run(['touched']);
+  t('a healthy workload the auditor changed is listed',
+    /statefulset\/clustersync/.test(touched.out));
+  t('a workload the auditor never touched is not',
+    !/log-shipper/.test(touched.out));
+  t('it shows the reference so the export can be looked up',
+    /ACS-20260918-1440-002/.test(touched.out));
+
+  console.log('\n  Plan says which workloads are both broken and annotated');
+  const plan = run(['plan']);
+  t('the overlap is called out', /Broken AND touched/.test(plan.out));
+  t('and names the workload in both lists',
+    /prod\/deployment\/payments-api/.test(plan.out));
+
+  console.log('\n  Snapshot writes the lot without touching the cluster');
+  const snapDir = path.join(work, 'snap');
+  const snap = run(['snapshot', '-o', snapDir]);
+  t('it reports where it went', snap.code === 0);
+  for (const f of ['index.json', 'history.txt', 'broken.json', 'plan.txt', 'READ_ME.txt']) {
+    t('  it wrote ' + f, fs.existsSync(path.join(snapDir, f)));
+  }
+  const idx = JSON.parse(fs.readFileSync(path.join(snapDir, 'index.json'), 'utf8'));
+  t('the index covers all four workload kinds', idx.length === 4);
+  t('and records the auditor annotation where there is one',
+    idx.filter((r) => r.stamp).length === 3);
+  t('the read me says the revisions behind the history get pruned',
+    /revisionHistoryLimit/.test(fs.readFileSync(path.join(snapDir, 'READ_ME.txt'), 'utf8')));
+
+
+  console.log('\n  Restore covers the kinds that have no rollout at all');
+  const cap = path.join(work, 'capture.json');
+  fs.writeFileSync(cap, JSON.stringify({ items: [
+    { kind: 'CronJob', metadata: { name: 'nightly', namespace: 'prod', uid: 'u-1',
+        resourceVersion: '99', generation: 4, creationTimestamp: '2026-01-01T00:00:00Z',
+        managedFields: [{ manager: 'oc' }], selfLink: '/api/x',
+        ownerReferences: [{ kind: 'Thing', name: 'y' }],
+        annotations: { 'kubectl.kubernetes.io/last-applied-configuration': '{}',
+                       'deployment.kubernetes.io/revision': '3',
+                       'mine/keep': 'yes' } },
+      spec: { schedule: '0 2 * * *' },
+      status: { lastScheduleTime: '2026-09-01T02:00:00Z' } },
+  ] }));
+  const res = run(['restore', cap, '-n', 'prod', 'cronjob/nightly']);
+  t('it finds the object', res.code === 0);
+  const body = res.out.split('\n').filter((l) => l.indexOf('#') !== 0).join('\n');
+  /* Parsed defensively and read through a helper. Reading obj.metadata.annotations.x
+     directly threw a TypeError when a mutation deleted the annotations, which killed the
+     whole file: the suite exited non zero, but with a stack trace instead of a named
+     failing assertion, so a count of FAIL lines read as zero failures. That is this
+     project's oldest failure mode wearing a new hat. */
+  let obj = null;
+  try { obj = JSON.parse(body); } catch (e) { obj = null; }
+  t('it printed a parseable object', obj !== null);
+  const meta = (obj && obj.metadata) || {};
+  const ann = meta.annotations || {};
+  t('the spec survives', !!obj && obj.spec.schedule === '0 2 * * *');
+  t('status is gone, because it describes an object that no longer exists',
+    !!obj && obj.status === undefined);
+  for (const f of ['uid', 'resourceVersion', 'generation', 'creationTimestamp',
+                   'managedFields', 'selfLink', 'ownerReferences']) {
+    t('  ' + f + ' is stripped', meta[f] === undefined);
+  }
+  t('last-applied-configuration is stripped, so applying it does not fight itself',
+    ann['kubectl.kubernetes.io/last-applied-configuration'] === undefined);
+  t('the revision annotation is stripped, being the server\'s to set',
+    ann['deployment.kubernetes.io/revision'] === undefined);
+  t('but the annotation block itself survives', !!meta.annotations);
+  t('and annotations that are yours are kept', ann['mine/keep'] === 'yes');
+  t('it says it is not applying anything', /has been applied for you/.test(res.out));
+  t('and warns that apply replaces the whole object',
+    /replaces the whole object/.test(res.out));
+
+  const missing = run(['restore', cap, '-n', 'prod', 'cronjob/does-not-exist']);
+  t('a workload that is not in the file is an error, not an empty success',
+    missing.code !== 0);
+  t('and it lists what the file does hold rather than just saying no',
+    /prod cronjob\/nightly/.test(missing.out));
+  t('a missing file is refused', run(['restore', '/nope.json', '-n', 'p', 'cronjob/x']).code !== 0);
+
+  console.log('\n  Restore works where the cluster does not');
+  /* The one subcommand meant for a machine that cannot reach the cluster was the one that
+     required a cluster client on PATH. It read a file and refused to run without oc. */
+  const noOc = (() => {
+    try {
+      return { out: execFileSync('bash', [SCRIPT, 'restore', cap, '-n', 'prod', 'cronjob/nightly'], {
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60000,
+        env: { PATH: [path.dirname(process.execPath), '/usr/bin', '/bin'].join(':'),
+               HOME: process.env.HOME, OC_LOG: LOG, OC_DATA: data },
+      }), code: 0 };
+    } catch (e) { return { out: (e.stdout || '') + (e.stderr || ''), code: e.status }; }
+  })();
+  t('with no oc anywhere on PATH, restore still works', noOc.code === 0);
+  t('and still produces the object', /"schedule"/.test(noOc.out));
+
+  console.log('\n  It never writes. That is the whole promise.');
+  const log = calls();
+  t('the fake oc was actually called, so the absence below means something',
+    log.split('\n').filter(Boolean).length > 5);
+  t('no write verb was ever issued',
+    !/^(apply|patch|delete|create|replace|scale|edit|annotate|label|set|rollback)\b/m.test(log));
+  t('rollout was only ever asked for history',
+    log.split('\n').filter((l) => /^rollout/.test(l)).every((l) => /^rollout history/.test(l)));
+  t('and the fake never had to refuse anything',
+    ![broken, undoDc, undoDep, touched, plan, snap].some((r) => /FAKE OC REFUSED/.test(r.out)));
+
+  console.log('\n  Refusals are refusals, not guesses');
+  t('undo without a namespace is refused',
+    run(['undo', 'deployment/api']).code !== 0);
+  t('undo with no workload is refused', run(['undo', '-n', 'prod']).code !== 0);
+  t('a bare name with no kind is refused',
+    run(['undo', '-n', 'prod', 'payments-api']).code !== 0);
+  t('an unknown subcommand is refused', run(['frobnicate']).code !== 0);
+  t('no subcommand prints the usage', /SUBCOMMANDS/.test(run([]).out));
+
+  console.log('\n  It runs under dash, not just bash');
+  const dash = fs.existsSync('/bin/dash') ? '/bin/dash' : null;
+  if (dash) {
+    const d = run(['plan'], dash);
+    t('plan produces the same overlap under dash',
+      /Broken AND touched/.test(d.out) && /prod\/deployment\/payments-api/.test(d.out));
+    t('and the DeploymentConfig still gets oc rollback',
+      /oc rollback dc\/legacy-web/.test(run(['touched'], dash).out));
+  } else {
+    t('dash is not installed here, so portability was not proven', false);
+  }
+
+  fs.rmSync(work, { recursive: true, force: true });
+}
+
 console.log('\n' + P + ' passed, ' + F + ' failed');
 process.exit(F ? 1 : 0);

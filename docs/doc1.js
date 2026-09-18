@@ -32,28 +32,26 @@ const title = [
   new Paragraph({ children: [new PageBreak()] }),
 ];
 
+/* Derived from the headings rather than typed out beside them. The admin guide's
+   hand kept copy had already drifted by four sections, and this one had to be renumbered
+   by hand every time a section was inserted, which is the same bug waiting. */
+const TOC_ITEMS = [];
+const TOC_PLACEHOLDER = Symbol('toc');
 const toc = [
   P('Contents', { heading: HeadingLevel.HEADING_1 }),
-  ...['1. What this tool does','2. One page, two tabs','3. Report, manual, or auto',
-      '4. Before you start','5. Quick start',
-      '6. Loading manifests and reading the audit','7. Getting the data out of ACS',
-      '8. Vulnerabilities: why an empty alert list proves nothing',
-      '9. Working the CVE list','10. Seeing and fixing violations','11. Applying fixes',
-      '12. What gets fixed automatically, and what deliberately does not','13. Taking the result out',
-      '14. How the score is calculated','15. Policy reference','16. Limits, stated plainly',
-      '17. Troubleshooting','18. Contact'].map((t) => P(t, { spacing: { after: 90 }, size: 22 })),
+  TOC_PLACEHOLDER,
   P('Figures', { bold: true, size: 22, spacing: { before: 240, after: 90 } }),
   ...['Figure 1. The Audit tab after a scan (section 6)',
       'Figure 2. Getting the data out of ACS (section 7)',
       'Figure 7. The two ACS data planes (section 8)',
       'Figure 3. Step through remediation (section 11)',
       'Figure 8. The violations panel and the fix routes (section 10)',
-      'Figure 4. Export options (section 13)'].map((t) => P(t, { spacing: { after: 90 }, size: 22, color: MUT })),
+      'Figure 4. Export options (section 14)'].map((t) => P(t, { spacing: { after: 90 }, size: 22, color: MUT })),
   new Paragraph({ children: [new PageBreak()] }),
 ];
 
 const body = [];
-const H1 = (t) => body.push(P(t, { heading: HeadingLevel.HEADING_1, spacing: { before: 320, after: 140 } }));
+const H1 = (t) => (TOC_ITEMS.push(t), body).push(P(t, { heading: HeadingLevel.HEADING_1, spacing: { before: 320, after: 140 } }));
 const H2 = (t) => body.push(P(t, { heading: HeadingLevel.HEADING_2, spacing: { before: 240, after: 100 } }));
 const T = (t) => body.push(P(t));
 const push = (arr) => arr.forEach((x) => body.push(x));
@@ -64,7 +62,7 @@ T('DJ\'s ACS Auditor reads Kubernetes and OpenShift YAML, evaluates it against r
 T('It exists to close a specific gap. ACS tells you a running workload is in violation. It does not hand you a corrected manifest, and it does not tell you what your posture would look like once the fix lands. This tool does both, and it does it against the manifest in your repository, which is where the fix actually has to be made.');
 H2('The pieces');
 push([Tbl(['File', 'What it is for'], [
-  ['dj_acs_auditor.html', 'The whole browser surface, in two tabs. Audit scans, scores, ranks, cross checks against ACS violations and image CVEs, and exports the report. Remediate applies fixes with preview, confirmation, one at a time stepping, and undo. See section 2.'],
+  ['dj_acs_auditor.html', 'The whole browser surface, in three tabs. Audit scans, scores, ranks, cross checks against ACS violations and image CVEs, and exports the report. Remediate applies fixes with preview, confirmation, one at a time stepping, and undo. See section 2.'],
   ['acs_policies.js', 'The policy engine. Every surface loads this one file, so the page, the command line and the tests cannot disagree about a manifest.'],
   ['acs_cli.js', 'The same engine headless, for a pipeline or a terminal. Needs Node; the page does not.'],
   ['scripts/', 'Getting the data out of ACS. Preflight, the full pull, and PowerShell, SSH and oc port forward variants. Bash and curl, no runtime.'],
@@ -76,13 +74,15 @@ T('Open dj_acs_auditor.html by double clicking it. There is nothing to install, 
 
 
 // ---------------- 2 modes
-H1('2. One page, two tabs');
-T('There is one file to open, dj_acs_auditor.html, and it has two tabs.');
+H1('2. One page, three tabs');
+T('There is one file to open, dj_acs_auditor.html, and it has three tabs.');
 push([Tbl(['Tab', 'What it is for', 'What it can change'], [
   ['Audit', 'Reading. Posture, the findings table, the cross check against ACS, the violations panel, image CVEs, the policy catalogue, and the reports you take away. Drafting a patch from an ACS violation happens here too.',
    'Nothing you loaded. Drafting a patch writes a new file for you to review; it does not touch your manifests.'],
   ['Remediate', 'Changing. Step through fixes one at a time, review and apply a batch, replace an image reference, undo any of it.',
    'The YAML you loaded, in memory, and only once you move the Mode selector off Report only. Files on disk change when you download the result.'],
+  ['Diff', 'Comparing. The YAML you loaded on the left, the same objects with the selected fixes applied on the right, side by side the way a diff reads on a pull request.',
+   'Nothing. It builds the right hand side on a copy and throws it away.'],
 ], [1500, 5000, 2800])]);
 body.push(P('', { spacing: { after: 140 } }));
 T('They share one loaded file set, one scan and one mode gate. Load your manifests and your ACS export once and both tabs see them.');
@@ -170,7 +170,7 @@ T('Everything the page needs is committed alongside it. js-yaml and JSZip are ve
 
 // ---------------- 3
 H1('5. Quick start');
-push(NumList(['Open dj_acs_auditor.html. There is one file and it has two tabs.',
+push(NumList(['Open dj_acs_auditor.html. There is one file and it has three tabs.',
   'Drag your manifest folder onto the drop zone, or press Browse folder. Drop the output of scripts/acs_pull_all.sh on it at the same time if you have it.',
   'Stay on the Audit tab. Read the posture cards: the weighted compliance score now, and what it becomes once the safe fixes are applied.',
   'Sort the findings table by Score to see what hurts most, and read the Violations from ACS panel for what your cluster is actually reporting.',
@@ -184,7 +184,7 @@ H1('6. Loading manifests and reading the audit');
 T('Figure 1 shows the auditor after a folder has been loaded. Everything on the page is derived from the files you dropped in. Nothing is fetched, and nothing is remembered between sessions.');
 push(Fig(F('fig1_auditor_overview.png'), 'Figure 1. The auditor after a scan. Posture cards, category breakdown, and the sortable findings table.', 640));
 H2('The posture cards');
-T('The left card is your weighted compliance score as the manifests stand today. The right card is the projected score once every automatic fix is applied. The difference between them is the honest value of working the Remediate tab, and section 14 explains exactly how both numbers are computed, including why you get no score at all when no manifests were scanned.');
+T('The left card is your weighted compliance score as the manifests stand today. The right card is the projected score once every automatic fix is applied. The difference between them is the honest value of working the Remediate tab, and section 15 explains exactly how both numbers are computed, including why you get no score at all when no manifests were scanned.');
 H2('The findings table');
 T('Every column sorts. Click a header once for ascending, again for descending. The columns are ID, Severity, Score, Policy, Object, File, and Fix.');
 push([Bul('ID is the internal identifier, ACS.001 through ACS.020, stable across releases of this tool.'),
@@ -197,6 +197,25 @@ H2('Posture by category');
 T('The bars group findings the way ACS groups its own policies: Privileges, Network, Kubernetes, Docker CIS, Resource Management, Security Best Practices, and DevOps Best Practices. A single tall bar usually means a systemic problem, one bad base template copied across twenty services, rather than twenty unrelated mistakes.');
 
 // ---------------- 5
+H2('Choosing which namespaces you are auditing');
+T('Every namespace you load is listed above the findings with its object and finding counts. Untick one and it leaves scope: out of the findings, out of the posture score, out of the report and out of the JSON. It is excluded rather than hidden, and the difference matters because the score changes.');
+push(Note('info', 'Why the score does not improve when you exclude a namespace', [
+  'The findings and the objects are scoped together. A posture score is passed weight over total applicable weight, and the denominator comes from the objects that were scanned. Scope the findings alone and every excluded object stays in the denominator with none of its failures in the numerator, so deselecting namespaces would raise the score every time.',
+  'Excluding one of two identically bad namespaces leaves the score exactly where it was. There is a test that asserts precisely this, because a control that makes the number go up is the one worth designing against.']));
+T('The report says so where you cannot miss it. The HTML report opens with a note naming every excluded namespace and how many findings and objects went with it, above the score rather than below it, and the JSON carries the same under scope. A posture number for part of an estate is fine to publish and dishonest to publish silently.');
+T('Deselect platform namespaces takes openshift, kube, stackrox, rhacs and the rest out of scope in one press. Exclude every namespace and the page refuses to show a score at all and says why, rather than printing 100 out of 100 over an empty denominator.');
+
+H2('Platform workloads break differently');
+T('An operator is a workload that talks to the Kubernetes API for a living. The OpenShift API server operator is the plain example: set automountServiceAccountToken to false on it and you have removed the credential it uses to do its job, so it stops. The same holds for controllers, service meshes and anything using in cluster config. Dropping ALL capabilities and generating a default deny NetworkPolicy over a platform namespace land the same way.');
+T('Both findings tables carry a Namespace column, sortable, and every row in a platform namespace is marked. The mark is advisory and the fixes stay available, because the tool does not make that call for you. If you want those workloads out of reach rather than marked, deselect the namespace. If you want one specific fix kept off one specific object with the reason on the record, use the opt out described in section 11.');
+
+H2('The loaded file list folds itself');
+T('Every file you load becomes a chip showing its document count and how many findings came out of it. A folder of manifests is hundreds of chips, so the list folds: twelve files or fewer it stays open, past that it closes itself, and you can open or close it yourself at any time. Where the browser allows the page to remember anything, it remembers which you chose.');
+T('The header carries the numbers, so folding it costs you nothing: the file count, the total document count and the total finding count. Files and documents are not the same number. One file holding three documents separated by --- counts as one file and three documents, and the header says both.');
+push(Note('warn', 'A file that could not be read forces the list open', [
+  'If a file fails to parse, the list opens whether it was folded or not, the header says how many failed, and the count turns red. Hover the red chip for the parser error.',
+  'This overrides your own choice on purpose. A parse error behind a fold reads as a clean scan of a file that was never actually scanned, and a clean result you did not earn is the one outcome this tool is built to prevent.']));
+
 H1('7. Getting the data out of ACS');
 T('Earlier versions of this tool carried a connect panel in the page: type a Central URL, paste an API token, press fetch. It has been removed. This section explains why, because the reasoning matters more than the feature did, and then shows what to do instead.');
 push(Note('warn', 'Why there is no connect button any more', [
@@ -456,6 +475,34 @@ H2('Confirmation and undo');
 push([Bul('Every route asks for confirmation before it writes. There is a checkbox to suppress the prompt once you trust it. It is off by default and it resets when you reload.'),
       Bul('Undo last steps back one fix. Undo everything returns the files to exactly how they were loaded. The test suite verifies the restore byte for byte, not just structurally.')]);
 
+H2('Opting out of a fix, with the reason on the record');
+T('Some findings are not going to be fixed, and that is a legitimate answer. A service account token really is mounted on purpose in one place. Press Opt out on the row, write down why, and save it. The finding drops out of the corrected YAML and out of Select all, and it stays in the report and in the JSON with your reason attached to it. It is recorded, not hidden.');
+T('The reason is required. An empty box is refused, so is a reason too short to be an audit record, and so is a list of non answers: n/a, none, by design, wont fix. The refusal appears next to the box rather than somewhere else on the page.');
+push(Note('info', 'Why the tool insists on a sentence', [
+  'Six months from now, the only thing separating "we looked at this and accepted it" from "we never looked at this" is whether somebody wrote down which one it was. An exception with no reason is indistinguishable from a missed finding.',
+  'The check cannot tell a real reason from a plausible looking one and does not try. It is there so that clearing a screen of findings by typing n/a into each of them takes longer than reading them.']));
+push([Bul('An exception is one policy against one object. Excepting automountServiceAccountToken on a batch job says nothing about the same policy on the deployment next to it.'),
+      Bul('Save exceptions writes a JSON file. Load exceptions reads one back, on this machine or any other. The corrected YAML export carries a copy as well.'),
+      Bul('That file is the record. The browser copy is a convenience and a page opened from a file:// URL often cannot keep one at all, so keep the JSON with the manifests where it can be reviewed like anything else.'),
+      Bul('An entry whose reason was deleted by hand is refused on the way back in rather than imported blank.'),
+      Bul('To put a finding back in scope, press Exception on the row and remove it.')]);
+
+H2('Working one namespace at a time');
+T('The Remediate tab has a Namespace filter alongside the severity, fix kind, class and policy filters. Set it and Select all shown takes only that namespace, which is the sane way through four figures of findings.');
+T('Whatever you leave behind is recorded rather than implied. READ_THIS_FIRST.md and the change log carry a row for every namespace that was in scope, whether or not anything was applied to it, with how many of its findings were fixed here, excepted, left for a human, and left alone. The namespaces that received no fixes are named again underneath, because nobody scanning a long table does the subtraction. Namespaces you excluded before the scan get their own section stating that they were not examined and that the file says nothing about them.');
+push(Note('warn', 'A clean namespace is not a clean cluster', [
+  'Working namespace by namespace means every run looks finished, because the namespace you were looking at is now clear. The coverage table exists so that the artifact you hand to somebody else cannot be read as covering more than it does.']));
+
+H2('What the fixed files say about themselves');
+T('Every object the tool changed is annotated twice, so that a revision in the cluster can be traced back to the run that produced it.');
+push([Bul('kubernetes.io/change-cause on the object. This is the column oc rollout history prints.'),
+      Bul('acs-auditor/applied on the pod template. This is the one that travels into the ReplicaSet or ControllerRevision for that revision. The object level annotation alone does not survive into a revision, which is why both are written.')]);
+T('Both carry the same short value: 2026-09-18 14:40Z / DJ ACS Auditor 1.8.0 / ACS-20260918-1440-001. Date, time in UTC, the tool and version, and a reference. It is short on purpose, because a list of nine policy ids is wider than the column that prints it.');
+T('The reference resolves to a register at the top of READ_THIS_FIRST.md and in the change log, which says which object it was, which policies were applied to it, and which of those can stop the workload. To go the other way, from a running workload back to the file that changed it:');
+push(Code(["oc get deploy NAME -n NS -o jsonpath='{.spec.template.metadata.annotations.acs-auditor/applied}{\"\\n\"}'"]));
+push(Note('info', 'Objects that were not changed are not annotated', [
+  'Stamping an object the tool did not touch would alter its pod template hash, and altering a pod template hash restarts the workload. Restarting a workload to record that nothing happened to it is not a free operation, so it is not done.']));
+
 H2('Working a list of a thousand findings');
 T('A first run against a real cluster returns findings in the hundreds or thousands. A flat list that long is not a work queue, it is a wall, so the findings table filters and every row is selectable.');
 push([Bul('Severity. Critical and High with the rest unticked is the top of the list.'),
@@ -502,10 +549,38 @@ push(Note('warn', 'Three fixes need your attention after they are applied', [
   'The secret rewrite points the environment variable at a secretKeyRef, but it cannot un-leak a credential that is already in git history. Rotate the credential. The fix is flagged for exactly this reason.']));
 
 // ---------------- 9
-H1('13. Taking the result out');
+H1('13. After the fixes land, and something is crashlooping');
+T('scripts/acs_rollout.sh is the other half of the annotations. It reads the cluster and prints commands. It never runs rollout undo, rollback, apply, patch, delete or scale. The test suite drives it against a fake oc that refuses every write verb and asserts that none was ever issued, because on this script that promise is the design rather than a nice property.');
+push(Code(['./scripts/acs_rollout.sh plan                  # broken, touched, and the overlap',
+  './scripts/acs_rollout.sh broken -n prod        # unhealthy pods, mapped to what owns them',
+  './scripts/acs_rollout.sh touched               # what the auditor changed, healthy or not',
+  './scripts/acs_rollout.sh history -n prod deployment/api',
+  './scripts/acs_rollout.sh snapshot -o ./rollback   # capture it all, reads only',
+  './scripts/acs_rollout.sh undo -n prod deployment/api --to-revision 6',
+  './scripts/acs_rollout.sh restore ./rollback/workloads.json -n prod cronjob/nightly']));
+H2('Broken and touched are different questions');
+T('broken is triage by symptom whatever the cause, so it includes workloads this tool never went near. touched reads the acs-auditor/applied annotation, so it includes a workload that took a bad fix and has not restarted yet. plan prints both and names the overlap, which is where to start. A broken pod is reported as the workload that owns it rather than as the ReplicaSet in between, because at three in the morning nobody wants to do that mapping by eye.');
+H2('The four kinds do not roll back the same way');
+push([Tbl(['Kind', 'What puts it back', 'What holds its old revisions'], [
+  ['Deployment', 'oc rollout undo', 'ReplicaSets'],
+  ['StatefulSet', 'oc rollout undo', 'ControllerRevisions'],
+  ['DaemonSet', 'oc rollout undo', 'ControllerRevisions'],
+  ['DeploymentConfig', 'oc rollback --to-version', 'ReplicationControllers'],
+], [2600, 3200, 3500])]);
+body.push(P('', { spacing: { after: 120 } }));
+T('The script prints the right one for the kind in front of it. Printing oc rollout undo at a DeploymentConfig would be worse than printing nothing, because it looks authoritative and fails at the worst possible moment.');
+push(Note('crit', 'Two things about revisions that cost people hours', [
+  'A rollback does not delete revisions. It creates a new one carrying the old spec, so the numbers keep climbing and the revision you rolled back from is still in the history. Roll back from 7 to 3 and you get an 8 that looks like 3.',
+  'revisionHistoryLimit defaults to 10 and prunes silently. --to-revision on a revision that has been pruned answers "unable to find specified revision in history", and no flag brings it back. That is what snapshot is for: capture the history while it still exists, before you need it.']));
+H2('For the kinds with no rollout at all');
+T('CronJobs and Jobs have no revisions to go back to, and neither does a pod nothing owns. restore reads a capture rather than the cluster, pulls one object out of it, and strips the fields the server owns: uid, resourceVersion, generation, creationTimestamp, managedFields, ownerReferences, the last applied configuration annotation and status. It needs no oc on PATH, which is the point, because it has to work on the machine that cannot reach the cluster.');
+push(Note('warn', 'Applying a restored object replaces the whole object', [
+  'Anything other than this tool that changed the object since the capture is replaced too. Read it before you apply it, which is why the script prints it rather than applying it.']));
+
+H1('14. Taking the result out');
 H2('What is in the audit report');
 T('The HTML report is the artifact that outlives the session and gets attached to a ticket or an accreditation package, so everything visible in the page reaches it:');
-push([Bul('The posture summary and the per category breakdown, when manifests were scanned. When none were, it says so and explains why rather than printing a score. See section 14.'),
+push([Bul('The posture summary and the per category breakdown, when manifests were scanned. When none were, it says so and explains why rather than printing a score. See section 15.'),
       Bul('Every finding in your manifests, with the policy, the object, the file, the severity and the fix classification.'),
       Bul('Every violation ACS reported, split into your workloads and platform components, each with its fix route. The platform section states whether that split came from the ACS platformComponent field or from a namespace match, because those are different claims.'),
       Bul('Image CVEs, when a vulnerability export was supplied, ranked and kept visually separate from the configuration posture so nobody adds the two together.'),
@@ -523,14 +598,15 @@ push([Tbl(['Export', 'Use it when'], [
   ['Strategic merge patches', 'Your manifests are templated by Helm or Kustomize and cannot be edited directly. One patch per applied fix.'],
   ['The full diff to clipboard', 'You are pasting into a pull request description, a change ticket, or a chat thread.'],
   ['Change log in markdown', 'You need the audit trail: every change, why it was made, the citations, and everything still awaiting a human decision.'],
-  ['Corrected YAML for selected findings', 'You are working a large list on a machine with no Node, and you want files for the subset you ticked rather than for everything. Includes READ_THIS_FIRST.md with the changes, the risky ones and the placeholders.'],
+  ['Corrected YAML for selected findings', 'You are working a large list on a machine with no Node, and you want files for the subset you ticked rather than for everything. Includes READ_THIS_FIRST.md with the reference register, the changes, the risky ones, the placeholders and any exceptions you recorded.'],
+  ['Exceptions as JSON', 'You want the findings you opted out of, with their reasons, as a file you can keep beside the manifests, review in a pull request, or load on another machine. The corrected YAML export carries a copy too.'],
 ], [3000, 6300])]);
 body.push(P('', { spacing: { after: 120 } }));
 H2('Why the merge patches are worth understanding');
 T('Each patch carries only the fields that actually changed, and container arrays are keyed on the container name, which is how Kubernetes merges those arrays. That is deliberate. A naive patch that includes the whole container array would carry the image field along with it and silently revert an image that was updated after your scan. Keying on name means the patch touches the security context and nothing else. The test suite checks patch minimality specifically because this is easy to get wrong and expensive to notice late.');
 
 // ---------------- 10
-H1('14. How the score is calculated');
+H1('15. How the score is calculated');
 push(Note('warn', 'What the score is measured against', [
   'Twenty policies. Red Hat ACS ships roughly seventy defaults and most teams add their own, so a clean score here means clean against twenty checks. It is not compliance with the ACS default policy set and should never be quoted as such.',
   'Build stage rules, runtime behaviour policies and image CVE policies cannot be judged from a manifest at all. Violations this tool does not model arrive through your ACS export and are shown as unmatched rather than dropped, with the fix route "Not modelled".',
@@ -555,7 +631,7 @@ push(Note('info', 'The rule that makes the before and after numbers comparable',
   'If a check dropped out of the total the moment it started passing, fixing things would shrink the denominator and the projected score would not survive a rescan. Keeping every applicable check in the total means the projection you see before you apply is the score you get after you apply. This was a real defect during development, caught because a projection of 60 rescanned as 57, and there is now a regression test that fails against the old logic and passes against the current one.']));
 
 // ---------------- 11
-H1('15. Policy reference');
+H1('16. Policy reference');
 T('Twenty policies, modelled on the ACS defaults. Check them against your own ACS version before treating them as authoritative, since defaults shift between releases and most teams tune them.');
 push([Tbl(['ID', 'ACS policy', 'Severity', 'Score', 'Fix'], [
   ['ACS.001', 'Privileged Container', 'High', '8.8', 'Auto'],
@@ -583,7 +659,7 @@ body.push(P('', { spacing: { after: 140 } }));
 T('Every finding also carries citations to the CIS Kubernetes Benchmark, NIST SP 800-53 Rev 5, the Kubernetes Pod Security Standards, and DISA STIG. Press View the policy catalogue on the Audit tab to read the full entry for any policy, including the rationale and the remediation text.');
 
 // ---------------- 12
-H1('16. Limits, stated plainly');
+H1('17. Limits, stated plainly');
 push([Bul('This is static analysis of manifest text. The page never contacts a cluster at all. The scripts do, and they only ever issue a GET.'),
       Bul('It is not a replacement for ACS, for admission control such as Pod Security Admission or Kyverno, or for runtime enforcement. It is a way to fix the manifest before any of those have to reject it.'),
       Bul('ACS policies that evaluate build metadata or runtime process behaviour cannot be judged from YAML at all. Those violations are reported as unmatched rather than pretended away.'),
@@ -593,7 +669,7 @@ push([Bul('This is static analysis of manifest text. The page never contacts a c
       Bul('Policy names, severities, and remediation text are modelled on ACS defaults with the structure verified against the upstream StackRox definitions at github.com/stackrox/stackrox. Confirm against your own version.')]);
 
 // ---------------- 13
-H1('17. Troubleshooting');
+H1('18. Troubleshooting');
 push([Tbl(['Symptom', 'Cause and fix'], [
   ['Folder upload opens a second dialog', 'Your browser does not support the File System Access API and fell back to a directory input. Pick the folder once in the fallback dialog. Chrome and Edge take the single action path.'],
   ['Looking for the connect button from an older version', 'Removed, deliberately. It could never work from a file:// page and the token risk was real while the benefit was zero. Use scripts/acs_pull_all.sh. See section 7.'],
@@ -615,7 +691,7 @@ push([Tbl(['Symptom', 'Cause and fix'], [
 ], [3000, 6300])]);
 
 // ---------------- 14
-H1('18. Contact');
+H1('19. Contact');
 T('Questions, bugs, or policy suggestions: github.com/djkidnyce');
 T('If you are reporting a scoring or matching problem, include the manifest set and, where you can share it, the ACS export. Both are needed to reproduce a match failure.');
 
@@ -631,6 +707,10 @@ const doc = new Document({
   } },
   features: { updateFields: true },
   sections: [Object.assign({}, pageSetup("DJ's ACS Auditor  |  User Guide"),
-    { children: [...title, ...toc, ...body] })],
+    { children: [...title,
+      ...toc.flatMap((n) => (n === TOC_PLACEHOLDER
+        ? TOC_ITEMS.map((x) => P(x, { spacing: { after: 90 }, size: 22 }))
+        : [n])),
+      ...body] })],
 });
 Packer.toBuffer(doc).then((b) => { fs.writeFileSync(__dirname + '/DJ_ACS_Auditor_User_Guide.docx', b); console.log('WROTE', b.length, 'bytes'); });

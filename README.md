@@ -4,11 +4,11 @@ Audit Kubernetes and OpenShift manifests against Red Hat Advanced Cluster Securi
 
 **No command is ever run to remediate a finding.** Fixes are made to YAML text in your browser and handed back to you as files. Nothing touches a cluster, nothing calls `oc`, `kubectl` or `roxctl`, and nothing is applied behind your back.
 
-## The two pages
+## What is in here
 
 | File | What it is for |
 |---|---|
-| `dj_acs_auditor.html` | The whole browser surface. Two tabs: **Audit** reads, scores and reports; **Remediate** edits the YAML you loaded with a diff, a confirmation and undo. One mode gate governs both |
+| `dj_acs_auditor.html` | The whole browser surface. Three tabs: **Audit** reads, scores and reports; **Remediate** edits the YAML you loaded with a diff, a confirmation and undo; **Diff** shows what you loaded against what the fixes would produce, side by side. One mode gate governs all three |
 | `acs_policies.js` | The policy engine both pages share, so they can never disagree about a manifest |
 | `vendor/` | js-yaml and JSZip, committed so the tool needs no package manager and no network |
 | `acs_cli.js` + `acs.sh` / `.cmd` / `.ps1` | The same audit, report and fixes from a terminal or a pipeline |
@@ -16,9 +16,10 @@ Audit Kubernetes and OpenShift manifests against Red Hat Advanced Cluster Securi
 | `scripts/acs_pull_all.sh` and `.ps1` | Pull every finding ACS has, all severities and states, from outside the browser |
 | `scripts/acs_pull_via_oc.sh` | Same, but reaches Central through your existing `oc` session |
 | `scripts/acs_pull_over_ssh.ps1` | PowerShell, when only a bastion can reach the cluster |
+| `scripts/acs_rollout.sh` | After the fixes land: revision history, what changed each workload, and the command to put it back. Prints commands, never runs them |
 | `test/run_tests.js` | The whole suite, against the real engine, the page, the scripts and the CLI |
 
-Open either HTML file directly. There is nothing to install and no server to run.
+Open the HTML file directly. There is nothing to install and no server to run.
 
 ## Two ACS data planes, and why an empty alert list proves nothing
 
@@ -315,11 +316,149 @@ The header count says what is behind a collapsed section and what a filter is hi
 `showing 84 of 1104, 1104 open, 40 critical`. That matters more than the collapsing does.
 A narrowed list looks like a shorter one, and a shorter one reads as a cleaner cluster.
 
+The loaded file list folds itself once there are more than twelve files, and its header
+carries the file count, the document count and the finding count so folding it costs you
+nothing. A file that failed to parse forces it open and turns the count red, because a
+parse error behind a fold reads as a clean scan of a file that was never scanned.
+
 Selection is held per finding, not per row, so filtering and sorting never move a tick
 onto something else. `Select all shown` takes every fixable finding currently visible,
 which is not the same as everything loaded. A finding with no mechanical fix gets a
 disabled checkbox naming the reason, so the absence of an option reads as an answer
 rather than an oversight.
+
+## Choosing which namespaces you are auditing
+
+Every namespace you load is listed on the Audit tab with its object and finding counts.
+Untick one and it leaves scope: out of the findings, out of the posture score, out of the
+report and out of the JSON. It is excluded, not hidden.
+
+Both halves move together. If the findings were scoped and the objects were not, every
+excluded object would stay in the denominator with none of its failures in the numerator,
+and deselecting namespaces would make the score go up. Excluding one of two identical
+namespaces leaves the score exactly where it was, and there is a test that asserts it.
+
+The report says so where you cannot miss it. The HTML report opens with a note naming
+every excluded namespace and what went with it, above the score rather than below, and the
+JSON carries the same under `scope`. Exclude every namespace and you get no score at all,
+with an explanation, rather than 100 out of 100.
+
+`Deselect platform namespaces` takes openshift, kube, stackrox, rhacs and the rest out of
+scope in one click.
+
+## Platform workloads will break if you fix them like application workloads
+
+An operator is a workload that talks to the Kubernetes API for a living. The OpenShift API
+server operator is the obvious example: setting `automountServiceAccountToken: false` on it
+removes the credential it uses to do its job, and it stops. The same is true of controllers,
+service meshes, and anything using in cluster config. Dropping ALL capabilities and
+generating a default deny NetworkPolicy over a platform namespace land the same way.
+
+So both tables carry a Namespace column, sortable, and every row in a platform namespace
+is marked. The mark is advisory and the fixes stay available, because the tool does not
+decide for you. If you want them out of reach rather than marked, deselect the namespace.
+If you want to keep one specific fix off one specific object with the reason on the record,
+that is what the next section is for.
+
+## Not fixing something, on purpose
+
+Some findings are real and are not going to be fixed. A service account token is mounted
+deliberately in one place, a host path is contractual, a replacement is scheduled and
+tracked elsewhere. Press **Opt out** on the row and write down why.
+
+The reason is required. An empty box is refused, so is a reason too short to be an audit
+record, and so are the usual non answers: `n/a`, `none`, `by design`, `wont fix`. Six
+months from now the only thing separating "we looked at this and accepted it" from "we
+never looked at this" is whether somebody wrote down which one it was.
+
+An opted out finding drops out of the corrected YAML and out of `Select all`. It stays in
+the report and in the JSON, carrying your reason with it. It is recorded, not hidden.
+
+An exception is one policy against one object. Opting out of `automountServiceAccountToken`
+on a batch job says nothing about the same policy on the deployment next to it.
+
+`Save exceptions` writes a JSON file and `Load exceptions` reads one back, on this machine
+or any other, and the corrected YAML export carries a copy. That file is the record. The
+browser keeps a copy where it can, but a page opened from a `file://` URL has an opaque
+origin and often cannot keep one at all, so put the JSON in the repository beside the
+manifests where it gets reviewed like anything else. An entry whose reason was deleted by
+hand is refused on the way back in rather than imported blank.
+
+## After the fixes land, and something is crashlooping
+
+`scripts/acs_rollout.sh` is the other half of the annotations below. It reads the cluster
+and prints commands. It never runs `rollout undo`, `rollback`, `apply`, `patch`, `delete`
+or `scale`, and the test suite drives it against a fake `oc` that refuses every write verb
+and asserts none was issued.
+
+```sh
+./scripts/acs_rollout.sh plan                  # broken workloads, touched workloads, overlap
+./scripts/acs_rollout.sh broken -n prod        # unhealthy pods, mapped to what owns them
+./scripts/acs_rollout.sh touched               # what the auditor changed, healthy or not
+./scripts/acs_rollout.sh snapshot -o ./rb      # capture it all to files, reads only
+./scripts/acs_rollout.sh undo -n prod deployment/api --to-revision 6
+```
+
+`broken` and `touched` are deliberately different lists. `broken` is triage by symptom and
+includes workloads this tool never touched. `touched` reads the `acs-auditor/applied`
+annotation and includes a workload that took a bad fix and has not restarted yet. `plan`
+prints both and names the overlap.
+
+A broken pod is reported as the workload that owns it, not as the ReplicaSet in between,
+and Deployment, StatefulSet, DaemonSet and DeploymentConfig are each given the command they
+actually take: `oc rollout undo` for the first three, `oc rollback --to-version` for a
+DeploymentConfig.
+
+Two things about revisions worth knowing before you need them. A rollback does not delete
+revisions, it creates a new one carrying the old spec, so roll back from 7 to 3 and you get
+an 8 that looks like 3. And `revisionHistoryLimit` defaults to 10 and prunes silently, so
+`--to-revision` on a pruned revision answers `unable to find specified revision in history`
+and no flag brings it back. Capture the history with `snapshot` before you need it.
+
+For CronJobs and Jobs, which have no rollout at all, `restore` prints an object out of a
+capture with the server owned fields stripped. It needs no `oc` on PATH, which is the
+point: it has to work on the machine that cannot reach the cluster.
+
+## Knowing which revision the fixes are in
+
+Every object the tool changes is annotated twice:
+
+| Annotation | Where | Why |
+|---|---|---|
+| `kubernetes.io/change-cause` | on the object | it is the column `oc rollout history` prints |
+| `acs-auditor/applied` | on the pod template | it travels into the ReplicaSet or ControllerRevision for that revision |
+
+The object level annotation alone does not survive into a revision, which is why both are
+written. Both carry the same short value:
+
+    2026-09-18 14:40Z / DJ ACS Auditor 1.8.0 / ACS-20260918-1440-001
+
+Date, time in UTC, tool and version, and a reference. Short, because a list of nine policy
+ids is wider than the column that prints it. The reference resolves to a register in
+`READ_THIS_FIRST.md` and in the change log saying which object it was, which policies were
+applied, and which of them can stop the workload.
+
+To go the other way, from a running workload back to the file that changed it:
+
+```sh
+oc get deploy NAME -n NS -o jsonpath='{.spec.template.metadata.annotations.acs-auditor/applied}{"\n"}'
+```
+
+Objects the tool did not change are not annotated. Stamping one would alter its pod
+template hash, and altering a pod template hash restarts the workload. Restarting a
+workload to record that nothing happened to it is not free.
+
+## Working one namespace at a time
+
+The Remediate tab has a Namespace filter alongside the others. Set it and `Select all
+shown` takes only that namespace.
+
+Whatever you leave behind is recorded. `READ_THIS_FIRST.md` and the change log carry a row
+for every namespace that was in scope, whether or not anything was applied to it, with how
+many findings were fixed, excepted, left for a human and left alone. The namespaces that
+received no fixes are named again underneath, because nobody scanning a long table does the
+subtraction. Namespaces you excluded before the scan get their own section saying plainly
+that they were not examined.
 
 ## Getting corrected YAML out of the browser
 

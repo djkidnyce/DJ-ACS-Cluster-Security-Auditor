@@ -792,6 +792,581 @@ async function detailRows() {
  * not produce would be worse than no diff, because you would review the wrong thing and
  * believe otherwise.
  */
+/* Annotating a fixed object, so a revision can say what it is.
+ *
+ * This came out of a real rollback: pods crashlooping after a batch of fixes, a list of
+ * revisions, and no way to tell which carried which change. `oc rollout history` printed
+ * a column of <none> and the ReplicaSets were anonymous.
+ *
+ * The properties that matter are not that an annotation exists. They are WHERE it is:
+ * change-cause on the object is the column rollout history prints, and the template
+ * annotation is part of the pod template hash so it rides into the ReplicaSet. Either
+ * one alone leaves a gap, and a test that only checks "an annotation is present" would
+ * pass with the useless half.
+ */
+/* Loading is additive and keyed on file name: a page that has seen 40 files has seen 40
+   files for the rest of its life. Each scenario below therefore gets its own page rather
+   than sharing one, because a shared page would carry the previous scenario's file count
+   into the next one and the assertions would be measuring the wrong number. The first
+   version of this suite did exactly that and passed anyway. */
+async function namespaces() {
+  const dep = (ns, n) => ['apiVersion: apps/v1', 'kind: Deployment',
+    'metadata: { name: ' + n + ', namespace: ' + ns + ' }', 'spec:', '  template:',
+    '    spec:', '      containers:', '      - name: c', '        image: q/a:1',
+    '        securityContext: { privileged: true }'].join('\n');
+  const h = await open('dj_acs_auditor.html',
+    'window.__load=(i)=>loadItems(i);window.__S=()=>STATE;window.__tab=(t)=>showTab(t);' +
+    'window.__out=()=>NSOUT;window.__json=()=>buildFindingsJson(reportState());' +
+    'window.__rep=()=>buildHtmlReport(reportState());window.__sel=()=>FSELECTED;');
+  const { w, $, cleanup } = h;
+  const chips = () => Array.from(w.document.querySelectorAll('.nschip'));
+  const chipFor = (ns) => {
+    const box = w.document.querySelector('input.nssel[data-ns="' + ns + '"]');
+    return box && box.closest('.nschip');
+  };
+  /* The rendered posture card, not a recomputation. A test that calls computePosture
+     itself would pass while the page showed a stale number. */
+  const score = () => Number($('cards').querySelector('.num').textContent);
+
+  console.log('\n  Every namespace that was loaded is offered, with what is in it');
+  w.__load([{ name: 'a.yaml', text: dep('prod', 'api') },
+            { name: 'b.yaml', text: dep('staging', 'web') },
+            { name: 'c.yaml', text: dep('openshift-monitoring', 'mon') }]);
+  t('the panel is showing', !$('nsPanel').classList.contains('hidden'));
+  t('one chip per namespace', chips().length === 3);
+  t('all three start in scope', /^3 of 3 in scope/.test($('nsPanelCnt').textContent));
+  t('the platform namespace is marked as one',
+    !!chipFor('openshift-monitoring').querySelector('.pill.plat'));
+  t('and an ordinary namespace is not', !chipFor('prod').querySelector('.pill.plat'));
+  const scanned = w.__S().scanned.length;
+  t('nothing is excluded yet', w.__S().findings.length === scanned);
+
+  console.log('\n  Deselecting takes a namespace out of scope, not out of view');
+  const before = score();
+  const cb = chipFor('staging').querySelector('input.nssel');
+  cb.checked = false;
+  cb.dispatchEvent(new w.Event('change', { bubbles: true }));
+  t('the namespace is recorded as excluded', w.__out().has('staging'));
+  t('its findings leave the working set',
+    w.__S().findings.every((f) => f.ns !== 'staging'));
+  t('but the scan still holds them, so the count of what was excluded is real',
+    w.__S().scanned.some((f) => f.ns === 'staging'));
+  t('the panel says what went with it',
+    /1 excluded taking \d+ finding/.test($('nsPanelCnt').textContent));
+  t('no row for it is left in the findings table',
+    !$('ftable').querySelector('tbody').textContent.includes('staging'));
+
+  console.log('\n  The score moves with both halves, or it is a lie');
+  /* prod and staging are byte identical apart from the name. Excluding one of two equally
+     bad namespaces must not change the score. If the findings were scoped and the objects
+     were not, the excluded namespace would keep its weight in the denominator with none of
+     its failures in the numerator, and deselecting namespaces would raise the score every
+     time. That is the defect this asserts against, and it is the reason scopedFiles
+     exists. */
+  t('excluding one of two equally bad namespaces leaves the score alone',
+    score() === before);
+  t('and the score is not a perfect one, so there was something to get wrong',
+    before < 100);
+
+  console.log('\n  The report and the JSON say the scope was partial');
+  const js = w.__json();
+  t('the JSON counts only the documents in scope', js.scope.documents === 2);
+  t('it names what was excluded', js.scope.excludedNamespaces.length === 1);
+  t('with the namespace', js.scope.excludedNamespaces[0].namespace === 'staging');
+  t('and how many findings went with it',
+    js.scope.excludedNamespaces[0].findingsExcluded > 0);
+  t('the findings list is scoped too',
+    js.findings.every((f) => f.object.indexOf('web') === -1));
+  const rep = w.__rep();
+  t('the HTML report says the estate is only partly covered',
+    /This report covers part of the estate/.test(rep));
+  t('it names the namespace in the report body', rep.indexOf('staging') !== -1);
+  t('and says it before the score, not in a footnote',
+    rep.indexOf('part of the estate') < rep.indexOf('Posture'));
+
+  console.log('\n  Deselecting the platform namespaces is one button');
+  $('btnNsAll').click();
+  t('everything is back in scope', w.__out().size === 0);
+  $('btnNsNoPlatform').click();
+  t('the platform namespace is out', w.__out().has('openshift-monitoring'));
+  t('and nothing else is', w.__out().size === 1);
+  t('the findings from it are gone with it',
+    w.__S().findings.every((f) => f.ns !== 'openshift-monitoring'));
+  $('btnNsAll').click();
+
+  console.log('\n  An empty scope is refused a score, the same as an empty load');
+  /* Namespace scoping reopened a defect this project had already closed once: files
+     loaded, every namespace deselected, denominator empty, and the page printing 100 out
+     of 100 Grade A over nothing. It was caught by an engine test that checks the guard
+     sits before the scoring, not by anything here, so it gets an assertion here too. */
+  $('btnNsNone').click();
+  t('every namespace is out of scope', w.__out().size === 3);
+  t('no score is shown at all', !$('cards').querySelector('.num'));
+  t('and no card presents a grade either',
+    !Array.from($('cards').querySelectorAll('.lbl')).some((l) => /Posture, grade/.test(l.textContent)));
+  t('and it says which of the two empties this is',
+    /[Ee]very namespace is out of scope/.test($('cards').textContent));
+  t('it still explains why a score would be meaningless',
+    /denominator/.test($('cards').textContent));
+  $('btnNsAll').click();
+  t('putting them back brings the score back', !!$('cards').querySelector('.num'));
+
+  console.log('\n  A namespace column that sorts');
+  w.__tab('remediate');
+  const head = Array.from($('rtable').querySelectorAll('thead th')).map((x) => x.textContent.trim());
+  t('the remediate table has one', head.indexOf('Namespace') !== -1);
+  t('the audit table has one too',
+    Array.from($('ftable').querySelectorAll('thead th')).map((x) => x.textContent.trim())
+      .indexOf('Namespace') !== -1);
+  const cells = Array.from($('rtable').querySelectorAll('tbody tr[data-i]'))
+    .map((tr) => tr.children[3].textContent.trim());
+  t('every row says which namespace it is in', cells.every((c) => c.length > 0));
+  const nsTh = Array.from($('rtable').querySelectorAll('thead th'))
+    .find((x) => x.dataset.key === 'ns');
+  nsTh.dispatchEvent(new w.Event('click', { bubbles: true }));
+  const sorted = Array.from($('rtable').querySelectorAll('tbody tr[data-i]'))
+    .map((tr) => tr.children[3].textContent.trim().split(' ')[0]);
+  t('clicking the header sorts by it',
+    sorted.join('|') === sorted.slice().sort().join('|'));
+  t('and the platform namespace is marked on the row too',
+    !!$('rtable').querySelector('tbody .pill.plat'));
+  const nsTd = $('rtable').querySelector('tbody td.nscell');
+  t('the namespace cell carries the bare namespace as its title, pill or not',
+    !!nsTd && nsTd.title.length > 0 && nsTd.textContent.trim().indexOf(nsTd.title) === 0);
+  t('and the title is the namespace rather than the pill text',
+    nsTd.title.indexOf('platform') === -1 || nsTd.title === 'platform');
+
+  console.log('\n  Fixing one namespace records the ones left alone');
+  $('fixMode').value = 'manual'; $('fixMode').dispatchEvent(new w.Event('change'));
+  $('fNs').value = 'prod'; $('fNs').dispatchEvent(new w.Event('change'));
+  $('btnFSelAll').click();
+  const picked = Array.from(w.__sel());
+  t('something was selected', picked.length > 0);
+  t('select all shown took only the filtered namespace',
+    w.__S().findings.filter((f) => w.__sel().has(w.__key ? w.__key(f) : ''))
+      .every((f) => f.ns === 'prod') || picked.every((k) => k.indexOf('prod') !== -1));
+
+  const got = [];
+  w.download = (n, c) => got.push({ name: n, text: c });
+  delete w.JSZip;
+  $('btnExportFixed').click();
+  await new Promise((r) => setTimeout(r, 2500));
+  const md = got.find((g) => /READ_THIS_FIRST/.test(g.name));
+  t('the export was written', !!md);
+  t('it reports coverage per namespace', /## Namespace coverage/.test(md.text));
+  t('every in scope namespace has a row, including the ones nobody touched',
+    /\| prod \|/.test(md.text) && /\| staging \|/.test(md.text));
+  t('it names the namespaces that received no fixes',
+    /received no fixes in this run/.test(md.text));
+  t('and says their findings are still open', /still open/.test(md.text));
+  t('a namespace that was fixed is not in that list',
+    md.text.split('received no fixes in this run')[1].split('.')[0].indexOf('prod') === -1);
+  cleanup();
+}
+
+async function filesPanel() {
+  const dep = (n) => ['apiVersion: apps/v1', 'kind: Deployment',
+    'metadata: { name: d' + n + ', namespace: ns }', 'spec:', '  template:', '    spec:',
+    '      hostNetwork: true', '      containers:', '      - name: c',
+    '        image: q/a:1'].join('\n');
+  const many = (n) => Array.from({ length: n },
+    (_, i) => ({ name: 'm/f' + i + '.yaml', text: dep(i) }));
+  const fresh = async () => {
+    const h = await open('dj_acs_auditor.html',
+      'window.__load=(i)=>loadItems(i);window.__S=()=>STATE;' +
+      'window.__restore=()=>restoreFilesPanelPref();');
+    h.panel = () => h.$('filesPanel');
+    h.cnt = () => h.$('filesPanelCnt').textContent;
+    h.chips = () => h.$('filelist').querySelectorAll('.filechip').length;
+    return h;
+  };
+
+  console.log('\n  Nothing loaded, nothing to collapse');
+  let h = await fresh();
+  t('the panel is hidden before anything is loaded',
+    h.panel().classList.contains('hidden'));
+
+  console.log('\n  A short list stays open, because folding three files helps nobody');
+  h.w.__load(many(3));
+  t('the panel is showing', !h.panel().classList.contains('hidden'));
+  t('and open', h.panel().open === true);
+  t('the chips are still there, one per file', h.chips() === 3);
+
+  console.log('\n  The summary carries the counts, so folding it costs nothing');
+  t('it counts the files', /^3 files/.test(h.cnt()));
+  t('it counts the documents', /\b3 documents\b/.test(h.cnt()));
+  t('it counts the findings',
+    h.cnt().indexOf(h.w.__S().findings.length + ' finding') !== -1);
+  t('and it agrees with the number of chips drawn',
+    Number(h.cnt().match(/^(\d+) files/)[1]) === h.chips());
+
+  console.log('\n  The panel does not mistake its own default for a decision');
+  /* The markup starts closed, so the default opening a short list is a real change to the
+     open property, and a real browser queues a toggle event after it. Without a guard
+     that event is indistinguishable from the operator opening the panel, the default is
+     recorded as their choice, and it never applies again. The queued event is simulated
+     here rather than assumed away. A default that does not change the property fires
+     nothing, so there is no second case to cover. */
+  t('the default opened it', h.panel().open === true);
+  h.panel().dispatchEvent(new h.w.Event('toggle'));
+  t('and the event that follows is not read as the operator opening it',
+    h.panel().dataset.touched !== '1');
+  h.w.__load(many(40));
+  t('so the default still applies on the next load, and folds the long list',
+    h.panel().open === false);
+  h.cleanup();
+
+  console.log('\n  Documents are counted, not files, which are not the same number');
+  h = await fresh();
+  h.w.__load([{ name: 'm/bundle.yaml', text: [dep(90), dep(91), dep(92)].join('\n---\n') },
+              { name: 'm/one.yaml', text: dep(93) }]);
+  t('two files', /^2 files/.test(h.cnt()));
+  t('but four documents, because one file held three', /\b4 documents\b/.test(h.cnt()));
+  t('and two chips, one per file', h.chips() === 2);
+  h.cleanup();
+
+  console.log('\n  A long list folds itself away');
+  h = await fresh();
+  h.w.__load(many(40));
+  t('40 files is past the point where the list is worth reading',
+    h.panel().open === false);
+  t('but the summary still says how much is behind the fold', /^40 files/.test(h.cnt()));
+  t('and the chips exist, so nothing was dropped to make it fit', h.chips() === 40);
+
+  h.cleanup();
+
+  console.log('\n  The operator overrules the default, and it sticks');
+  h = await fresh();
+  h.w.__load(many(40));
+  t('it starts folded', h.panel().open === false);
+  h.panel().open = true;
+  h.panel().dispatchEvent(new h.w.Event('toggle'));
+  t('opening it by hand is recorded as a choice', h.panel().dataset.touched === '1');
+  h.w.__load([{ name: 'm/extra.yaml', text: dep(99) }]);
+  t('a later load does not fold it back up on them', h.panel().open === true);
+  t('even though it is past the threshold that folds it by default',
+    h.w.__S().files.length > 12);
+  h.cleanup();
+
+  console.log('\n  Opened from a file, there is no storage at all, and that is fine');
+  /* A page opened from a file:// URL has an opaque origin and touching localStorage
+     throws rather than returning null. That is the primary way this tool is used, so it
+     is the default case rather than the edge case: every read and write is wrapped, and
+     the panel falls back to the size based default. The jsdom windows here are file://
+     too, so the suites above have been exercising this the whole time. */
+  h = await fresh();
+  let threw = false;
+  try { h.w.localStorage.getItem('x'); } catch (e) { threw = true; }
+  t('the environment really does refuse storage', threw);
+  h.w.__load(many(3));
+  t('the panel still works', h.panel().open === true);
+  h.panel().open = false;
+  h.panel().dispatchEvent(new h.w.Event('toggle'));
+  t('and toggling it does not throw where it cannot be saved',
+    h.panel().dataset.touched === '1');
+  h.cleanup();
+
+  console.log('\n  Where storage does work, a choice made earlier is still their choice');
+  const fakeStore = (w) => {
+    const m = new Map();
+    Object.defineProperty(w, 'localStorage', {
+      configurable: true,
+      value: { getItem: (k) => (m.has(k) ? m.get(k) : null),
+               setItem: (k, v) => m.set(k, String(v)),
+               removeItem: (k) => m.delete(k) },
+    });
+    return m;
+  };
+
+  h = await fresh();
+  fakeStore(h.w).set('acsFilesOpen', 'open');
+  t('the stored preference is read back', h.w.__restore() === 'open');
+  h.w.__load(many(40));
+  t('and a long list stays open because they said so last time',
+    h.panel().open === true);
+  h.cleanup();
+
+  h = await fresh();
+  fakeStore(h.w).set('acsFilesOpen', 'shut');
+  h.w.__restore();
+  h.w.__load(many(3));
+  t('the opposite preference holds too, on a list short enough to open by default',
+    h.panel().open === false);
+  t('and the counts are still there to read while it is folded',
+    /^3 files/.test(h.cnt()));
+  h.cleanup();
+
+  h = await fresh();
+  const store = fakeStore(h.w);
+  store.set('acsFilesOpen', 'nonsense');
+  t('a value that is neither is ignored rather than acted on',
+    h.w.__restore() === null);
+  h.w.__load(many(3));
+  t('so the default decides', h.panel().open === true);
+
+  console.log('\n  And a choice made now is what an earlier session will read');
+  h.panel().open = false;
+  h.panel().dispatchEvent(new h.w.Event('toggle'));
+  t('collapsing it is written to storage', store.get('acsFilesOpen') === 'shut');
+  h.panel().open = true;
+  h.panel().dispatchEvent(new h.w.Event('toggle'));
+  t('and opening it overwrites that', store.get('acsFilesOpen') === 'open');
+  h.cleanup();
+
+  console.log('\n  A file that could not be read outranks both');
+  h = await fresh();
+  h.w.__load([{ name: 'm/ok.yaml', text: dep(1) },
+              { name: 'm/broken.yaml', text: 'a:\n  - b\n c: [unclosed' }]);
+  t('the file that failed to parse is counted', /could not be read/.test(h.cnt()));
+  t('and the count is marked as needing attention',
+    h.$('filesPanelCnt').classList.contains('hot'));
+  h.panel().open = false;
+  h.panel().dispatchEvent(new h.w.Event('toggle'));
+  t('collapsing it by hand is recorded', h.panel().dataset.touched === '1');
+  h.w.__load([{ name: 'm/ok2.yaml', text: dep(2) }]);
+  t('but that does not hide a parse error on the next load', h.panel().open === true);
+  h.cleanup();
+}
+
+async function optOuts() {
+  const { w, $, cleanup } = await open('dj_acs_auditor.html',
+    'window.__load=(i)=>loadItems(i);window.__tab=(t)=>showTab(t);window.__S=()=>STATE;' +
+    'window.__opt=()=>OPTOUTS;window.__bundle=()=>optOutBundle();' +
+    'window.__import=(d)=>optOutImport(d);window.__rows=()=>FROWS;' +
+    'window.__apply=()=>{applyOptOuts(STATE.findings);renderTable();};' +
+    'window.__sel=()=>FSELECTED;window.__key=(f)=>findingRowKey(f);' +
+    'window.__json=()=>buildFindingsJson(reportState());');
+  const dep = (n) => ['apiVersion: apps/v1', 'kind: Deployment',
+    'metadata: { name: ' + n + ', namespace: prod }', 'spec:', '  template:', '    spec:',
+    '      hostNetwork: true', '      containers:', '      - name: c', '        image: q/a:1',
+    '        securityContext: { privileged: true }'].join('\n');
+  w.__load([{ name: 'm/api.yaml', text: dep('payments-api') },
+            { name: 'm/web.yaml', text: dep('web-front') }]);
+  w.__tab('remediate');
+  $('fixMode').value = 'manual'; $('fixMode').dispatchEvent(new w.Event('change'));
+
+  const tbody = () => $('rtable').querySelector('tbody');
+  const rowFor = (pol, obj) => {
+    const rows = w.__rows();
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i].policy.id === pol && rows[i].obj.indexOf(obj) !== -1) {
+        return tbody().querySelector('tr[data-i="' + i + '"]');
+      }
+    }
+    return null;
+  };
+  const click = (el) => el.dispatchEvent(new w.Event('click', { bubbles: true }));
+  const target = w.__rows().find((f) => !f.applied && f.fixKind !== 'manual');
+  const POL = target.policy.id, OBJ = target.obj;
+
+  console.log('\n  Opting out asks for a reason and will not take a non answer');
+  let tr = rowFor(POL, OBJ);
+  t('the row offers an opt out', !!tr.querySelector('button.ropt'));
+  click(tr.querySelector('button.ropt'));
+  let form = tr.nextElementSibling.querySelector('.optform');
+  t('a form opens under the row', !!form);
+  t('and it is visible rather than opened hidden',
+    !tr.nextElementSibling.classList.contains('hidden'));
+
+  click(form.querySelector('button.optsave'));
+  t('an empty reason is refused', w.__opt().size === 0);
+  t('and the refusal is shown next to the box, not somewhere off screen',
+    form.querySelector('.optmsg').textContent.length > 20);
+
+  form.querySelector('.optreason').value = 'n/a';
+  click(form.querySelector('button.optsave'));
+  t('"n/a" is refused as a label rather than a reason', w.__opt().size === 0);
+
+  form.querySelector('.optreason').value = 'no time';
+  click(form.querySelector('button.optsave'));
+  t('so is a reason too short to be an audit record', w.__opt().size === 0);
+  t('the finding is still fixable while every attempt is refused',
+    !!rowFor(POL, OBJ).querySelector('input.fsel:not([disabled])'));
+
+  console.log('\n  A real reason is recorded and the finding stops being written');
+  const REASON = 'Cluster policy forbids this on the payments path, waiver PSC-114.';
+  form.querySelector('.optreason').value = REASON;
+  click(form.querySelector('button.optsave'));
+  t('the exception is recorded', w.__opt().size === 1);
+  tr = rowFor(POL, OBJ);
+  t('the row says so', /Opted out/.test(tr.textContent));
+  t('its checkbox is disabled, so it cannot be selected for export',
+    !!tr.querySelector('input[type=checkbox][disabled]'));
+  t('and the disabled box says why, rather than looking broken',
+    tr.querySelector('input[type=checkbox][disabled]').getAttribute('title').indexOf('PSC-114') !== -1);
+  t('the button now offers the recorded exception rather than a fresh opt out',
+    /Exception/.test(tr.querySelector('button.ropt').textContent));
+
+  console.log('\n  It is per policy per object, not a blanket mute');
+  const other = w.__rows().find((f) => f.policy.id === POL && f.obj !== OBJ);
+  t('the same policy on another object exists to check', !!other);
+  const otr = rowFor(POL, other.obj.split('/').pop());
+  t('and it is untouched', !!otr.querySelector('input.fsel:not([disabled])'));
+  t('only one finding is opted out',
+    w.__S().findings.filter((f) => f.optOut).length === 1);
+
+  console.log('\n  Select all skips it, so it cannot be swept back in');
+  $('btnFSelAll').click();
+  const sel = w.__sel();
+  t('something was selected', sel.size > 0);
+  t('but not the opted out finding', !sel.has(w.__key(target)));
+
+  console.log('\n  The reason ships with the export');
+  const got = [];
+  w.download = (n, c) => got.push({ name: n, text: c });
+  delete w.JSZip;
+  $('btnExportFixed').click();
+  await new Promise((r) => setTimeout(r, 2500));
+  const md = got.find((g) => /READ_THIS_FIRST/.test(g.name));
+  t('the markdown was written', !!md);
+  t('it names the exception as documented rather than omitting it',
+    /## Documented exceptions/.test(md.text));
+  t('it carries the reason verbatim', md.text.indexOf('PSC-114') !== -1);
+  t('it says the finding was not fixed and is not gone', /not fixed/.test(md.text));
+  t('the exceptions travel as a file that can be loaded again',
+    got.some((g) => /exceptions.*\.json$/.test(g.name)));
+  const ex = got.find((g) => /exceptions.*\.json$/.test(g.name));
+  const parsed = JSON.parse(ex.text);
+  t('the file carries one entry', parsed.entries.length === 1);
+  t('and is marked as ours, so a stray JSON is not mistaken for one',
+    parsed.mark === 'dj-acs-auditor/exceptions');
+
+  console.log('\n  An opted out finding is still a finding');
+  const js = w.__json();
+  const row = js.findings.find((r) => r.id === POL && r.object === OBJ);
+  t('it is still in the JSON rather than filtered out of the record', !!row);
+  t('and carries its exception', row.exception && row.exception.reason === REASON);
+  t('findings with no exception say null rather than nothing',
+    js.findings.some((r) => r.exception === null));
+
+  console.log('\n  Loading exceptions refuses entries with the reason removed by hand');
+  const r1 = w.__import({ mark: 'dj-acs-auditor/exceptions',
+    entries: [{ key: 'k1', reason: '' }, { key: 'k2', reason: 'n/a' },
+              { key: 'k3', reason: 'Documented in the system security plan, control CM-6.' }] });
+  t('the one with a real reason is taken', r1.added === 1);
+  t('the blank and the label are rejected', r1.rejected === 2);
+
+  console.log('\n  A recorded exception survives reloading the same manifests');
+  /* The handler stamps the finding it was given. Nothing above this point re-derives a
+     stamp from the stored map, which is what a reload, a second scan and a loaded
+     exceptions file all depend on, so it is checked on its own. */
+  w.__load([{ name: 'm/api.yaml', text: dep('payments-api') },
+            { name: 'm/web.yaml', text: dep('web-front') }]);
+  const after = w.__S().findings.find((f) => f.policy.id === POL && f.obj === OBJ);
+  t('the rescanned finding is a different object than the one that was opted out',
+    after !== target);
+  t('and it comes back carrying the exception', !!after.optOut);
+  t('with the reason intact', after.optOut && after.optOut.reason === REASON);
+  t('it is not selectable after the reload either',
+    !!rowFor(POL, OBJ).querySelector('input[type=checkbox][disabled]'));
+  const twin = w.__S().findings.find((f) => f.policy.id === POL && f.obj !== OBJ);
+  t('the same policy on the other object did not inherit it', !twin.optOut);
+  t('exactly one finding is opted out after the reload',
+    w.__S().findings.filter((f) => f.optOut).length === 1);
+
+  console.log('\n  An exceptions file written elsewhere applies to what is loaded here');
+  w.__opt().clear();
+  w.__apply();
+  t('clearing the store clears the findings on the next pass',
+    w.__S().findings.filter((f) => f.optOut).length === 0);
+  const mine = w.__S().findings.find((f) => f.policy.id === POL && f.obj === OBJ);
+  w.__import({ mark: 'dj-acs-auditor/exceptions', entries: [
+    { key: w.__key(mine), reason: 'Waived in the system security plan under control CM-6.',
+      policy: POL, obj: OBJ }] });
+  w.__apply();
+  t('the imported exception lands on the finding it names', !!mine.optOut);
+  t('and on nothing else',
+    w.__S().findings.filter((f) => f.optOut).length === 1);
+  t('an imported exception reads the same as one recorded here',
+    mine.optOut.reason.indexOf('CM-6') !== -1);
+  w.__opt().clear();
+  w.__apply();
+  click(rowFor(POL, OBJ).querySelector('button.ropt'));
+  const reform = rowFor(POL, OBJ).nextElementSibling.querySelector('.optform');
+  reform.querySelector('.optreason').value = REASON;
+  click(reform.querySelector('button.optsave'));
+
+  console.log('\n  Removing an exception puts the finding back in scope');
+  click(rowFor(POL, OBJ).querySelector('button.ropt'));
+  const form2 = rowFor(POL, OBJ).nextElementSibling.querySelector('.optform');
+  t('the form comes back showing what was recorded',
+    form2.querySelector('.optreason').value === REASON);
+  click(form2.querySelector('button.optclear'));
+  t('the exception is gone', !w.__S().findings.find((f) => f.obj === OBJ && f.policy.id === POL).optOut);
+  t('and the finding is selectable again',
+    !!rowFor(POL, OBJ).querySelector('input.fsel:not([disabled])'));
+  cleanup();
+}
+
+async function annotations() {
+  const { w, $, cleanup } = await open('dj_acs_auditor.html',
+    'window.__load=(i)=>loadItems(i);window.__tab=(t)=>showTab(t);window.__S=()=>STATE;' +
+    'window.__ver=()=>ACS_VERSION;');
+  const DEP = ['apiVersion: apps/v1', 'kind: Deployment',
+    'metadata: { name: payments-api, namespace: prod }', 'spec:', '  template:', '    spec:',
+    '      hostNetwork: true', '      containers:', '      - name: api', '        image: q/a:1',
+    '        securityContext: { privileged: true }'].join('\n');
+  const CM = ['apiVersion: v1', 'kind: ConfigMap',
+    'metadata: { name: cfg, namespace: prod }', 'data: { a: b }'].join('\n');
+  w.__load([{ name: 'm/api.yaml', text: DEP }, { name: 'm/cfg.yaml', text: CM }]);
+  w.__tab('remediate');
+  $('fixMode').value = 'manual'; $('fixMode').dispatchEvent(new w.Event('change'));
+  $('btnFSelAll').click();
+
+  const got = [];
+  w.download = (n, c) => got.push({ name: n, text: c });
+  delete w.JSZip;
+  $('btnExportFixed').click();
+  await new Promise((r) => setTimeout(r, 2500));
+
+  const y = got.find((g) => /api/.test(g.name) && /\.ya?ml$/.test(g.name));
+  console.log('\n  A fixed object says what was done to it');
+  t('the corrected file was written', !!y);
+  const doc = w.jsyaml.load(y.text);
+  const cc = doc.metadata.annotations['kubernetes.io/change-cause'];
+  t('change-cause is on the object, which is the column rollout history prints', !!cc);
+  const tpl = doc.spec.template.metadata.annotations['acs-auditor/applied'];
+  t('and a second annotation is on the pod template, which is what rides into the ReplicaSet',
+    !!tpl);
+  t('the object level one alone would not survive into a revision, so both are required',
+    !!cc && !!tpl);
+
+  console.log('\n  Ordered date, time, tool and version, reference');
+  t('it starts with the date', /^\d{4}-\d{2}-\d{2} /.test(cc));
+  t('then the time, in UTC and saying so', /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}Z /.test(cc));
+  t('then the tool and version',
+    cc.indexOf('Z / DJ ACS Auditor ' + w.__ver() + ' / ') !== -1);
+  t('then a reference', /\/ ACS-\d{8}-\d{4}-\d{3}$/.test(cc));
+  t('both annotations carry the same value, so either one resolves', cc === tpl);
+  t('it is short enough to read in a rollout history column', cc.length < 90);
+
+  console.log('\n  The reference resolves to a register in the markdown');
+  const md = got.find((g) => /READ_THIS_FIRST/.test(g.name));
+  t('the markdown ships with the YAML', !!md);
+  const ref = cc.split(' / ').pop();
+  t('the register names this exact reference', md.text.indexOf('`' + ref + '`') !== -1);
+  t('and says which object it belongs to',
+    new RegExp('`' + ref + '`[^\n]*payments-api').test(md.text));
+  t('the policies live there rather than in the annotation',
+    /ACS\.001/.test(md.text) && !/ACS\.001/.test(cc));
+  t('it flags the fixes that can stop the workload', /[Cc]an stop the workload/.test(md.text));
+  t('and gives the command to go from a running workload back to this file',
+    /acs-auditor\/applied/.test(md.text) && /oc get deploy/.test(md.text));
+
+  console.log('\n  An object nobody fixed is left alone');
+  t('the untouched ConfigMap is not in the export at all',
+    !got.some((g) => /cfg/.test(g.name)));
+  t('and stamping it would have restarted a workload to record that nothing happened',
+    !/acs-auditor/.test(w.jsyaml.dump(w.__S().files[1].docs[0])));
+
+  console.log('\n  Looking at the page does not stamp what is loaded');
+  t('the loaded YAML carries no annotation',
+    !/acs-auditor\/applied/.test(w.jsyaml.dump(w.__S().files[0].docs[0])));
+  t('and no change-cause either',
+    !/change-cause/.test(w.jsyaml.dump(w.__S().files[0].docs[0])));
+  cleanup();
+}
+
 async function diffTab() {
   const { w, $, cleanup } = await open('dj_acs_auditor.html',
     'window.__load=(i)=>loadItems(i);window.__tab=(t)=>showTab(t);' +
@@ -973,7 +1548,7 @@ async function scale() {
   t('the panel cannot exceed the viewport', /\.section,details\.sec\{min-width:0;max-width:100%/.test(css));
   t('the wrapper takes any remainder as its own scrollbar', /\.tablewrap\{overflow-x:auto/.test(css));
   t('long values break inside the cell rather than being clipped out of sight',
-    /td\.wrapcell\{overflow-wrap:anywhere/.test(css));
+    /td\.wrapcell[^{]*\{overflow-wrap:anywhere/.test(css));
   t('and the advisory row is free to wrap',
     /#rtable tr\.fdet td\{max-width:none;white-space:normal/.test(css));
   cleanup();
@@ -1424,7 +1999,13 @@ async function specCases() {
     !!mcb && !!mf &&
     mcb.title === 'No mechanical fix: this one needs a decision. ' + mf.policy.remediation);
   t('and there is no Fix this button in the action cell',
-    !!mrow && !!mrow.children[7] && mrow.children[7].innerHTML === '');
+    !!mrow && !mrow.querySelector('button.rfix'));
+  /* The cell is no longer empty: a finding with no mechanical fix is the one most likely
+     to sit unexplained, so it is offered somewhere to record why it is being left. The
+     assertion above used to read the cell as empty, which tested the absence of
+     everything when what the spec says is the absence of one button. */
+  t('but it can still be opted out with a reason',
+    !!mrow.querySelector('button.ropt'));
   $('fkAuto').checked = true; $('fkGen').checked = true; $('fkManual').checked = true;
   $('fkAuto').dispatchEvent(new w.Event('change'));
 
@@ -1444,7 +2025,9 @@ async function specCases() {
   t('its checkbox is disabled', !!dcb && dcb.disabled === true);
   t('and says so in exactly those words', !!dcb && dcb.title === 'Already applied.');
   t('and it offers no Fix this button',
-    !!drow && !!drow.children[7] && drow.children[7].innerHTML === '');
+    !!drow && !drow.querySelector('button.rfix'));
+  t('nor an opt out, because there is nothing left to decide',
+    !!drow && !drow.querySelector('button.ropt'));
   $('btnFSelAll').click();
   t('select all shown cannot pick up an applied finding',
     !w.__sel().has(w.__key(S().findings.find((f) => f.applied))));
@@ -1840,7 +2423,7 @@ async function specBudget() {
     /\.tablewrap\{[^}]*max-width:\s*100%/.test(style) &&
     /\.section,details\.sec\{[^}]*max-width:\s*100%/.test(style));
   t('a value with no spaces in it is allowed to break inside its cell',
-    /td\.wrapcell\{[^}]*overflow-wrap:\s*anywhere/.test(style) &&
+    /td\.wrapcell[^{]*\{[^}]*overflow-wrap:\s*anywhere/.test(style) &&
     /\.tablewrap td\{[^}]*overflow-wrap:\s*anywhere/.test(style));
   t('nothing clips a cell, so no path is made unreadable to make the table fit',
     !/text-overflow:\s*ellipsis/.test(style) &&
@@ -1927,6 +2510,10 @@ async function specBudget() {
     ['bulkExport', bulkExport],
     ['scale', scale],
     ['diffTab', diffTab],
+    ['annotations', annotations],
+    ['optOuts', optOuts],
+    ['filesPanel', filesPanel],
+    ['namespaces', namespaces],
     ['detailRows', detailRows],
     ['flashDwell', flashDwell],
     ['selectionUi', selectionUi],
@@ -1934,8 +2521,18 @@ async function specBudget() {
     ['specBudget', specBudget],
     ['noManifests', () => noManifests('dj_acs_auditor.html')],
   ];
+  const only = process.argv.slice(2).filter((a) => a[0] !== '-');
+  const chosen = only.length
+    ? suites.filter(([n]) => only.indexOf(n) !== -1) : suites;
+  if (only.length && chosen.length !== only.length) {
+    const known = suites.map(([n]) => n);
+    const bad = only.filter((n) => known.indexOf(n) === -1);
+    console.log('No such suite: ' + bad.join(', '));
+    console.log('Known suites: ' + known.join(', '));
+    process.exit(2);
+  }
   const crashed = [];
-  for (const [name, fn] of suites) {
+  for (const [name, fn] of chosen) {
     try { await fn(); }
     catch (e) {
       crashed.push(name);
@@ -1949,6 +2546,7 @@ async function specBudget() {
     }
   }
   console.log('\n' + P + ' passed, ' + F + ' failed');
+  if (only.length) console.log('PARTIAL RUN: only ' + only.join(', '));
   if (crashed.length) {
     console.log('SUITE(S) THAT CRASHED: ' + crashed.join(', '));
     console.log('A crash is not one failure. Every assertion after the throw in that suite');

@@ -32,9 +32,17 @@ const ROOT = path.join(__dirname, '..');
 for (const page of ['dj_acs_auditor.html']) {
   const src = fs.readFileSync(path.join(ROOT, page), 'utf8');
   /* The guard must come BEFORE the score is computed and rendered, not after. */
-  const guard = src.indexOf("if (!STATE.files.length)");
-  const posture = src.indexOf('computePosture(STATE.files');
+  const guard = src.indexOf("if (!scopedFiles().length)");
+  /* Matched on the call rather than on its argument. The argument changed when namespace
+     scoping arrived, the literal stopped matching, indexOf returned -1, and the assertion
+     below went green because -1 is less than nothing rather than because the guard was in
+     the right place. */
+  const posture = src.indexOf('computePosture(');
   t(page + ': guards on an empty file list', guard !== -1);
+  t(page + ': and the guard is on the scoped file set, not the loaded one',
+    /if \(!scopedFiles\(\)\.length\)/.test(src));
+  t(page + ': posture is computed over the scoped file set too',
+    src.indexOf('computePosture(STATE.files') === -1);
   t(page + ': the guard runs before posture is computed', guard !== -1 && guard < posture);
   t(page + ': it explains that scoring nothing is not clean',
     /not the same as|means unmeasured rather than clean/.test(src));

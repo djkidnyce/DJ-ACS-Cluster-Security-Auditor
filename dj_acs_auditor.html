@@ -71,7 +71,7 @@ table{width:100%;border-collapse:collapse;font-size:13px}
 th.selcell,td.selcell{width:26px;padding-right:0}
 td.selcell input{margin:0;cursor:pointer}
 td.selcell input:disabled{cursor:not-allowed}
-td.wrapcell{overflow-wrap:anywhere;word-break:break-word;white-space:normal}
+td.wrapcell,td.nscell{overflow-wrap:anywhere;word-break:break-word;white-space:normal}
 .kv > div{overflow-wrap:anywhere;min-width:0}
 /* Fixed layout plus explicit column widths, so one 180 character path widens its own
    column and not every other one. The wrapcell rule above is what keeps the value
@@ -80,7 +80,7 @@ td.wrapcell{overflow-wrap:anywhere;word-break:break-word;white-space:normal}
 #rtable td,#rtable th{vertical-align:top}
 #rtable tr.fdet td{max-width:none;white-space:normal;overflow:visible}
 #rtable col.c-sel{width:30px} #rtable col.c-sev{width:86px} #rtable col.c-pol{width:190px}
-#rtable col.c-obj{width:19%} #rtable col.c-file{width:15%} #rtable col.c-det{width:auto}
+#rtable col.c-ns{width:13%} #rtable col.c-obj{width:16%} #rtable col.c-file{width:12%} #rtable col.c-det{width:auto}
 #rtable col.c-kind{width:92px} #rtable col.c-act{width:78px}
 th{color:var(--muted);text-align:left;padding:8px 9px;border-bottom:1px solid var(--border);font-size:11px;text-transform:uppercase;letter-spacing:.05em;white-space:nowrap}
 th.sortable{cursor:pointer;user-select:none}
@@ -200,6 +200,15 @@ select,input[type=text]{background:var(--panel2);color:var(--text);border:1px so
 tr.done td{opacity:.5}
 .sev{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:700;text-transform:uppercase;white-space:nowrap}
 .pill.fixed{color:var(--low);border-color:var(--low);background:var(--add)}
+.pill.optout{color:var(--muted);border-color:var(--muted)}
+.pill.plat{color:var(--med);border-color:var(--med);font-size:10px;padding:0 5px}
+.nschip{background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:3px 9px;font-size:12px;display:inline-flex;align-items:center;gap:5px;margin:3px 4px 0 0;cursor:pointer}
+.nschip.plat{border-color:var(--med)}
+.nschip.off{opacity:.45;text-decoration:line-through}
+.nscount{color:var(--muted);font-size:11px}
+.optform textarea{width:100%;box-sizing:border-box;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:6px;font:inherit;font-size:13px}
+.optform .optmsg{min-height:17px;font-size:12px;color:var(--high)}
+tr.done .optout{opacity:.8}
 pre.diff{background:var(--code);border:1px solid var(--border);border-radius:8px;padding:0;overflow-x:auto;font-family:ui-monospace,Consolas,monospace;font-size:12px;line-height:1.55;margin:0}
 pre.diff div{padding:1px 10px;white-space:pre}
 pre.diff .add{background:var(--add);color:var(--addfg)}
@@ -246,7 +255,10 @@ pre.diff .gap{color:var(--muted);opacity:.6;font-style:italic}
     <input type="file" id="fileinput" multiple accept=".yaml,.yml,.json,.ndjson,.jsonl" style="display:none">
     <input type="file" id="dirinput" webkitdirectory style="display:none">
   </div>
-  <div id="filelist" style="margin-top:8px"></div>
+  <details id="filesPanel" class="section sec hidden">
+    <summary>Loaded files <span class="cnt" id="filesPanelCnt"></span></summary>
+    <div id="filelist" style="margin-top:8px"></div>
+  </details>
 
   <div class="section">
     <h2>Getting data out of ACS</h2>
@@ -398,6 +410,20 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
         tie at the top and destroy the ordering exactly where it matters. It is CVSS plus named, bounded
         adjustments, all listed in the last column. It is not a CVSS score and should not be quoted as one.</p>
     </div>
+    <details id="nsPanel" class="section sec hidden" open>
+      <summary>Namespaces in scope <span class="cnt" id="nsPanelCnt"></span></summary>
+      <p class="note">Unticking a namespace takes it out of scope: out of the findings, out
+        of the score, out of the report and out of the JSON. It is not hidden, it is
+        excluded, and the report says which namespaces were excluded and how many findings
+        went with them. A score for a scope you chose is only honest if the document says
+        what the scope was.</p>
+      <p style="margin:6px 0 2px">
+        <button class="small" id="btnNsAll">Select all</button>
+        <button class="small" id="btnNsNone">Select none</button>
+        <button class="small" id="btnNsNoPlatform" title="Untick openshift, kube, stackrox, rhacs and the other platform namespaces in one go">Deselect platform namespaces</button>
+      </p>
+      <div id="nslist" style="margin-top:6px"></div>
+    </details>
     <details class="section sec" open>
       <summary>Findings <span class="cnt" id="ftableCnt"></span></summary>
       <div class="tablewrap">
@@ -406,6 +432,7 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
           <th class="sortable" data-key="sev" data-label="Severity">Severity</th>
           <th class="sortable" data-key="score" data-label="Score">Score</th>
           <th class="sortable" data-key="id" data-label="Policy">Policy</th>
+          <th class="sortable" data-key="ns" data-label="Namespace">Namespace</th>
           <th class="sortable" data-key="obj" data-label="Object">Object</th>
           <th class="sortable" data-key="file" data-label="File">File</th>
           <th>Finding</th>
@@ -541,8 +568,15 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
           <select id="fPolicy" style="background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:4px 8px;font-size:13px">
             <option value="">any</option>
           </select></label>
+        <label class="chk">Namespace
+          <select id="fNs" title="Work one namespace at a time. Select all shown then takes only that namespace, and the export records every other namespace as untouched." style="background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:4px 8px;font-size:13px">
+            <option value="">any</option>
+          </select></label>
         <button id="btnFSelAll">Select all shown</button>
         <button id="btnFSelNone">Clear selection</button>
+        <button id="btnOptSave" title="Save the recorded exceptions as a JSON file you can keep with the manifests or load on another machine">Save exceptions</button>
+        <button id="btnOptLoad" title="Load exceptions saved earlier or by someone else">Load exceptions</button>
+        <input type="file" id="fOptLoad" accept=".json,application/json" style="display:none">
         <button class="primary" id="btnExportFixed">Download corrected YAML</button>
         <span class="note" id="fCount" style="margin:0"></span>
         <span class="note flashmsg" style="margin:0;color:var(--accent)"></span>
@@ -550,11 +584,12 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
       <p class="note hidden" id="fModeWhy"></p>
       <div class="tablewrap">
       <table id="rtable">
-        <colgroup><col class="c-sel"><col class="c-sev"><col class="c-pol"><col class="c-obj"><col class="c-file"><col class="c-det"><col class="c-kind"><col class="c-act"></colgroup>
+        <colgroup><col class="c-sel"><col class="c-sev"><col class="c-pol"><col class="c-ns"><col class="c-obj"><col class="c-file"><col class="c-det"><col class="c-kind"><col class="c-act"></colgroup>
         <thead><tr>
           <th class="selcell"><input type="checkbox" id="fSelAll" title="Select or clear every fixable finding currently shown"></th>
           <th class="sortable" data-key="sev" data-label="Severity">Severity</th>
           <th class="sortable" data-key="id" data-label="Policy">Policy</th>
+          <th class="sortable" data-key="ns" data-label="Namespace">Namespace</th>
           <th class="sortable" data-key="obj" data-label="Object">Object</th>
           <th class="sortable" data-key="file" data-label="File">File</th>
           <th>Finding</th>
@@ -661,9 +696,15 @@ function loadItems(items) {
 }
 
 function rescan() {
-  STATE.findings = scanFiles(STATE.files);
+  /* STATE.scanned is everything the scan found. STATE.findings is what is in scope, and
+     it is what the rest of the page reads: thirty seven call sites consume STATE.findings
+     and asking each of them to remember the namespace scope is how one of them forgets.
+     The two arrays share their elements, so marking a finding applied is visible through
+     both. */
+  STATE.scanned = applyOptOuts(scanFiles(STATE.files));
+  STATE.findings = scopedFindings(STATE.scanned);
   /* Preserve which findings have already been applied across a rescan. */
-  for (const f of STATE.findings) f.applied = STATE.applied.has(findingKey(f));
+  for (const f of STATE.scanned) f.applied = STATE.applied.has(findingKey(f));
   STATE.onlyInAcs = STATE.acs ? correlate(STATE.findings, STATE.acs.imported).onlyInAcs : [];
   STATE.vulnCorr = STATE.vulns ? correlateVulns(STATE.files, STATE.vulns) : null;
   /* A key for a finding that no longer exists, or that has just been applied, would keep
@@ -685,7 +726,9 @@ function render() {
 
   const fl = $('filelist');
   fl.innerHTML = '';
+  let badFiles = 0;
   for (const f of STATE.files) {
+    if (f.errors.length) badFiles++;
     const n = STATE.findings.filter((x) => x.file === f.name).length;
     const chip = document.createElement('span');
     chip.className = 'filechip' + (f.errors.length ? ' err' : '');
@@ -693,6 +736,7 @@ function render() {
     if (f.errors.length) chip.title = f.errors.join('\n');
     fl.appendChild(chip);
   }
+  updateFilesPanel(badFiles);
   // Vulnerability data alone is enough to have something worth showing. Requiring manifests
   // would hide a valid CVE pull behind an unrelated precondition.
   // ACS data alone is enough to have something worth showing. Requiring manifests would
@@ -708,6 +752,7 @@ function render() {
      change destroyed the option the operator had just focused. */
   refreshFindingFilters();
 
+  renderNsPanel();
   renderAuditTab();
   renderRemediateTab();
   refreshCounts();
@@ -737,7 +782,7 @@ function renderAuditTab() {
    * The CLI already refuses to print a score in this case. The pages must too. Say what
    * is missing and how to get it, rather than showing a number that cannot mean anything.
    */
-  if (!STATE.files.length) {
+  if (!scopedFiles().length) {
     /* No posture score, but that does not mean no numbers. When ACS data is loaded the
        severity counts are real and worth putting at the top; they are counts of what the
        cluster reported, not a score over a denominator that does not exist. Labelling
@@ -763,7 +808,11 @@ function renderAuditTab() {
       '<div style="font-weight:600;margin-bottom:4px">These are counts, not a posture score</div>' +
       '<div class="lbl" style="text-transform:none;letter-spacing:0;font-size:12px;line-height:1.5">' +
       'A posture score is passed weight over total applicable weight, and the denominator ' +
-      'comes from what was scanned. Nothing was scanned, so it computes to 100 out of 100, ' +
+      'comes from what was scanned. ' +
+      (STATE.files.length
+        ? 'Every namespace is out of scope, so the denominator is empty and '
+        : 'Nothing was scanned, so ') +
+      'it computes to 100 out of 100, ' +
       'Grade A, which would read as clean when it actually means unmeasured. The severity ' +
       'counts above are real: they are what ACS reported. The score is the thing that ' +
       'cannot be computed. ' +
@@ -782,8 +831,8 @@ function renderAuditTab() {
     return;
   }
 
-  const before = computePosture(STATE.files, STATE.findings, false);
-  const after = computePosture(STATE.files, STATE.findings, true);
+  const before = computePosture(scopedFiles(), STATE.findings, false);
+  const after = computePosture(scopedFiles(), STATE.findings, true);
 
   $('cards').innerHTML =
     '<div class="card"><div class="num" style="color:' + scoreColour(before.score) + '">' + before.score + '</div><div class="lbl">Posture, grade ' + before.grade + '</div></div>' +
@@ -824,11 +873,11 @@ renderVulnPanel();
      Audit half had put there. Two owners for one element is the exact failure mode the
      merge existed to remove, and it survived the merge because this half was lifted
      wholesale. If a tab needs something on the cards, it belongs in render(). */
-  if (!STATE.files.length) return;
+  if (!scopedFiles().length) return;
 
   const open = STATE.findings.filter((f) => !f.applied);
-  const posture = computePosture(STATE.files, open, false);
-  const projected = computePosture(STATE.files, open, true);
+  const posture = computePosture(scopedFiles(), open, false);
+  const projected = computePosture(scopedFiles(), open, true);
   const autoLeft = open.filter((f) => f.fixKind !== 'manual').length;
   const manual = open.filter((f) => f.fixKind === 'manual').length;
   const confirmed = STATE.findings.filter((f) => f.confirmedByAcs).length;
@@ -1041,8 +1090,9 @@ function renderVulns() {
 }
 
 function reportState() {
-  return { files: STATE.files, findings: STATE.findings, acs: STATE.acs,
-           onlyInAcs: STATE.onlyInAcs, vulns: STATE.vulns, vulnCorr: STATE.vulnCorr };
+  return { files: scopedFiles(), findings: STATE.findings, acs: STATE.acs,
+           onlyInAcs: STATE.onlyInAcs, vulns: STATE.vulns, vulnCorr: STATE.vulnCorr,
+           excludedNamespaces: excludedRows() };
 }
 
 function renderFindingsRO() {
@@ -1077,6 +1127,7 @@ function renderFindingsRO() {
       '<td><b>' + f.policy.score.toFixed(1) + '</b></td>' +
       '<td><span class="acsid">' + f.policy.id + '</span><br><span style="font-size:11.5px">' + esc(f.policy.acsPolicy) + '</span>' +
         (f.confirmedByAcs ? '<br><span class="pill acs">live in ACS</span>' : '') + '</td>' +
+      nsCell(f) +
       '<td class="wrapcell">' + esc(f.obj) + '</td>' +
       '<td class="wrapcell mono" style="font-family:ui-monospace,Consolas,monospace;font-size:11.5px">' + esc(f.file) + '</td>' +
       '<td class="wrapcell" style="color:var(--muted)">' + esc(f.detail) + '</td>' +
@@ -1488,6 +1539,7 @@ function sortVal(f, key) {
     case 'sev': return sevRank(f.policy.severity);
     case 'score': return -f.policy.score;
     case 'id': return f.policy.id;
+    case 'ns': return String(f.ns || '').toLowerCase();
     case 'obj': return f.obj.toLowerCase();
     case 'file': return f.file.toLowerCase();
     case 'kind': return f.applied ? 0 : f.fixKind === 'auto' ? 1 : f.fixKind === 'generate' ? 2 : 3;
@@ -1524,7 +1576,190 @@ function findingRowKey(f) {
   return findingKey(f) + '|' + (f.ns || '') + '|' + (f.path || '') + '|' + (f.detail || '');
 }
 
+/* Namespace scope.
+ *
+ * Deselecting a namespace removes it from the findings, the posture score, the report and
+ * the JSON. That is a stronger thing than a view filter and it is the reason the excluded
+ * list is written into the report: a score computed over four of your eleven namespaces is
+ * a fine number to publish, and a dishonest one to publish without saying so.
+ *
+ * Both halves have to be scoped together. Scoping the findings but not the files would
+ * leave every excluded object in the denominator with none of its findings in the
+ * numerator, and the score would improve every time somebody deselected a namespace. That
+ * is the failure mode worth designing against: a control that makes the number go up. */
+const NSOUT = new Set();
+
+const nsInScope = (ns) => !NSOUT.has(String(ns == null ? '' : ns));
+
+function scopedFindings(list) {
+  const src = list || STATE.findings || [];
+  return NSOUT.size ? src.filter((f) => nsInScope(f.ns)) : src;
+}
+
+/* Returns copies. Callers read these for scoring and reporting; the mutable truth stays
+   STATE.files, so a fix still writes where undo can find it. */
+function scopedFiles() {
+  if (!NSOUT.size) return STATE.files;
+  const out = [];
+  for (const f of STATE.files) {
+    const docs = f.docs.filter((d) => nsInScope(nsOf(d)));
+    if (docs.length) out.push(Object.assign({}, f, { docs: docs }));
+  }
+  return out;
+}
+
+/* One entry per namespace the load actually contains, in the order a person reads them:
+   platform namespaces last, because they are the ones most likely to be deselected. */
+function namespaceRows() {
+  const seen = new Map();
+  const touch = (ns) => {
+    const key = String(ns == null ? '' : ns);
+    if (!seen.has(key)) {
+      seen.set(key, { ns: key, objects: 0, findings: 0,
+                      platform: PLATFORM_NS_RE.test(key) });
+    }
+    return seen.get(key);
+  };
+  for (const f of STATE.files) for (const d of f.docs) touch(nsOf(d)).objects++;
+  for (const f of STATE.scanned || []) touch(f.ns).findings++;
+  return Array.from(seen.values()).sort((a, b) =>
+    (a.platform === b.platform) ? a.ns.localeCompare(b.ns) : (a.platform ? 1 : -1));
+}
+
+/* The platform mark is advisory by decision: fixes on these stay available. It is loud
+   because that is the whole of the protection. A platform workload is an operator or a
+   control plane component that talks to the Kubernetes API, and the fixes most likely to
+   stop one are exactly the ones this tool applies well: dropping the service account
+   token, dropping ALL capabilities, a default deny NetworkPolicy over its namespace.
+   If you want these out of reach rather than marked, deselect the namespace above. */
+function nsCell(f) {
+  const ns = String(f.ns || '');
+  return '<td class="nscell" title="' + esc(ns) + '">' + esc(ns) + (PLATFORM_NS_RE.test(ns)
+    ? ' <span class="pill plat" title="Platform namespace. Operators and control plane ' +
+      'components here need the Kubernetes API, and a fix that removes their access will ' +
+      'stop them. Check each one before applying it.">platform</span>'
+    : '') + '</td>';
+}
+
+function renderNsPanel() {
+  const panel = $('nsPanel'), list = $('nslist');
+  if (!panel || !list) return;
+  const rows = namespaceRows();
+  panel.classList.toggle('hidden', rows.length === 0);
+  if (!rows.length) return;
+
+  const inScope = rows.filter((r) => !NSOUT.has(r.ns));
+  const outCount = rows.length - inScope.length;
+  const lost = rows.filter((r) => NSOUT.has(r.ns)).reduce((a, r) => a + r.findings, 0);
+  setCount('nsPanelCnt',
+    inScope.length + ' of ' + rows.length + ' in scope' +
+    (outCount ? ', ' + outCount + ' excluded taking ' + lost + ' finding(s) with them'
+              : ''),
+    outCount > 0);
+
+  const html = rows.map((r) => {
+    const on = !NSOUT.has(r.ns);
+    return '<label class="nschip' + (on ? '' : ' off') + (r.platform ? ' plat' : '') +
+      '" title="' + esc(r.platform
+        ? 'Platform namespace. These hold operators and control plane components that ' +
+          'need the Kubernetes API, and fixes here are the most likely to stop a workload.'
+        : r.objects + ' object(s), ' + r.findings + ' finding(s)') + '">' +
+      '<input type="checkbox" class="nssel" data-ns="' + esc(r.ns) + '"' +
+        (on ? ' checked' : '') + '> ' +
+      esc(r.ns) + (r.platform ? ' <span class="pill plat">platform</span>' : '') +
+      ' <span class="nscount">' + r.findings + '</span></label>';
+  }).join('');
+  list.innerHTML = html;
+}
+
+/* Recomputes the scope and everything downstream of it. Not a re-scan: the scan is
+   unchanged, what changes is how much of it counts. */
+function applyNsScope() {
+  STATE.findings = scopedFindings(STATE.scanned);
+  pruneFindingSelection();
+  render();
+}
+
+function setNsOut(next) {
+  NSOUT.clear();
+  for (const ns of next) NSOUT.add(ns);
+  applyNsScope();
+}
+
+function excludedRows() {
+  return namespaceRows().filter((r) => NSOUT.has(r.ns));
+}
+
 const FSELECTED = new Set();
+
+/* Opting out of a fix is a decision, not a filter, so it is recorded rather than
+   remembered. The map is keyed on findingRowKey, the same key selection uses, because
+   the thing being excepted is one policy against one object at one path: excepting
+   automountServiceAccountToken on a batch job says nothing about the same policy on the
+   API deployment next to it.
+
+   localStorage is the convenience copy and not the record. Opened from a file:// URL it
+   is an opaque origin in some browsers and throws, and a machine that gets reimaged
+   takes it with it either way, so every read and write is wrapped and the exceptions
+   also travel as a JSON file the export writes and the page reads back. */
+const OPTOUTS = new Map();
+const OPTOUT_STORE = 'acsOptOuts';
+const OPTOUT_MARK = 'dj-acs-auditor/exceptions';
+
+function optOutRecord(f, reason) {
+  return { reason: String(reason).trim(), policy: f.policy.id, acsPolicy: f.policy.acsPolicy,
+           obj: f.obj, file: f.file, ns: f.ns || '', detail: f.detail || '',
+           path: f.path || '', when: refStamp(new Date()), tool: ACS_VERSION };
+}
+
+function optOutBundle() {
+  return { mark: OPTOUT_MARK, tool: ACS_TOOL, version: ACS_VERSION,
+           written: refStamp(new Date()),
+           entries: Array.from(OPTOUTS, ([key, v]) => Object.assign({ key: key }, v)) };
+}
+
+/* Returns what it did rather than a count of what it was handed. An entry with no
+   reason is dropped instead of imported: the file is editable by hand, and a
+   hand edited exception with the reason deleted is exactly the state this feature
+   exists to make impossible. */
+function optOutImport(data) {
+  const out = { added: 0, rejected: 0 };
+  if (!data || !Array.isArray(data.entries)) { out.bad = true; return out; }
+  for (const e of data.entries) {
+    if (!e || !e.key || optOutReasonProblem(e.reason)) { out.rejected++; continue; }
+    OPTOUTS.set(String(e.key), {
+      reason: String(e.reason).trim(), policy: e.policy || '', acsPolicy: e.acsPolicy || '',
+      obj: e.obj || '', file: e.file || '', ns: e.ns || '', detail: e.detail || '',
+      path: e.path || '', when: e.when || '', tool: e.tool || '' });
+    out.added++;
+  }
+  return out;
+}
+
+function optOutLoad() {
+  let raw = null;
+  try { raw = localStorage.getItem(OPTOUT_STORE); } catch (e) { return; }
+  if (!raw) return;
+  try { optOutImport(JSON.parse(raw)); } catch (e) { /* corrupt, start empty */ }
+}
+
+function optOutSave() {
+  try { localStorage.setItem(OPTOUT_STORE, JSON.stringify(optOutBundle())); } catch (e) {}
+}
+
+/* Stamped onto the finding rather than looked up at every call site, so that everything
+   downstream of the scan reads one field: the row renderer, fFixable, the export, the
+   change log and the JSON all ask the finding instead of each remembering to consult a
+   map, which is the shape of bug this file has shipped before. */
+function applyOptOuts(findings) {
+  for (const f of findings || []) {
+    const rec = OPTOUTS.get(findingRowKey(f));
+    if (rec) f.optOut = rec; else delete f.optOut;
+  }
+  return findings;
+}
+
+const optOutCount = () => (STATE.findings || []).filter((f) => f.optOut).length;
 
 function findingRows() {
   const sevs = new Set(Array.from(document.querySelectorAll('input.fsev:checked'))
@@ -1532,6 +1767,7 @@ function findingRows() {
   const wantAuto = $('fkAuto').checked, wantGen = $('fkGen').checked;
   const wantManual = $('fkManual').checked, wantApplied = $('fkApplied').checked;
   const cat = $('fCat').value, pol = $('fPolicy').value;
+  const ns = $('fNs') ? $('fNs').value : '';
 
   return STATE.findings.filter((f) => {
     if (!sevs.has(sevLabel(f.policy.severity))) return false;
@@ -1541,6 +1777,7 @@ function findingRows() {
     else if (f.fixKind === 'manual' && !wantManual) return false;
     if (cat && f.policy.categories.indexOf(cat) === -1) return false;
     if (pol && f.policy.id !== pol) return false;
+    if (ns && String(f.ns || '') !== ns) return false;
     return true;
   });
 }
@@ -1548,7 +1785,7 @@ function findingRows() {
 /* Only a finding with a mechanical fix can be selected for export. A manual one has
    nothing to emit, so it gets a disabled box with the reason rather than no box, which
    would read as an oversight rather than an answer. */
-const fFixable = (f) => !f.applied && f.fixKind !== 'manual';
+const fFixable = (f) => !f.applied && f.fixKind !== 'manual' && !f.optOut;
 
 /* The row set currently drawn in #rtable, in draw order. renderTable computes it once;
    the selection handlers, refreshCounts and the delegated click handler read it rather
@@ -1614,6 +1851,9 @@ function syncFindingSelection(rows) {
         ? ', ' + FSELECTED.size + ' selected' +
           (hidden > 0 ? ' (' + hidden + ' of them hidden by the current filters)' : '')
         : ', none selected') +
+      (optOutCount()
+        ? ', ' + optOutCount() + ' opted out with a recorded reason'
+        : '') +
       (drawn.length > 2000
         ? ' \u2014 that is a lot of rows to draw at once; the filters above will make this quicker.'
         : '');
@@ -1679,6 +1919,7 @@ function refreshFindingFilters() {
   for (const [id, vals] of [
     ['fCat', Array.from(new Set(STATE.findings.flatMap((f) => f.policy.categories))).sort()],
     ['fPolicy', Array.from(new Set(STATE.findings.map((f) => f.policy.id))).sort()],
+    ['fNs', Array.from(new Set(STATE.findings.map((f) => String(f.ns || '')))).sort()],
   ]) {
     const sel = $(id);
     if (!sel) continue;
@@ -1697,6 +1938,86 @@ function refreshFindingFilters() {
  * High are called out separately, because "1100 findings" and "1100 findings, 40 critical"
  * lead to different next actions.
  */
+/* A folder of manifests is hundreds of chips, and a wall of them pushes the thing the
+   operator came for off the screen. Collapsed by default past the point where the list
+   stops being scannable, open below it, and the summary carries the counts so collapsing
+   it costs nothing: the file count, the document count and the finding count are the
+   three numbers the list was being read for anyway.
+
+   A file that failed to parse forces it open. A parse error hidden behind a fold reads
+   as a clean scan of a file that was never actually scanned, which is the one misreading
+   this whole page is built to prevent, so it outranks both the default and the operator's
+   own last choice. The summary says how many, so the override explains itself. */
+const FILES_OPEN_MAX = 12;
+const FILES_OPEN_STORE = 'acsFilesOpen';
+
+/* The toggle event does not say who opened it, and it is queued rather than dispatched
+   synchronously, so a flag set and cleared around the assignment would already be false
+   by the time it arrives. Recording the state code asked for lets the listener recognise
+   its own echo and swallow exactly one of them. Without this, the first render would
+   record the heuristic's own choice as the operator's, and the heuristic would never run
+   again. */
+let filesPanelAuto = null;
+
+/* Split out of the startup block so it can be driven directly. Left inline it was only
+   reachable by loading the page with a preference already stored, which no test can
+   arrange: every jsdom window gets its own empty localStorage. It went untested and a
+   mutation that dropped the preference entirely passed. */
+function restoreFilesPanelPref() {
+  const fp = $('filesPanel');
+  if (!fp) return null;
+  let pref = null;
+  try { pref = localStorage.getItem(FILES_OPEN_STORE); } catch (e) { return null; }
+  if (pref !== 'open' && pref !== 'shut') return null;
+  fp.dataset.touched = '1';
+  filesPanelAuto = pref === 'open';
+  fp.open = pref === 'open';
+  return pref;
+}
+
+function bindFilesPanel() {
+  const fp = $('filesPanel');
+  if (!fp || fp.dataset.bound) return;
+  fp.dataset.bound = '1';
+  fp.addEventListener('toggle', () => {
+    if (filesPanelAuto !== null && fp.open === filesPanelAuto) {
+      filesPanelAuto = null;
+      return;
+    }
+    filesPanelAuto = null;
+    fp.dataset.touched = '1';
+    try { localStorage.setItem(FILES_OPEN_STORE, fp.open ? 'open' : 'shut'); }
+    catch (e) { /* private mode */ }
+  });
+}
+
+function setFilesOpen(open) {
+  const panel = $('filesPanel');
+  if (!panel || panel.open === open) return;
+  filesPanelAuto = open;
+  panel.open = open;
+}
+
+function updateFilesPanel(badFiles) {
+  const panel = $('filesPanel');
+  if (!panel) return;
+  const n = STATE.files.length;
+  panel.classList.toggle('hidden', n === 0);
+  if (!n) return;
+
+  const docs = STATE.files.reduce((a, f) => a + f.docs.length, 0);
+  const plural = (x, w) => x + ' ' + w + (x === 1 ? '' : 's');
+  setCount('filesPanelCnt',
+    plural(n, 'file') + ', ' + plural(docs, 'document') + ', ' +
+    plural(STATE.findings.length, 'finding') +
+    (badFiles ? ', ' + plural(badFiles, 'file') + ' could not be read' : ''),
+    badFiles > 0);
+
+  if (badFiles) { setFilesOpen(true); return; }
+  if (panel.dataset.touched) return;
+  setFilesOpen(n <= FILES_OPEN_MAX);
+}
+
 function setCount(id, n, hot) {
   const el = $(id);
   if (!el) return;
@@ -1779,7 +2100,10 @@ function renderTable() {
   for (let i = 0; i < rows.length; i++) {
     const f = rows[i];
     const sev = sevLabel(f.policy.severity);
-    const kindPill = f.applied
+    const kindPill = f.optOut
+      ? '<span class="pill optout" title="' + esc('Opted out ' + (f.optOut.when || '') +
+          ': ' + f.optOut.reason) + '">Opted out</span>'
+      : f.applied
       ? '<span class="pill fixed">Fixed</span>'
       : f.fixKind === 'auto' ? '<span class="pill auto">Auto</span>'
       : f.fixKind === 'generate' ? '<span class="pill gen">Generate</span>'
@@ -1796,11 +2120,13 @@ function renderTable() {
           (FSELECTED.has(fk) ? ' checked' : '') +
           ' title="Include this finding in the corrected YAML export">'
         : '<input type="checkbox" disabled title="' + esc(
-            f.applied ? 'Already applied.'
+            f.optOut ? 'Opted out, so it is not written. Reason: ' + f.optOut.reason
+            : f.applied ? 'Already applied.'
             : 'No mechanical fix: this one needs a decision. ' + f.policy.remediation) + '">') + '</td>' +
       '<td><span class="sev ' + sev + '">' + sev + '</span></td>' +
       '<td><span class="acsid">' + f.policy.id + '</span><br><span style="font-size:11.5px">' + esc(f.policy.acsPolicy) + '</span>' +
         (f.confirmedByAcs ? '<br><span class="pill acs">live in ACS</span>' : '') + '</td>' +
+      nsCell(f) +
       '<td class="wrapcell" title="' + esc(f.obj) + '">' + esc(f.obj) + '</td>' +
       '<td class="wrapcell mono" style="font-family:ui-monospace,Consolas,monospace;font-size:11.5px" title="' + esc(f.file) + '">' + esc(f.file) + '</td>' +
       '<td class="wrapcell" style="color:var(--muted)" title="' + esc(f.detail) + '">' + esc(f.detail) + '</td>' +
@@ -1810,8 +2136,18 @@ function renderTable() {
          and this file already argues against it where requireMode is defined. */
       '<td>' + (fFixable(f)
         ? '<button class="small rfix"' + (canWrite ? '' : ' disabled') +
-          ' title="' + esc(writeTitle) + '">Fix this</button>'
-        : '') + '</td>' +
+          ' title="' + esc(writeTitle) + '">Fix this</button> '
+        : '') +
+        /* Offered on every finding that is not already applied, including the manual
+           ones. A finding with no mechanical fix is the most likely thing to sit
+           unexplained for a year, so it is the one that most needs somewhere to say
+           why it is being left. */
+        (f.applied ? ''
+          : '<button class="small ropt" title="' + esc(f.optOut
+              ? 'Opted out. Open to read, change or remove the recorded reason.'
+              : 'Exclude this one finding on this one object, with a written reason that ' +
+                'ships with the export.') + '">' +
+            (f.optOut ? 'Exception' : 'Opt out') + '</button>') + '</td>' +
       '</tr>';
   }
 
@@ -1857,18 +2193,55 @@ function renderTable() {
  * cols        colspan for that table, which differs between the two
  * returns     the detail row, or null if tr is not in a document
  */
-function toggleFindingDetail(tr, renderCell, cols) {
+function toggleFindingDetail(tr, renderCell, cols, kind) {
   if (!tr || !tr.parentNode) return null;
+  const want = kind || 'advisory';
   let dr = tr.nextElementSibling;
   if (!dr || !dr.classList.contains('fdet')) {
     dr = document.createElement('tr');
     dr.className = 'fdet hidden';
     dr.innerHTML = '<td colspan="' + cols + '" style="background:var(--panel2)">' +
       renderCell() + '</td>';
+    dr.dataset.kind = want;
     tr.parentNode.insertBefore(dr, tr.nextSibling);
+    dr.classList.remove('hidden');
+    return dr;
+  }
+  /* Two different panels share one detail row. Toggling on a row that is already open
+     showing the other one would close it, so the click that asks for the other panel
+     swaps the contents and leaves it open. Only a click asking for the panel already
+     on screen closes it. */
+  if (dr.dataset.kind !== want) {
+    dr.querySelector('td').innerHTML = renderCell();
+    dr.dataset.kind = want;
+    dr.classList.remove('hidden');
+    return dr;
   }
   dr.classList.toggle('hidden');
   return dr;
+}
+
+function optOutForm(f) {
+  const cur = f.optOut;
+  return '<div class="optform">' +
+    '<div style="font-weight:600;margin-bottom:4px">' +
+      (cur ? 'Recorded exception: ' : 'Opt out of ') + esc(f.policy.id) + ' on ' +
+      esc(f.obj) + '</div>' +
+    '<p class="note" style="margin:0 0 6px">This finding stays in the report and in the ' +
+      'JSON. It is excluded from the corrected YAML, and the reason is written into ' +
+      'READ_THIS_FIRST.md and the change log next to the fixes, so a reader sees a ' +
+      'decision someone made rather than a finding someone missed. It applies to this ' +
+      'policy on this object only.</p>' +
+    '<textarea class="optreason" rows="3" placeholder="Why does ' + esc(f.policy.id) +
+      ' not apply to ' + esc(f.obj) + '?">' + esc(cur ? cur.reason : '') + '</textarea>' +
+    '<div class="optmsg"></div>' +
+    '<button class="small primary optsave">' + (cur ? 'Update reason' : 'Save exception') +
+      '</button> <button class="small optcancel">Cancel</button>' +
+    (cur ? ' <button class="small optclear" title="Put this finding back in scope">' +
+      'Remove exception</button>' +
+      '<span class="note" style="margin-left:8px">Recorded ' + esc(cur.when || 'earlier') +
+      '</span>' : '') +
+    '</div>';
 }
 
 /* One delegated listener on the body, installed once, rather than 2n listeners rebuilt on
@@ -1880,6 +2253,11 @@ function bindFindingTable() {
   tb.dataset.bound = '1';
 
   tb.addEventListener('click', (ev) => {
+    /* The form lives in the detail row, which has no data-i, so it is handled before
+       the row lookup below rather than after it. */
+    const form = ev.target.closest('.optform');
+    if (form) { handleOptOutForm(ev, form); return; }
+
     const tr = ev.target.closest('tr[data-i]');
     if (!tr) return;
     const f = FROWS[Number(tr.dataset.i)];
@@ -1896,9 +2274,61 @@ function bindFindingTable() {
     const fixBtn = ev.target.closest('button.rfix');
     if (fixBtn) { ev.stopPropagation(); if (!fixBtn.disabled) requestFix(f); return; }
 
+    const optBtn = ev.target.closest('button.ropt');
+    if (optBtn) {
+      ev.stopPropagation();
+      toggleFindingDetail(tr, () => optOutForm(f),
+        document.querySelectorAll('#rtable thead th').length, 'optout');
+      const ta = tr.nextElementSibling && tr.nextElementSibling.querySelector('.optreason');
+      if (ta) ta.focus();
+      return;
+    }
+
     toggleFindingDetail(tr, () => advisoryHtml(f),
-      document.querySelectorAll('#rtable thead th').length);
+      document.querySelectorAll('#rtable thead th').length, 'advisory');
   });
+}
+
+/* Saving re-renders the table, which destroys the form. That is intended: the row has
+   to come back showing the pill, the disabled checkbox and the Exception button, and
+   rendering it from the finding is the only way those three agree with each other. */
+function handleOptOutForm(ev, form) {
+  const row = ev.target.closest('tr.fdet');
+  const owner = row && row.previousElementSibling;
+  const f = owner && FROWS[Number(owner.dataset.i)];
+  if (!f) return;
+
+  if (ev.target.closest('button.optcancel')) { row.classList.add('hidden'); return; }
+
+  if (ev.target.closest('button.optclear')) {
+    OPTOUTS.delete(findingRowKey(f));
+    delete f.optOut;
+    optOutSave();
+    renderTable();
+    flash('Exception removed. ' + f.policy.id + ' on ' + f.obj + ' is back in scope.');
+    return;
+  }
+
+  if (ev.target.closest('button.optsave')) {
+    const ta = form.querySelector('.optreason');
+    const msg = form.querySelector('.optmsg');
+    const problem = optOutReasonProblem(ta.value);
+    if (problem) {
+      /* Refused in place, next to the empty box, rather than in the flash line at the
+         top of the panel where a reader looking at the form would not see it. */
+      msg.textContent = problem;
+      ta.focus();
+      return;
+    }
+    const rec = optOutRecord(f, ta.value);
+    OPTOUTS.set(findingRowKey(f), rec);
+    f.optOut = rec;
+    FSELECTED.delete(findingRowKey(f));
+    optOutSave();
+    renderTable();
+    flash(f.policy.id + ' on ' + f.obj + ' is opted out. It will not be written, and the ' +
+      'reason ships with the export.');
+  }
 }
 
 /* ------------------------------------------------------------------ the Diff tab
@@ -2461,8 +2891,29 @@ function flash(msg, ms) {
   }, ms || FLASH_MS);
 }
 
-function changeLog() {
+function changeLog(run) {
   let md = '# ACS remediation change log\n\nGenerated ' + new Date().toISOString().slice(0, 19).replace('T', ' ') + ' UTC by ' + ACS_TOOL + '.\n\n';
+
+  /* The reference register, same as the corrected YAML export writes, because the
+     annotation on a running workload has to resolve to something no matter which of the
+     two download paths produced it. An annotation pointing at a reference that appears in
+     one artifact and not the other would be worse than no annotation. */
+  if (run && run.register && run.register.length) {
+    md += '## Reference register\n\nRun `' + run.ref + '`, ' + run.when + '.\n\n';
+    md += 'Each object below carries this reference in `kubernetes.io/change-cause` and in\n';
+    md += '`' + ACS_ANNOTATION + '` on its pod template. To go from a running workload back\n';
+    md += 'to this file:\n\n```sh\noc get deploy NAME -n NS -o jsonpath=\'{.spec.template.metadata.annotations.acs-auditor/applied}{"\\n"}\'\n```\n\n';
+    md += '| Reference | Object | File | Policies applied | Can stop the workload |\n|---|---|---|---|---|\n';
+    for (const r of run.register) {
+      md += '| `' + r.ref + '` | ' + r.obj + ' | ' + r.file + ' | ' + r.policies.join(', ') +
+            ' | ' + (r.risky.length ? '**yes**, ' + r.risky.map((x) => x.policy.id).join(', ') : 'no') + ' |\n';
+    }
+    md += '\n';
+  }
+
+  md += namespaceSection(STATE.history.map((h) => h.finding)).join('\n') + '\n';
+  md += exceptionSection(STATE.findings).join('\n') + '\n';
+
   if (!STATE.history.length) return md + 'No changes were applied.\n';
   md += STATE.history.length + ' change' + (STATE.history.length === 1 ? '' : 's') + ' applied.\n\n';
   STATE.history.forEach((h, i) => {
@@ -2525,15 +2976,52 @@ function fullDiffText() {
   return out || 'No changes have been applied yet.\n';
 }
 
+/* The interactive Remediate downloads write STATE.files, not a buildFixedCopy result, so
+   they need the same stamp. Applied at download time rather than at commit time, on a
+   clone, so undo keeps restoring the loaded files byte for byte. Annotating on commit
+   would mean undo had to know how to peel an annotation back off, and undo being exactly
+   reversible is asserted by the suite. */
+function annotatedDocs(file, run) {
+  const hits = STATE.findings
+    .filter((f) => f.applied && f.file === file.name && f.fixKind !== 'generate')
+    .reduce((m, f) => { (m[f.obj] = m[f.obj] || []).push(f); return m; }, {});
+  if (!Object.keys(hits).length) return file.docs;
+  const docs = structuredClone(file.docs);
+  for (const doc of docs) {
+    const list = hits[nameOf(doc)];
+    if (!list || !list.length) continue;
+    run.seq += 1;
+    const id = run.ref + '-' + String(run.seq).padStart(3, '0');
+    annotateFixed(doc, id, ACS_VERSION, run.now);
+    run.register.push({
+      ref: id, file: file.name, obj: nameOf(doc),
+      policies: Array.from(new Set(list.map((x) => x.policy.id))).sort(),
+      findings: list, risky: list.filter((x) => x.policy.runtimeRisk)
+                .sort((a, b) => a.policy.id.localeCompare(b.policy.id)),
+    });
+  }
+  return docs;
+}
+
+/* One reference per download, shared by every file in it, so a ZIP is one run rather
+   than a dozen unrelated ones. */
+function newRun() {
+  const now = new Date();
+  return { now: now, ref: runRef(now), when: refStamp(now), seq: 0, register: [] };
+}
+
 $('btnDownloadAll').addEventListener('click', async () => {
   const zip = new JSZip();
-  for (const f of STATE.files) zip.file(f.name, dumpDocs(f.docs));
-  zip.file('CHANGE_LOG.md', changeLog());
+  const run = newRun();
+  for (const f of STATE.files) zip.file(f.name, dumpDocs(annotatedDocs(f, run)));
+  zip.file('CHANGE_LOG.md', changeLog(run));
+  if (optOutCount()) zip.file('exceptions.json', JSON.stringify(optOutBundle(), null, 2));
   download('acs_remediated_' + stamp() + '.zip', await zip.generateAsync({ type: 'blob' }));
   flash('ZIP downloaded, folder structure preserved.');
 });
 $('btnDownloadOne').addEventListener('click', () => {
-  const all = STATE.files.map((f) => '# ' + f.name + '\n' + dumpDocs(f.docs)).join('---\n');
+  const run = newRun();
+  const all = STATE.files.map((f) => '# ' + f.name + '\n' + dumpDocs(annotatedDocs(f, run))).join('---\n');
   download('acs_remediated_' + stamp() + '.yaml', all, 'text/yaml');
   flash('Single YAML downloaded.');
 });
@@ -2630,6 +3118,70 @@ dz.addEventListener('drop', async (e) => {
   for (const f of plain) if (YAML_RE.test(f.name) || JSON_RE.test(f.name)) items.push({ name: f.name, text: await f.text() });
   loadItems(items);
 });
+/* The browser copy is a convenience. This is the record: a file that can sit in the same
+   repository as the manifests, be reviewed like anything else, and be loaded on a machine
+   that has never opened this page. */
+if ($('nslist')) {
+  $('nslist').addEventListener('change', (ev) => {
+    const cb = ev.target.closest('input.nssel');
+    if (!cb) return;
+    if (cb.checked) NSOUT.delete(cb.dataset.ns); else NSOUT.add(cb.dataset.ns);
+    applyNsScope();
+  });
+}
+if ($('btnNsAll')) $('btnNsAll').addEventListener('click', () => setNsOut([]));
+if ($('btnNsNone')) {
+  $('btnNsNone').addEventListener('click', () => {
+    setNsOut(namespaceRows().map((r) => r.ns));
+    flash('Every namespace is out of scope. There is nothing left to score.',
+      FLASH_REFUSAL_MS);
+  });
+}
+if ($('btnNsNoPlatform')) {
+  $('btnNsNoPlatform').addEventListener('click', () => {
+    const plat = namespaceRows().filter((r) => r.platform);
+    if (!plat.length) { flash('No platform namespaces are loaded.', FLASH_REFUSAL_MS); return; }
+    setNsOut(Array.from(NSOUT).concat(plat.map((r) => r.ns)));
+    flash(plat.length + ' platform namespace(s) taken out of scope. The report will say so.');
+  });
+}
+
+$('btnOptSave').addEventListener('click', () => {
+  const b = optOutBundle();
+  if (!b.entries.length) {
+    flash('No exceptions recorded yet. Open a finding and choose Opt out to record one.',
+      FLASH_REFUSAL_MS);
+    return;
+  }
+  download('acs_exceptions_' + stamp() + '.json', JSON.stringify(b, null, 2),
+    'application/json');
+  flash(b.entries.length + ' exception(s) saved.');
+});
+
+$('btnOptLoad').addEventListener('click', () => $('fOptLoad').click());
+
+$('fOptLoad').addEventListener('change', async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = '';                       // so the same file can be loaded twice
+  if (!file) return;
+  let data = null;
+  try { data = JSON.parse(await file.text()); }
+  catch (err) { flash('That file is not JSON.', FLASH_REFUSAL_MS); return; }
+  if (!data || data.mark !== OPTOUT_MARK) {
+    flash('That is JSON, but not an exceptions file written by this tool.',
+      FLASH_REFUSAL_MS);
+    return;
+  }
+  const r = optOutImport(data);
+  optOutSave();
+  applyOptOuts(STATE.findings);
+  pruneFindingSelection();
+  renderTable();
+  flash(r.added + ' exception(s) loaded' +
+    (r.rejected ? ', ' + r.rejected + ' rejected for having no usable reason' : '') + '.',
+    r.rejected ? FLASH_REFUSAL_MS : undefined);
+});
+
 $('fileinput').addEventListener('change', async (e) => {
   const items = [];
   for (const f of e.target.files) items.push({ name: f.name, text: await f.text() });
@@ -2777,6 +3329,9 @@ if ($('btnVulnJson')) $('btnVulnJson').addEventListener('click', () => {
 /* Open where you left off. */
 (function () {
   let t = 'audit';
+  optOutLoad();
+  restoreFilesPanelPref();
+  bindFilesPanel();
   try { t = localStorage.getItem('acsTab') || 'audit'; } catch (e) { /* private mode */ }
   showTab(t);
 })();
@@ -2806,7 +3361,7 @@ if ($('btnImgWorklist')) $('btnImgWorklist').addEventListener('click', () => {
  */
 document.querySelectorAll('input.fsev').forEach((c) =>
   c.addEventListener('change', renderTable));
-['fkAuto', 'fkGen', 'fkManual', 'fkApplied', 'fCat', 'fPolicy'].forEach((id) => {
+['fkAuto', 'fkGen', 'fkManual', 'fkApplied', 'fCat', 'fPolicy', 'fNs'].forEach((id) => {
   if ($(id)) $(id).addEventListener('change', renderTable);
 });
 
@@ -2892,7 +3447,44 @@ function buildFixedCopy(wanted) {
   }
   const touched = files.filter((f) => !f.generated &&
     JSON.stringify(f.docs) !== JSON.stringify(f.originalDocs));
-  return { files, byName, applied, skipped, generated, touched };
+
+  /* Stamp every object that actually changed with a reference, and build the register
+     that reference points at. One entry per object, numbered in the order the files were
+     loaded so two runs over the same input produce the same numbering.
+
+     After the loop rather than inside it, so an object fixed by four policies gets one
+     reference rather than four annotations overwriting each other. Objects nobody fixed
+     are left alone: annotating them would change their pod template hash and restart a
+     workload to record that nothing happened to it. */
+  const now = new Date();
+  const ref = runRef(now);
+  const byObj = {};
+  for (const f of applied) {
+    if (f.fixKind === 'generate') continue;
+    (byObj[f.file] = byObj[f.file] || {});
+    (byObj[f.file][f.obj] = byObj[f.file][f.obj] || []).push(f);
+  }
+  const register = [];
+  let seq = 0;
+  for (const file of touched) {
+    const objs = byObj[file.name] || {};
+    for (const doc of file.docs) {
+      const hits = objs[nameOf(doc)];
+      if (!hits || !hits.length) continue;
+      seq += 1;
+      const id = ref + '-' + String(seq).padStart(3, '0');
+      annotateFixed(doc, id, ACS_VERSION, now);
+      register.push({
+        ref: id, file: file.name, obj: nameOf(doc),
+        policies: Array.from(new Set(hits.map((x) => x.policy.id))).sort(),
+        findings: hits,
+        risky: hits.filter((x) => x.policy.runtimeRisk)
+                 .sort((a, b) => a.policy.id.localeCompare(b.policy.id)),
+      });
+    }
+  }
+  return { files, byName, applied, skipped, generated, touched,
+           register, runRef: ref, when: refStamp(now) };
 }
 
 if ($('btnExportFixed')) $('btnExportFixed').addEventListener('click', async () => {
@@ -2910,11 +3502,15 @@ if ($('btnExportFixed')) $('btnExportFixed').addEventListener('click', async () 
     return;
   }
 
-  const readme = buildExportReadme(applied, skipped, generated, touched);
+  const readme = buildExportReadme(applied, skipped, generated, touched, built);
   const tag = stamp() + '_' + currentMode();
 
   if (typeof JSZip === 'undefined') {
     download('READ_THIS_FIRST_' + tag + '.md', readme, 'text/markdown');
+    if (optOutCount()) {
+      download('acs_exceptions_' + tag + '.json',
+        JSON.stringify(optOutBundle(), null, 2), 'application/json');
+    }
     touched.forEach((f, i) => setTimeout(() =>
       download(f.name.replace(/[\/]/g, '_'), dumpDocs(f.docs), 'text/yaml'), i * 120));
     generated.forEach((g, i) => setTimeout(() =>
@@ -2925,6 +3521,7 @@ if ($('btnExportFixed')) $('btnExportFixed').addEventListener('click', async () 
 
   const zip = new JSZip();
   zip.file('READ_THIS_FIRST.md', readme);
+  if (optOutCount()) zip.file('exceptions.json', JSON.stringify(optOutBundle(), null, 2));
   for (const f of touched) zip.file('corrected/' + f.name, dumpDocs(f.docs));
   for (const g of generated) zip.file('corrected/' + g.name, g.text);
   const blob = await zip.generateAsync({ type: 'blob' });
@@ -2934,7 +3531,113 @@ if ($('btnExportFixed')) $('btnExportFixed').addEventListener('click', async () 
 
 /* What the person unzipping this needs to know, in the archive rather than in a chat
    message they will not have. */
-function buildExportReadme(applied, skipped, generated, touched) {
+/* One renderer for both markdown outputs. The change log and the export README carried
+   near identical register tables written twice before; the exception list is the same
+   content in both places, so it is written once. */
+/* What this run did NOT touch, per namespace.
+ *
+ * Working one namespace at a time is the sane way through four figures of findings, and
+ * the hazard of it is that the run looks complete because the namespace you were looking
+ * at is now clean. Every namespace that was in scope appears here whether or not anything
+ * was applied to it, so a namespace nobody got to is a row rather than an absence. The
+ * ones that got nothing are listed again underneath, because a reader scanning a long
+ * table will not do the subtraction. */
+function namespaceSection(appliedList) {
+  const L = [];
+  const fixed = new Set((appliedList || []).map(findingRowKey));
+  const by = new Map();
+  for (const f of STATE.findings || []) {
+    const ns = String(f.ns || '');
+    if (!by.has(ns)) {
+      by.set(ns, { ns: ns, total: 0, fixed: 0, excepted: 0, manual: 0,
+                   platform: PLATFORM_NS_RE.test(ns) });
+    }
+    const r = by.get(ns);
+    r.total++;
+    if (f.optOut) r.excepted++;
+    else if (fixed.has(findingRowKey(f))) r.fixed++;
+    else if (f.fixKind === 'manual') r.manual++;
+  }
+  const rows = Array.from(by.values()).sort((a, b) => b.total - a.total || a.ns.localeCompare(b.ns));
+
+  L.push('');
+  L.push('## Namespace coverage');
+  L.push('');
+  if (!rows.length) {
+    L.push('No namespaces were in scope.');
+    L.push('');
+    return L;
+  }
+  L.push('Every namespace that was in scope for this run, whether or not anything was');
+  L.push('applied to it.');
+  L.push('');
+  L.push('| Namespace | Findings | Fixed here | Excepted | Needs a human | Left |');
+  L.push('|---|---|---|---|---|---|');
+  for (const r of rows) {
+    const left = r.total - r.fixed - r.excepted - r.manual;
+    L.push('| ' + r.ns + (r.platform ? ' (platform)' : '') + ' | ' + r.total + ' | ' +
+      r.fixed + ' | ' + r.excepted + ' | ' + r.manual + ' | ' + left + ' |');
+  }
+  L.push('');
+  const untouched = rows.filter((r) => r.fixed === 0);
+  if (untouched.length) {
+    L.push('**' + untouched.length + ' namespace(s) received no fixes in this run:** ' +
+      untouched.map((r) => r.ns).join(', ') + '.');
+    L.push('');
+    L.push('Their findings are still open. This file is not a statement about them.');
+    L.push('');
+  }
+
+  const excluded = excludedRows();
+  if (excluded.length) {
+    L.push('### Out of scope entirely');
+    L.push('');
+    L.push(excluded.length + ' namespace(s) were excluded before the scan was scored, so');
+    L.push('they are absent from the counts above and from the posture number in the audit');
+    L.push('report. They were not examined and nothing here should be read as covering them.');
+    L.push('');
+    L.push('| Namespace | Objects | Findings | Platform |');
+    L.push('|---|---|---|---|');
+    for (const r of excluded) {
+      L.push('| ' + r.ns + ' | ' + r.objects + ' | ' + r.findings + ' | ' +
+        (r.platform ? 'yes' : 'no') + ' |');
+    }
+    L.push('');
+  }
+  return L;
+}
+
+function exceptionSection(findings) {
+  const ex = (findings || []).filter((f) => f.optOut);
+  const L = [];
+  L.push('');
+  L.push('## Documented exceptions');
+  L.push('');
+  if (!ex.length) {
+    L.push('None. Every finding was either fixed, left for a human, or left alone.');
+    L.push('');
+    return L;
+  }
+  L.push(ex.length + ' finding(s) were opted out. They were **not fixed** and they are');
+  L.push('**not gone**. Each one is a decision somebody made, recorded here so the next');
+  L.push('reader can agree or disagree with it rather than guess.');
+  L.push('');
+  L.push('| Policy | Object | File | Recorded | Reason |');
+  L.push('|---|---|---|---|---|');
+  for (const f of ex) {
+    L.push('| `' + f.policy.id + '` ' + f.policy.acsPolicy + ' | ' + f.obj + ' | ' +
+      f.file + ' | ' + (f.optOut.when || '') + ' | ' +
+      String(f.optOut.reason).replace(/\|/g, '\\|').replace(/\n/g, ' ') + ' |');
+  }
+  L.push('');
+  L.push('An exception is per policy per object. The same policy on any other object is');
+  L.push('still in scope. To put one back in scope, open it in the Remediate tab and');
+  L.push('remove the exception.');
+  L.push('');
+  return L;
+}
+
+function buildExportReadme(applied, skipped, generated, touched, built) {
   const L = [];
   L.push('# Corrected YAML');
   L.push('');
@@ -2943,6 +3646,58 @@ function buildExportReadme(applied, skipped, generated, touched) {
   L.push('');
   L.push('**No command was run and no cluster was contacted.** These are files. Applying');
   L.push('them is your decision and your change process.');
+
+  /* The reference register.
+   *
+   * Every changed object carries a short reference in two annotations rather than a list
+   * of policy ids, because nine ids in a change-cause is wider than the column that
+   * prints it. This table is the other half of that: the annotation says which run and
+   * which object, this says what was actually done. Both are written by the same run, so
+   * they cannot disagree.
+   *
+   * It is near the top on purpose. It is the thing somebody reaches for mid rollback. */
+  const reg = (built && built.register) || [];
+  if (reg.length) {
+    L.push('');
+    L.push('## Reference register');
+    L.push('');
+    L.push('Run `' + built.runRef + '`, ' + built.when + '.');
+    L.push('');
+    L.push('Every object below carries its reference in two annotations:');
+    L.push('`kubernetes.io/change-cause` on the object, which is the column');
+    L.push('`oc rollout history` prints, and `' + ACS_ANNOTATION + '` on the pod template,');
+    L.push('which travels into the ReplicaSet or ControllerRevision for that revision.');
+    L.push('');
+    L.push('To go the other way, from a running workload back to this file:');
+    L.push('');
+    L.push('```sh');
+    L.push('oc get deploy NAME -n NS -o jsonpath=\'{.spec.template.metadata.annotations.acs-auditor/applied}{"\\n"}\'');
+    L.push('```');
+    L.push('');
+    L.push('| Reference | Object | File | Policies applied | Can stop the workload |');
+    L.push('|---|---|---|---|---|');
+    for (const r of reg) {
+      L.push('| `' + r.ref + '` | ' + r.obj + ' | ' + r.file + ' | ' +
+        r.policies.join(', ') + ' | ' +
+        (r.risky.length ? '**yes**, ' + r.risky.map((x) => x.policy.id).join(', ') : 'no') + ' |');
+    }
+    L.push('');
+    L.push('### What each reference changed');
+    L.push('');
+    for (const r of reg) {
+      L.push('**' + r.ref + '** &nbsp; ' + r.obj + ' &nbsp; `' + r.file + '`');
+      L.push('');
+      for (const f of r.findings) {
+        L.push('* `' + f.policy.id + '` ' + f.policy.acsPolicy + ': ' + f.detail);
+        if (f.policy.runtimeRisk) {
+          L.push('  * **This one can stop the workload.** ' + f.policy.runtimeRisk);
+        }
+      }
+      L.push('');
+    }
+  }
+  for (const line of namespaceSection(applied)) L.push(line);
+  for (const line of exceptionSection(STATE.findings)) L.push(line);
   L.push('');
   L.push('## What is here');
   L.push('');

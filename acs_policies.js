@@ -27,7 +27,7 @@
    test/version.cjs asserts it agrees with the newest CHANGELOG heading and with the git
    tag when one is checked out. A tool whose banner disagrees with its tag cannot be used
    as evidence, because you cannot tell which build produced a given report. */
-const ACS_VERSION = '1.7.0';
+const ACS_VERSION = '1.8.0';
 const ACS_TOOL = "DJ's ACS Auditor v" + ACS_VERSION;
 
 /* ACS severity scale and the weight each carries in the posture score. A Critical costs
@@ -2139,7 +2139,16 @@ function buildFindingsJson(st) {
   const out = {
     tool: ACS_TOOL,
     generated: new Date().toISOString(),
-    scope: { files: files.length, documents: files.reduce(function (n, f) { return n + f.docs.length; }, 0) },
+    scope: {
+      files: files.length,
+      documents: files.reduce(function (n, f) { return n + f.docs.length; }, 0),
+      /* Present and empty rather than absent when nothing was excluded, so a consumer can
+         tell "whole estate" from "this version of the tool did not record scope". */
+      excludedNamespaces: (st.excludedNamespaces || []).map(function (r) {
+        return { namespace: r.ns, platform: !!r.platform,
+                 findingsExcluded: r.findings || 0, objectsExcluded: r.objects || 0 };
+      }),
+    },
     posture: { current: before, projected: after },
     findings: findings.map(function (f) {
       return {
@@ -2147,6 +2156,10 @@ function buildFindingsJson(st) {
         score: f.policy.score, category: f.policy.categories[0], file: f.file, object: f.obj,
         detail: f.detail, path: f.path, fixKind: f.fixKind,
         confirmedByAcs: !!f.confirmedByAcs,
+        exception: f.optOut
+          ? { reason: f.optOut.reason, recorded: f.optOut.when || null,
+              tool: f.optOut.tool || null }
+          : null,
         standards: { cis: f.policy.cis, nist: f.policy.nist, pss: f.policy.pss, stig: f.policy.stig },
       };
     }),
@@ -2374,6 +2387,23 @@ function buildHtmlReport(st) {
   }
 
 
+  /* A posture score computed over part of an estate is a fine number to publish and a
+     dishonest one to publish silently. This sits above the score rather than below it,
+     because a reader who stops after the big number has to have already read this. */
+  const excluded = st.excludedNamespaces || [];
+  const excludedHtml = excluded.length
+    ? '<div class="note"><strong>This report covers part of the estate.</strong> ' +
+      excluded.length + ' namespace(s) were taken out of scope before scoring, carrying ' +
+      excluded.reduce(function (n, r) { return n + (r.findings || 0); }, 0) +
+      ' finding(s) and ' +
+      excluded.reduce(function (n, r) { return n + (r.objects || 0); }, 0) +
+      ' object(s) with them. They are excluded from the score, the counts and the finding ' +
+      'table below. Excluded: ' +
+      excluded.map(function (r) {
+        return E(r.ns) + (r.platform ? ' (platform)' : '') + ' [' + (r.findings || 0) + ']';
+      }).join(', ') + '.</div>'
+    : '';
+
   return '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>ACS Audit Report</title><style>' +
     ':root{--bg:#fff;--fg:#1c2430;--muted:#667085;--line:#e3e8ef;--panel:#f0f3f7;--sub:#fafbfc;--acc:#1f6feb;--card:#dde3ea}' +
     'body.dark{--bg:#0d1117;--fg:#e6edf3;--muted:#8b949e;--line:#30363d;--panel:#161b22;--sub:#161b22;--acc:#58a6ff;--card:#30363d}' +
@@ -2391,6 +2421,7 @@ function buildHtmlReport(st) {
       files.reduce(function (n, f) { return n + f.docs.length; }, 0) + ' YAML document(s).' +
       (st.acs ? ' Cross checked against an ACS export of ' + st.acs.total + ' violation(s).' : '') +
       (st.source ? ' Source: ' + E(st.source) + '.' : '') + '</p>' +
+    excludedHtml +
     postureHtml +
     acsHtml +
     findingsHtml +
@@ -3012,6 +3043,117 @@ function defaultDenyPolicy(ns) {
 
 function findingKey(f) { return f.file + '|' + f.obj + '|' + f.policy.id; }
 
+/* Stamp a fixed object with a reference, not with a list.
+ *
+ * This exists because of a real rollback. Faced with pods crashlooping after a batch of
+ * fixes, the operator had a list of revisions and no way to tell which carried which
+ * change: `oc rollout history` printed a column of <none>, and the ReplicaSets said
+ * nothing about why they existed.
+ *
+ * The first version wrote every policy id into the annotation, which was honest and
+ * unreadable: nine ids on one object produced a change-cause too wide for the column it
+ * is printed in. So the annotation carries a reference and the markdown that ships beside
+ * the YAML carries the detail. One short line you can read at a glance, one place to look
+ * it up, and no risk of the two drifting because both are generated from the same run.
+ *
+ * Two annotations, because they are visible in different places and you need both.
+ *
+ *   kubernetes.io/change-cause on the OBJECT is the column `oc rollout history` prints.
+ *   It is what turns that column from <none> into a sentence.
+ *
+ *   acs-auditor/applied on the POD TEMPLATE is part of the pod template hash, so it rides
+ *   into the ReplicaSet or ControllerRevision for that revision. Object level annotations
+ *   do not, which is why the object level one alone would still leave you reading an
+ *   anonymous ReplicaSet.
+ *
+ * Value order is date, time, tool and version, reference. Times are UTC and say so with a
+ * trailing Z, because this is read on a different machine from the one that wrote it and
+ * a timestamp you have to guess the zone of is not evidence.
+ *
+ * Annotating changes the pod template hash and therefore causes a rollout, which is why
+ * only objects that were actually changed get stamped: a workload nobody fixed must not
+ * be restarted by the act of recording that nobody fixed it.
+ */
+const ACS_ANNOTATION = 'acs-auditor/applied';
+
+/* An exception with no reason is indistinguishable from a finding nobody looked at.
+   Six months on, the only difference between "we accepted this" and "we missed this"
+   is whether somebody wrote down why, so the reason is required rather than optional
+   and the rule lives here rather than in the page: the CLI has to apply the same one
+   or the two surfaces disagree about what counts as documented.
+
+   The floor is a length plus a short list of non answers. It cannot tell a real reason
+   from a plausible looking one, and it is not trying to. It is there so that clearing
+   a screen of findings by typing "n/a" into each of them takes longer than reading
+   them. */
+const OPT_OUT_MIN_REASON = 12;
+const OPT_OUT_NON_ANSWERS = /^(n\/?a|na|none|no|nope|skip|skipped|later|tbd|todo|wont ?fix|won't ?fix|not applicable|does ?not apply|ignore|ignored|ok|fine|accepted|risk accepted|by design|as designed|test|testing|\.|-+)\.?$/i;
+
+function optOutReasonProblem(reason) {
+  const r = String(reason == null ? '' : reason).trim();
+  if (!r) {
+    return 'A reason is required. An exception with no reason cannot be told apart from ' +
+           'a finding nobody looked at.';
+  }
+  if (OPT_OUT_NON_ANSWERS.test(r)) {
+    return 'That is a label, not a reason. Say why this policy does not apply to this ' +
+           'object, so the next person can agree or disagree with it.';
+  }
+  if (r.length < OPT_OUT_MIN_REASON) {
+    return 'Too short to be an audit record. Give at least ' + OPT_OUT_MIN_REASON +
+           ' characters saying why this policy does not apply to this object.';
+  }
+  return null;
+}
+
+
+/* A run reference, shared by everything one export writes. Sortable, greppable, and
+   obviously ours rather than something Kubernetes put there. */
+function runRef(now) {
+  const d = now || new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return 'ACS-' + d.getUTCFullYear() + p(d.getUTCMonth() + 1) + p(d.getUTCDate()) +
+         '-' + p(d.getUTCHours()) + p(d.getUTCMinutes());
+}
+
+function refStamp(now) {
+  const d = now || new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return d.getUTCFullYear() + '-' + p(d.getUTCMonth() + 1) + '-' + p(d.getUTCDate()) +
+         ' ' + p(d.getUTCHours()) + ':' + p(d.getUTCMinutes()) + 'Z';
+}
+
+function templateMeta(doc) {
+  /* Where the pod template lives differs by kind, and a CronJob buries it one level
+     deeper. A bare Pod has no template, so its own metadata is the right place. */
+  if (!doc || !doc.spec) return null;
+  if (doc.kind === 'CronJob') {
+    if (!doc.spec.jobTemplate || !doc.spec.jobTemplate.spec || !doc.spec.jobTemplate.spec.template) return null;
+    return doc.spec.jobTemplate.spec.template;
+  }
+  if (doc.spec.template) return doc.spec.template;
+  if (doc.kind === 'Pod') return doc;
+  return null;
+}
+
+function annotateFixed(doc, ref, version, now) {
+  if (!doc || !ref) return doc;
+  const v = version || ACS_VERSION;
+  const value = refStamp(now) + ' / DJ ACS Auditor ' + v + ' / ' + ref;
+
+  doc.metadata = doc.metadata || {};
+  doc.metadata.annotations = doc.metadata.annotations || {};
+  doc.metadata.annotations['kubernetes.io/change-cause'] = value;
+
+  const tpl = templateMeta(doc);
+  if (tpl) {
+    tpl.metadata = tpl.metadata || {};
+    tpl.metadata.annotations = tpl.metadata.annotations || {};
+    tpl.metadata.annotations[ACS_ANNOTATION] = value;
+  }
+  return doc;
+}
+
 function dumpDocs(docs) {
   return docs.map((d) => jsyaml.dump(d, { noRefs: true, lineWidth: 120 })).join('---\n');
 }
@@ -3220,5 +3362,7 @@ if (typeof module !== 'undefined' && module.exports) {
     defaultDenyPolicy, findingKey, applyOneFix, dumpDocs, buildMergePatch,
     escHtml, anchor, buildHtmlReport, buildFindingsJson,
     diffLines, compactDiff, citationsOf, ACS_REFERENCES,
+    annotateFixed, templateMeta, ACS_ANNOTATION, runRef, refStamp,
+  optOutReasonProblem, OPT_OUT_MIN_REASON,
   };
 }
