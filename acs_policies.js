@@ -27,7 +27,7 @@
    test/version.cjs asserts it agrees with the newest CHANGELOG heading and with the git
    tag when one is checked out. A tool whose banner disagrees with its tag cannot be used
    as evidence, because you cannot tell which build produced a given report. */
-const ACS_VERSION = '1.8.0';
+const ACS_VERSION = '1.9.0';
 const ACS_TOOL = "DJ's ACS Auditor v" + ACS_VERSION;
 
 /* ACS severity scale and the weight each carries in the posture score. A Critical costs
@@ -3089,6 +3089,78 @@ const ACS_ANNOTATION = 'acs-auditor/applied';
 const OPT_OUT_MIN_REASON = 12;
 const OPT_OUT_NON_ANSWERS = /^(n\/?a|na|none|no|nope|skip|skipped|later|tbd|todo|wont ?fix|won't ?fix|not applicable|does ?not apply|ignore|ignored|ok|fine|accepted|risk accepted|by design|as designed|test|testing|\.|-+)\.?$/i;
 
+/* Exception rules.
+ *
+ * The first version of this feature keyed an exception on the whole finding row: file,
+ * object, policy, namespace, path and the human readable detail sentence, joined with
+ * pipes. That is precise and useless. Nobody can author
+ *
+ *   m/op.yaml|Deployment/oas-op|ACS.016|openshift-apiserver-operator|spec.auto...|Pod automounts a service account token
+ *
+ * by hand, and it stops matching the moment a file moves or the detail wording changes,
+ * silently, which is the worst way for a security exception to fail. A rule says what it
+ * means instead: this policy, in these namespaces, for this reason.
+ *
+ * Exact keys still import. They are what the row level Opt out button writes, and they are
+ * right for a genuine one off. Rules are what you keep in git next to the manifests. */
+
+function globToRe(pattern) {
+  /* Only * and ?, deliberately. A rule file is read by people under time pressure and a
+     full regex in it is a way to exclude more than you meant to without noticing. */
+  const esc = String(pattern).replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  return new RegExp('^' + esc.replace(/\*/g, '.*').replace(/\?/g, '.') + '$');
+}
+
+function globMatch(pattern, value) {
+  if (pattern === undefined || pattern === null || pattern === '') return true;
+  const list = Array.isArray(pattern) ? pattern : [pattern];
+  const v = String(value == null ? '' : value);
+  return list.some((p) => globToRe(p).test(v));
+}
+
+/* A date, or a reason it is not one. Returning the problem rather than silently treating
+   an unparseable expiry as absent: an exception that was meant to expire and quietly did
+   not is exactly the failure the expiry field exists to prevent. */
+function expiryProblem(value) {
+  if (value === undefined || value === null || value === '') return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value))) {
+    return 'expires must be a date as YYYY-MM-DD, for example 2026-12-31.';
+  }
+  const d = new Date(String(value) + 'T23:59:59Z');
+  if (isNaN(d.getTime())) return 'expires is not a real date: ' + value;
+  return null;
+}
+
+function optOutRuleProblem(rule) {
+  if (!rule || typeof rule !== 'object' || Array.isArray(rule)) {
+    return 'A rule must be an object.';
+  }
+  const pol = rule.policy;
+  const polList = Array.isArray(pol) ? pol : (pol ? [pol] : []);
+  if (!polList.length) {
+    return 'A rule needs a policy, for example "policy": "ACS.016". Without one it would ' +
+           'except every finding in the namespaces it names.';
+  }
+  const reason = optOutReasonProblem(rule.reason);
+  if (reason) return reason;
+  return expiryProblem(rule.expires);
+}
+
+/* Returns 'active', 'expired', or null for no match. Expired is not the same as absent:
+   the finding comes back into scope, and it comes back labelled, so that a reader can see
+   a decision lapsed rather than a decision that was never made. */
+function ruleState(rule, finding, now) {
+  if (!rule || !finding || !finding.policy) return null;
+  if (!globMatch(rule.policy, finding.policy.id)) return null;
+  if (!globMatch(rule.namespace, finding.ns)) return null;
+  if (!globMatch(rule.object, finding.obj)) return null;
+  if (!globMatch(rule.file, finding.file)) return null;
+  if (!rule.expires) return 'active';
+  const end = new Date(String(rule.expires) + 'T23:59:59Z');
+  if (isNaN(end.getTime())) return 'active';
+  return ((now || new Date()).getTime() > end.getTime()) ? 'expired' : 'active';
+}
+
 function optOutReasonProblem(reason) {
   const r = String(reason == null ? '' : reason).trim();
   if (!r) {
@@ -3363,6 +3435,7 @@ if (typeof module !== 'undefined' && module.exports) {
     escHtml, anchor, buildHtmlReport, buildFindingsJson,
     diffLines, compactDiff, citationsOf, ACS_REFERENCES,
     annotateFixed, templateMeta, ACS_ANNOTATION, runRef, refStamp,
-  optOutReasonProblem, OPT_OUT_MIN_REASON,
+  optOutReasonProblem, OPT_OUT_MIN_REASON, optOutRuleProblem, ruleState,
+  globMatch, globToRe, expiryProblem,
   };
 }

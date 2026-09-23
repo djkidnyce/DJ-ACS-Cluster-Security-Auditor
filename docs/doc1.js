@@ -46,7 +46,7 @@ const toc = [
       'Figure 7. The two ACS data planes (section 8)',
       'Figure 3. Step through remediation (section 11)',
       'Figure 8. The violations panel and the fix routes (section 10)',
-      'Figure 4. Export options (section 14)'].map((t) => P(t, { spacing: { after: 90 }, size: 22, color: MUT })),
+      'Figure 4. Export options (section 15)'].map((t) => P(t, { spacing: { after: 90 }, size: 22, color: MUT })),
   new Paragraph({ children: [new PageBreak()] }),
 ];
 
@@ -184,7 +184,7 @@ H1('6. Loading manifests and reading the audit');
 T('Figure 1 shows the auditor after a folder has been loaded. Everything on the page is derived from the files you dropped in. Nothing is fetched, and nothing is remembered between sessions.');
 push(Fig(F('fig1_auditor_overview.png'), 'Figure 1. The auditor after a scan. Posture cards, category breakdown, and the sortable findings table.', 640));
 H2('The posture cards');
-T('The left card is your weighted compliance score as the manifests stand today. The right card is the projected score once every automatic fix is applied. The difference between them is the honest value of working the Remediate tab, and section 15 explains exactly how both numbers are computed, including why you get no score at all when no manifests were scanned.');
+T('The left card is your weighted compliance score as the manifests stand today. The right card is the projected score once every automatic fix is applied. The difference between them is the honest value of working the Remediate tab, and section 16 explains exactly how both numbers are computed, including why you get no score at all when no manifests were scanned.');
 H2('The findings table');
 T('Every column sorts. Click a header once for ascending, again for descending. The columns are ID, Severity, Score, Policy, Object, File, and Fix.');
 push([Bul('ID is the internal identifier, ACS.001 through ACS.020, stable across releases of this tool.'),
@@ -493,6 +493,25 @@ T('Whatever you leave behind is recorded rather than implied. READ_THIS_FIRST.md
 push(Note('warn', 'A clean namespace is not a clean cluster', [
   'Working namespace by namespace means every run looks finished, because the namespace you were looking at is now clear. The coverage table exists so that the artifact you hand to somebody else cannot be read as covering more than it does.']));
 
+H2('Rules, for when it is not one finding');
+T('Clicking Opt out on forty operator deployments is forty clicks and forty entries that all break when a path changes. A rule is one line that says what it means.');
+push(Code(['{',
+  '  "policy": "ACS.016",',
+  '  "namespace": "openshift-*",',
+  '  "reason": "Operators call the Kubernetes API. Removing the token stops them."',
+  '}']));
+T('policy and reason are required. namespace, object and file are optional patterns where * matches any run of characters and ? matches one. Leave a field out and it matches everything. Nothing else is a wildcard, deliberately: a full regex in a waiver file is a way to except more than you meant to without noticing.');
+T('A rule covers namespaces you load later, which is the whole difference from pinning exact findings, and it survives a file being moved, which the exact form does not.');
+push([Bul('Opt out all shown writes a rule from the filters you already have set. It refuses without a policy filter, because a rule with no policy would except every finding in scope including ones not on your screen.'),
+      Bul('Exceptions template downloads a commented starter file documenting every field, with two worked examples. The examples are imported by the test suite, so the template cannot document a format the build does not accept.'),
+      Bul('An exception pinned to one exact finding wins over a rule. Pressing Opt out on a row is a decision about that row, and a rule loaded later does not overwrite the reason somebody typed against it.'),
+      Bul('On import, rules matching nothing loaded are counted and named. A rule pointing at a renamed namespace used to look identical to one that was working.')]);
+H2('Putting a deadline on an exception');
+T('Add an expires date in YYYY-MM-DD form and the finding comes back into scope after it. It is marked as an expired exception rather than quietly reappearing, it is fixable again, and the report lists it separately. A decision that lapsed is not the same as a decision nobody made, and the report also says how many of your exceptions carry no expiry at all.');
+push(Note('warn', 'An exception with no date is the one to watch', [
+  'Section 10 of the administration guide makes the argument at length: security exceptions granted without a deadline become permanent, and years later nobody remembers why the exception exists or whether the reason still applies.',
+  'The expiry is optional because some exceptions genuinely never expire, an operator that will always need its API token being the obvious one. Use a date on the ones that are waiting on work.']));
+
 H2('What the fixed files say about themselves');
 T('Every object the tool changed is annotated twice, so that a revision in the cluster can be traced back to the run that produced it.');
 push([Bul('kubernetes.io/change-cause on the object. This is the column oc rollout history prints.'),
@@ -577,10 +596,15 @@ T('CronJobs and Jobs have no revisions to go back to, and neither does a pod not
 push(Note('warn', 'Applying a restored object replaces the whole object', [
   'Anything other than this tool that changed the object since the capture is replaced too. Read it before you apply it, which is why the script prints it rather than applying it.']));
 
-H1('14. Taking the result out');
+H1('14. Showing somebody the changes');
+T('The Diff tab has a Download this diff as HTML button. It writes one self contained page holding every changed file side by side, the reference register, and any documented exceptions named as deliberately absent. There is no script tag in it, no external stylesheet and nothing fetched over the network, so it opens on a machine that can reach nothing.');
+T('This exists because the alternative was screenshotting the Diff tab once per finding and pasting the images into a ticket. Nobody reviews that, and a screenshot is not searchable, not diffable, and not evidence of anything a month later.');
+T('The step through view shows the same side by side layout rather than a single column of plus and minus lines. Left is what you have, right is what you would get. All three surfaces, the tab, the step through and the exported file, share one implementation, so they cannot disagree about what a change looks like.');
+
+H1('15. Taking the result out');
 H2('What is in the audit report');
 T('The HTML report is the artifact that outlives the session and gets attached to a ticket or an accreditation package, so everything visible in the page reaches it:');
-push([Bul('The posture summary and the per category breakdown, when manifests were scanned. When none were, it says so and explains why rather than printing a score. See section 15.'),
+push([Bul('The posture summary and the per category breakdown, when manifests were scanned. When none were, it says so and explains why rather than printing a score. See section 16.'),
       Bul('Every finding in your manifests, with the policy, the object, the file, the severity and the fix classification.'),
       Bul('Every violation ACS reported, split into your workloads and platform components, each with its fix route. The platform section states whether that split came from the ACS platformComponent field or from a namespace match, because those are different claims.'),
       Bul('Image CVEs, when a vulnerability export was supplied, ranked and kept visually separate from the configuration posture so nobody adds the two together.'),
@@ -606,7 +630,7 @@ H2('Why the merge patches are worth understanding');
 T('Each patch carries only the fields that actually changed, and container arrays are keyed on the container name, which is how Kubernetes merges those arrays. That is deliberate. A naive patch that includes the whole container array would carry the image field along with it and silently revert an image that was updated after your scan. Keying on name means the patch touches the security context and nothing else. The test suite checks patch minimality specifically because this is easy to get wrong and expensive to notice late.');
 
 // ---------------- 10
-H1('15. How the score is calculated');
+H1('16. How the score is calculated');
 push(Note('warn', 'What the score is measured against', [
   'Twenty policies. Red Hat ACS ships roughly seventy defaults and most teams add their own, so a clean score here means clean against twenty checks. It is not compliance with the ACS default policy set and should never be quoted as such.',
   'Build stage rules, runtime behaviour policies and image CVE policies cannot be judged from a manifest at all. Violations this tool does not model arrive through your ACS export and are shown as unmatched rather than dropped, with the fix route "Not modelled".',
@@ -631,7 +655,7 @@ push(Note('info', 'The rule that makes the before and after numbers comparable',
   'If a check dropped out of the total the moment it started passing, fixing things would shrink the denominator and the projected score would not survive a rescan. Keeping every applicable check in the total means the projection you see before you apply is the score you get after you apply. This was a real defect during development, caught because a projection of 60 rescanned as 57, and there is now a regression test that fails against the old logic and passes against the current one.']));
 
 // ---------------- 11
-H1('16. Policy reference');
+H1('17. Policy reference');
 T('Twenty policies, modelled on the ACS defaults. Check them against your own ACS version before treating them as authoritative, since defaults shift between releases and most teams tune them.');
 push([Tbl(['ID', 'ACS policy', 'Severity', 'Score', 'Fix'], [
   ['ACS.001', 'Privileged Container', 'High', '8.8', 'Auto'],
@@ -659,7 +683,7 @@ body.push(P('', { spacing: { after: 140 } }));
 T('Every finding also carries citations to the CIS Kubernetes Benchmark, NIST SP 800-53 Rev 5, the Kubernetes Pod Security Standards, and DISA STIG. Press View the policy catalogue on the Audit tab to read the full entry for any policy, including the rationale and the remediation text.');
 
 // ---------------- 12
-H1('17. Limits, stated plainly');
+H1('18. Limits, stated plainly');
 push([Bul('This is static analysis of manifest text. The page never contacts a cluster at all. The scripts do, and they only ever issue a GET.'),
       Bul('It is not a replacement for ACS, for admission control such as Pod Security Admission or Kyverno, or for runtime enforcement. It is a way to fix the manifest before any of those have to reject it.'),
       Bul('ACS policies that evaluate build metadata or runtime process behaviour cannot be judged from YAML at all. Those violations are reported as unmatched rather than pretended away.'),
@@ -669,7 +693,7 @@ push([Bul('This is static analysis of manifest text. The page never contacts a c
       Bul('Policy names, severities, and remediation text are modelled on ACS defaults with the structure verified against the upstream StackRox definitions at github.com/stackrox/stackrox. Confirm against your own version.')]);
 
 // ---------------- 13
-H1('18. Troubleshooting');
+H1('19. Troubleshooting');
 push([Tbl(['Symptom', 'Cause and fix'], [
   ['Folder upload opens a second dialog', 'Your browser does not support the File System Access API and fell back to a directory input. Pick the folder once in the fallback dialog. Chrome and Edge take the single action path.'],
   ['Looking for the connect button from an older version', 'Removed, deliberately. It could never work from a file:// page and the token risk was real while the benefit was zero. Use scripts/acs_pull_all.sh. See section 7.'],
@@ -691,7 +715,7 @@ push([Tbl(['Symptom', 'Cause and fix'], [
 ], [3000, 6300])]);
 
 // ---------------- 14
-H1('19. Contact');
+H1('20. Contact');
 T('Questions, bugs, or policy suggestions: github.com/djkidnyce');
 T('If you are reporting a scoring or matching problem, include the manifest set and, where you can share it, the ACS export. Both are needed to reproduce a match failure.');
 

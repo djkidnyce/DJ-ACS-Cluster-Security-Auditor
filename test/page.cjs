@@ -809,6 +809,298 @@ async function detailRows() {
    than sharing one, because a shared page would carry the previous scenario's file count
    into the next one and the assertions would be measuring the wrong number. The first
    version of this suite did exactly that and passed anyway. */
+async function diffExport() {
+  const dep = (n) => ['apiVersion: apps/v1', 'kind: Deployment',
+    'metadata: { name: ' + n + ', namespace: prod }', 'spec:', '  template:', '    spec:',
+    '      hostNetwork: true', '      containers:', '      - name: c',
+    '        image: q/a:latest', '        securityContext: { privileged: true }'].join('\n');
+  const { w, $, cleanup } = await open('dj_acs_auditor.html',
+    'window.__load=(i)=>loadItems(i);window.__tab=(t)=>showTab(t);window.__S=()=>STATE;' +
+    'window.__step=()=>startStepping();');
+
+  console.log('\n  The click through shows the change side by side');
+  /* It used to be one column of + and - lines. That reads fine to somebody who already
+     knows what changed and is hard to show to anybody else, which is the whole reason
+     people were screenshotting it. */
+  w.__load([{ name: 'm/a.yaml', text: dep('api') }]);
+  w.__tab('remediate');
+  $('fixMode').value = 'manual'; $('fixMode').dispatchEvent(new w.Event('change'));
+  w.__step();
+  const modal = $('modalHost');
+  const sbs = modal.querySelector('table.sbs');
+  t('the step panel renders a side by side table', !!sbs);
+  t('with a before column and an after column',
+    Array.from(sbs.querySelectorAll('thead th')).map((x) => x.textContent.trim())
+      .filter(Boolean).join('|') === 'Now|After this fix');
+  const chg = sbs.querySelector('tr.chg');
+  t('a changed value is one row, not two', !!chg);
+  t('the old value is on the left',
+    !!chg && /privileged: true/.test(chg.querySelectorAll('td')[1].textContent));
+  t('and the new value on the right',
+    !!chg && /privileged: false/.test(chg.querySelectorAll('td')[3].textContent));
+  t('both sides carry a line number',
+    !!chg && chg.querySelectorAll('td.ln').length === 2);
+  t('the single column version is gone', !modal.querySelector('pre.diff'));
+
+  console.log('\n  The whole diff comes out as one file you can send somebody');
+  w.__load([{ name: 'm/b.yaml', text: dep('web') }]);
+  w.__tab('diff');
+  const got = [];
+  w.download = (n, c) => got.push({ name: n, text: c });
+  $('btnDiffHtml').click();
+  const out = got.find((g) => /\.html$/.test(g.name));
+  t('an HTML file is written', !!out);
+  t('named so two runs do not overwrite each other',
+    /acs_diff_\d{8}-\d{6}_\w+\.html/.test(out.name));
+
+  console.log('\n  It has to open on a machine that can reach nothing');
+  t('no script tag', !/<script/i.test(out.text));
+  t('no external stylesheet or font', !/<link|@import/i.test(out.text));
+  t('nothing is fetched over the network', !/src=|href="http|cdn\./i.test(out.text));
+
+  console.log('\n  And it has to say what it is');
+  t('it states plainly that nothing was applied',
+    /Nothing here has been applied/.test(out.text));
+  t('it names the tool and the mode',
+    out.text.indexOf(w.__S().files.length ? 'ACS Auditor' : 'x') !== -1 &&
+    /mode (report|manual|auto)/.test(out.text));
+  t('it carries the reference register, so a revision traces back to it',
+    /Reference register/.test(out.text));
+
+  console.log('\n  The content is the diff, not a picture of one');
+  const doc = new (require('jsdom').JSDOM)(out.text).window.document;
+  t('every changed file is a section', doc.querySelectorAll('details.f').length >= 2);
+  t('the first one is open, so it is not a page of closed boxes',
+    doc.querySelector('details.f').hasAttribute('open'));
+  t('there are real diff rows', doc.querySelectorAll('table.d tbody tr').length > 10);
+  t('and changed rows among them', doc.querySelectorAll('tr.chg, tr.add').length > 0);
+  const row = doc.querySelector('tr.chg');
+  t('a changed row has the old text on the left',
+    !!row && row.querySelectorAll('td')[1].textContent.length > 0);
+  t('and the new text on the right',
+    !!row && row.querySelectorAll('td')[3].textContent.length > 0);
+  t('the two sides differ, which is the point',
+    !!row && row.querySelectorAll('td')[1].textContent !== row.querySelectorAll('td')[3].textContent);
+  t('the summary counts what is inside it',
+    /\+\d+/.test(doc.querySelector('details.f summary').textContent));
+
+  console.log('\n  Exceptions are named in it rather than silently missing');
+  w.eval("OPTRULES.push({policy:'ACS.001',reason:'Waived under PSC-114 for this platform.'});" +
+         "applyOptOuts(STATE.scanned);STATE.findings=scopedFindings(STATE.scanned);");
+  w.__tab('diff');
+  got.length = 0;
+  $('btnDiffHtml').click();
+  const out2 = got.find((g) => /\.html$/.test(g.name));
+  t('the export names the exception', /PSC-114/.test(out2.text));
+  t('and says the finding is deliberately absent',
+    /deliberately absent/.test(out2.text));
+  t('the excepted fix is not in the diff',
+    !/privileged: false/.test(out2.text));
+
+  console.log('\n  Nothing to show is said, not exported as an empty page');
+  w.eval("FSELECTED.clear();");
+  $('dSelOnly').checked = true;
+  $('dSelOnly').dispatchEvent(new w.Event('change'));
+  got.length = 0;
+  $('btnDiffHtml').click();
+  t('no file is written when there is no diff', got.length === 0);
+  t('and it says so', /no diff to export|nothing would change/i.test(
+    $('dtab') ? document_flash(w) : document_flash(w)));
+  cleanup();
+}
+
+function document_flash(w) {
+  const el = w.document.querySelector('#dtab .flashmsg') ||
+             w.document.querySelector('.flashmsg');
+  return el ? el.textContent : '';
+}
+
+async function optOutRules() {
+  const dep = (ns, n) => ['apiVersion: apps/v1', 'kind: Deployment',
+    'metadata: { name: ' + n + ', namespace: ' + ns + ' }', 'spec:', '  template:',
+    '    spec:', '      containers:', '      - name: c', '        image: q/a:1',
+    '        securityContext: { privileged: true }'].join('\n');
+  const { w, $, cleanup } = await open('dj_acs_auditor.html',
+    'window.__load=(i)=>loadItems(i);window.__S=()=>STATE;window.__tab=(t)=>showTab(t);' +
+    'window.__rules=()=>OPTRULES;window.__import=(d)=>optOutImport(d);' +
+    'window.__apply=()=>{applyOptOuts(STATE.scanned);STATE.findings=scopedFindings(STATE.scanned);renderTable();};' +
+    'window.__tpl=()=>exceptionsTemplate();window.__dead=()=>unmatchedRules();' +
+    'window.__sel=()=>FSELECTED;window.__fix=(f)=>fFixable(f);' +
+    'window.__key=(f)=>findingRowKey(f);window.__ruleProblem=(r)=>optOutRuleProblem(r);');
+  const MARK = 'dj-acs-auditor/exceptions';
+  const R = 'Operators call the Kubernetes API. Removing the token stops them.';
+  w.__load([{ name: 'm/op.yaml', text: dep('openshift-apiserver-operator', 'oas-op') },
+            { name: 'm/api.yaml', text: dep('prod', 'payments-api') }]);
+  const find = (pol, obj) => w.__S().findings.find(
+    (f) => f.policy.id === pol && f.obj.indexOf(obj) !== -1);
+
+  console.log('\n  A rule says what it means, and covers more than one object');
+  let r = w.__import({ mark: MARK, rules: [
+    { policy: 'ACS.016', namespace: 'openshift-*', reason: R }] });
+  t('the rule is taken', r.rules === 1);
+  t('and nothing was rejected', r.rejected === 0);
+  w.__apply();
+  t('it excepts the matching finding', !!find('ACS.016', 'oas-op').optOut);
+  t('the reason travels with it', find('ACS.016', 'oas-op').optOut.reason === R);
+  t('the same policy in a namespace it does not name is untouched',
+    !find('ACS.016', 'payments-api').optOut);
+  t('a different policy on the same object is untouched',
+    !find('ACS.008', 'oas-op').optOut);
+  t('an excepted finding is not fixable', !w.__fix(find('ACS.016', 'oas-op')));
+
+  console.log('\n  It covers objects that did not exist when the rule was written');
+  w.__load([{ name: 'm/later.yaml', text: dep('openshift-monitoring', 'mon-op') }]);
+  t('a namespace loaded afterwards is covered too',
+    !!find('ACS.016', 'mon-op') && !!find('ACS.016', 'mon-op').optOut);
+  t('which is the whole difference from pinning exact findings',
+    w.__S().findings.filter((f) => f.optOut && f.policy.id === 'ACS.016').length === 2);
+
+  console.log('\n  A rule is refused when it would except more than it says');
+  const bad = [
+    [{ reason: R }, 'no policy at all'],
+    [{ policy: 'ACS.016' }, 'no reason'],
+    [{ policy: 'ACS.016', reason: 'n/a' }, 'a reason that is not one'],
+    [{ policy: 'ACS.016', reason: R, expires: 'soon' }, 'an expiry that is not a date'],
+    [{ policy: 'ACS.016', reason: R, expires: '2026-13-45' }, 'an impossible date'],
+  ];
+  for (const [rule, label] of bad) {
+    t('  refused: ' + label, !!w.__ruleProblem(rule));
+  }
+  const before = w.__rules().length;
+  r = w.__import({ mark: MARK, rules: bad.map((b) => b[0]) });
+  t('none of them are imported', w.__rules().length === before);
+  t('every one is counted as rejected', r.rejected === bad.length);
+  t('and each rejection says which rule and why',
+    r.problems.length === bad.length && /policy|reason|expires/.test(r.problems[0]));
+
+  console.log('\n  An expiry puts the finding back, and says it lapsed');
+  w.__rules().length = 0;
+  w.__import({ mark: MARK, rules: [
+    { policy: 'ACS.008', namespace: 'prod', reason: R, expires: '2020-01-01' }] });
+  w.__apply();
+  const lapsed = find('ACS.008', 'payments-api');
+  t('the finding is not excepted', !lapsed.optOut);
+  t('it is marked as having had one', !!lapsed.optOutExpired);
+  t('the expiry date is carried', lapsed.optOutExpired.expires === '2020-01-01');
+  t('it is fixable again, because it is a finding again', w.__fix(lapsed));
+  t('the row says the exception expired',
+    /Exception expired/.test($('rtable').querySelector('tbody').innerHTML));
+  t('the summary says so too, rather than only the row',
+    /EXPIRED/.test($('fCount').textContent));
+
+  w.__rules().length = 0;
+  w.__import({ mark: MARK, rules: [
+    { policy: 'ACS.008', namespace: 'prod', reason: R, expires: '2099-01-01' }] });
+  w.__apply();
+  t('a date in the future excepts normally',
+    !!find('ACS.008', 'payments-api').optOut);
+  t('and is not marked expired', !find('ACS.008', 'payments-api').optOutExpired);
+
+  console.log('\n  A rule that matches nothing is reported, not ignored');
+  w.__rules().length = 0;
+  w.__import({ mark: MARK, rules: [
+    { policy: 'ACS.016', namespace: 'namespace-that-was-renamed', reason: R },
+    { policy: 'ACS.016', namespace: 'openshift-*', reason: R }] });
+  w.__apply();
+  const dead = w.__dead();
+  t('the rule matching nothing is found', dead.length === 1);
+  t('and it is the right one', dead[0].namespace === 'namespace-that-was-renamed');
+  t('the one that does match is not reported as dead',
+    !dead.some((x) => x.namespace === 'openshift-*'));
+
+  console.log('\n  An exact entry still wins over a rule');
+  /* Pressing Opt out on one row is a decision about that row. A broad rule loaded later
+     should not silently replace the reason somebody typed against it. */
+  w.__rules().length = 0;
+  const one = find('ACS.016', 'oas-op');
+  w.__import({ mark: MARK,
+    entries: [{ key: w.__key(one), reason: 'Pinned by hand for this exact finding.' }],
+    rules: [{ policy: 'ACS.016', namespace: 'openshift-*', reason: R }] });
+  w.__apply();
+  t('the exact reason is the one that applies',
+    find('ACS.016', 'oas-op').optOut.reason === 'Pinned by hand for this exact finding.');
+  t('and it is not marked as coming from a rule',
+    !find('ACS.016', 'oas-op').optOut.rule);
+
+
+  console.log('\n  One rule instead of forty clicks');
+  const h3 = await open('dj_acs_auditor.html',
+    'window.__load=(i)=>loadItems(i);window.__tab=(t)=>showTab(t);window.__S=()=>STATE;' +
+    'window.__rules=()=>OPTRULES;');
+  const opdep = (ns, n) => ['apiVersion: apps/v1', 'kind: Deployment',
+    'metadata: { name: ' + n + ', namespace: ' + ns + ' }', 'spec:', '  template:',
+    '    spec:', '      containers:', '      - name: c', '        image: q/a:1',
+    '        securityContext: { privileged: true }'].join('\n');
+  h3.w.__load([
+    { name: 'm/1.yaml', text: opdep('openshift-apiserver-operator', 'oas') },
+    { name: 'm/2.yaml', text: opdep('openshift-monitoring', 'mon') },
+    { name: 'm/3.yaml', text: opdep('prod', 'api') }]);
+  h3.w.__tab('remediate');
+  h3.$('fixMode').value = 'manual';
+  h3.$('fixMode').dispatchEvent(new h3.w.Event('change'));
+
+  h3.$('btnOptBulk').click();
+  t('it refuses without a policy filter, because a rule with none excepts everything',
+    h3.$('bulkForm').classList.contains('hidden') && h3.w.__rules().length === 0);
+
+  h3.$('fPolicy').value = 'ACS.016';
+  h3.$('fPolicy').dispatchEvent(new h3.w.Event('change'));
+  h3.$('btnOptBulk').click();
+  t('with a policy set, the form opens', !h3.$('bulkForm').classList.contains('hidden'));
+  t('it says how many findings it covers',
+    /finding\(s\) showing now/.test(h3.$('bulkForm').textContent));
+  t('and warns that it spans several namespaces',
+    /spans 3 namespaces|spans \d+ namespaces/.test(h3.$('bulkForm').textContent));
+
+  h3.$('bulkSave').click();
+  t('an empty reason is refused', h3.w.__rules().length === 0);
+  t('and says so in the form',
+    h3.$('bulkForm').querySelector('.optmsg').textContent.length > 20);
+
+  h3.$('bulkForm').querySelector('.optreason').value =
+    'Operators call the Kubernetes API and stop without the token.';
+  h3.$('bulkExpiry').value = '2099-12-31';
+  h3.$('bulkSave').click();
+  t('one rule is written, not one entry per finding', h3.w.__rules().length === 1);
+  t('it carries the policy from the filter', h3.w.__rules()[0].policy === 'ACS.016');
+  t('and the expiry from the form', h3.w.__rules()[0].expires === '2099-12-31');
+  t('every matching finding is now excepted',
+    h3.w.__S().findings.filter((f) => f.policy.id === 'ACS.016' && f.optOut).length === 3);
+  t('and nothing else is',
+    h3.w.__S().findings.filter((f) => f.optOut).length === 3);
+  t('the form closes', h3.$('bulkForm').classList.contains('hidden'));
+
+  h3.$('fNs').value = 'prod';
+  h3.$('fNs').dispatchEvent(new h3.w.Event('change'));
+  h3.$('fPolicy').value = 'ACS.008';
+  h3.$('fPolicy').dispatchEvent(new h3.w.Event('change'));
+  h3.$('btnOptBulk').click();
+  h3.$('bulkForm').querySelector('.optreason').value =
+    'Vendor image needs this capability, replacement tracked in PLAT-991.';
+  h3.$('bulkSave').click();
+  t('a namespace filter narrows the rule to that namespace',
+    h3.w.__rules()[1].namespace === 'prod');
+  t('so it excepts only there',
+    h3.w.__S().findings.filter((f) => f.policy.id === 'ACS.008' && f.optOut).length === 1);
+  h3.cleanup();
+
+  console.log('\n  The template is the format, and it loads');
+  const tpl = JSON.parse(w.__tpl());
+  t('it is marked as ours', tpl.mark === MARK);
+  t('it explains itself in the file', Array.isArray(tpl._readme) && tpl._readme.length > 5);
+  t('it says a reason is required', tpl._readme.join(' ').indexOf('reason is required') !== -1);
+  t('it documents the expiry behaviour',
+    /comes back into scope/.test(tpl._readme.join(' ')));
+  t('it ships worked examples', tpl.rules.length >= 2);
+  w.__rules().length = 0;
+  const loaded = w.__import(tpl);
+  t('every example in it is valid, so the template is not aspirational',
+    loaded.rules === tpl.rules.length && loaded.rejected === 0);
+  t('the underscore notes do not become rules',
+    w.__rules().every((x) => x.policy !== undefined));
+  cleanup();
+}
+
 async function namespaces() {
   const dep = (ns, n) => ['apiVersion: apps/v1', 'kind: Deployment',
     'metadata: { name: ' + n + ', namespace: ' + ns + ' }', 'spec:', '  template:',
@@ -1358,6 +1650,55 @@ async function annotations() {
     !got.some((g) => /cfg/.test(g.name)));
   t('and stamping it would have restarted a workload to record that nothing happened',
     !/acs-auditor/.test(w.jsyaml.dump(w.__S().files[1].docs[0])));
+
+
+  console.log('\n  Only what we changed gets stamped, even inside one file');
+  /* Two objects in one file, one fixed. The file is rewritten either way, so the question
+     is whether the object nobody touched comes back carrying an annotation. It must not:
+     a pod template annotation is part of the pod template hash, so stamping an unchanged
+     workload restarts it to record that nothing happened to it. */
+  const h2 = await open('dj_acs_auditor.html',
+    'window.__load=(i)=>loadItems(i);window.__tab=(t)=>showTab(t);window.__S=()=>STATE;' +
+    'window.__sel=()=>FSELECTED;window.__key=(f)=>findingRowKey(f);' +
+    'window.__sync=()=>syncFindingSelection();');
+  const two = (n) => ['apiVersion: apps/v1', 'kind: Deployment',
+    'metadata: { name: ' + n + ', namespace: prod }', 'spec:', '  template:', '    spec:',
+    '      containers:', '      - name: c', '        image: q/a:1',
+    '        securityContext: { privileged: true }'].join('\n');
+  h2.w.__load([{ name: 'm/both.yaml', text: two('fixme') + '\n---\n' + two('leave-alone') }]);
+  h2.w.__tab('remediate');
+  h2.$('fixMode').value = 'manual';
+  h2.$('fixMode').dispatchEvent(new h2.w.Event('change'));
+  for (const f of h2.w.__S().findings) {
+    if (f.obj.indexOf('fixme') !== -1 && f.fixKind === 'auto') {
+      h2.w.__sel().add(h2.w.__key(f));
+    }
+  }
+  h2.w.__sync();
+  const out2 = [];
+  h2.w.download = (n, c) => out2.push({ name: n, text: c });
+  delete h2.w.JSZip;
+  h2.$('btnExportFixed').click();
+  await new Promise((r) => setTimeout(r, 2500));
+  const file2 = out2.find((g) => /\.ya?ml$/.test(g.name));
+  t('the file was written', !!file2);
+  const both = h2.w.jsyaml.loadAll(file2.text);
+  const fixed = both.find((d) => d.metadata.name === 'fixme');
+  const left = both.find((d) => d.metadata.name === 'leave-alone');
+  t('both objects are still in the file', !!fixed && !!left);
+  t('the one we changed carries the change cause',
+    !!(fixed.metadata.annotations || {})['kubernetes.io/change-cause']);
+  t('and the pod template annotation',
+    !!((fixed.spec.template.metadata || {}).annotations || {})['acs-auditor/applied']);
+  t('the one we did not change carries no change cause',
+    !(left.metadata.annotations || {})['kubernetes.io/change-cause']);
+  t('and no pod template annotation',
+    !((left.spec.template.metadata || {}).annotations || {})['acs-auditor/applied']);
+  t('it has no empty metadata block added to its pod template either',
+    left.spec.template.metadata === undefined);
+  t('and it is genuinely unmodified, not merely unannotated',
+    left.spec.template.spec.containers[0].securityContext.privileged === true);
+  h2.cleanup();
 
   console.log('\n  Looking at the page does not stamp what is loaded');
   t('the loaded YAML carries no annotation',
@@ -2512,6 +2853,8 @@ async function specBudget() {
     ['diffTab', diffTab],
     ['annotations', annotations],
     ['optOuts', optOuts],
+    ['optOutRules', optOutRules],
+    ['diffExport', diffExport],
     ['filesPanel', filesPanel],
     ['namespaces', namespaces],
     ['detailRows', detailRows],

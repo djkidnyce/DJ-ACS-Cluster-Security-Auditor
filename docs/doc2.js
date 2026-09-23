@@ -208,6 +208,10 @@ push([Tbl(['Suite', 'Covers'], [
   ['page.cjs', 'The pages in a real DOM, driven end to end. Needs jsdom, skips cleanly without it.'],
 ], [2200, 7100])]);
 body.push(P('', { spacing: { after: 140 } }));
+H2('One diff implementation, three surfaces');
+T('pairDiff() turns a unified diff into aligned side by side rows and is used by the Diff tab, the step through modal and the exported HTML. It was split out when the modal moved off its single column plus and minus rendering. If you add a fourth surface, use it rather than writing a fourth pairing, because the three agreeing is the property worth keeping.');
+T('buildDiffHtml() must stay self contained: no script tag, no external stylesheet, nothing fetched. The people who need to read it are frequently on a machine that can reach nothing. The suite asserts the absence of all three, and a mutation adding a CDN stylesheet fails it.');
+
 H2('Running one suite instead of all of them');
 push(Code(['node test/page.cjs annotations optOuts filesPanel']));
 T('The page suites take minutes together, which is long enough that a maintainer iterating on one of them will be tempted to stop running the others. Named suites run alone, and the run ends with PARTIAL RUN naming what was selected so a filtered result cannot be mistaken for a full one. A name that does not exist exits 2 and prints the real ones rather than quietly running everything.');
@@ -340,6 +344,16 @@ push(Note('crit', 'Never scope one half of the score', [
 push(Note('warn', 'The empty denominator guard is on the scope, not the load', [
   'This project already fixed a defect where a score over zero manifests rendered as 100 out of 100, Grade A. Namespace scoping reopened it through a new door: files loaded, every namespace deselected, denominator empty, Grade A. The guard reads scopedFiles().length for that reason, and test/posture_platform.cjs asserts the guard sits before the scoring rather than after it.',
   'That engine test found the regression, and it found it only because it checks source order rather than behaviour. It had also silently stopped matching when the call signature changed, so it was passing on an indexOf of -1. Both are fixed. Treat source order assertions as fragile and give them something to fail against.']));
+
+H2('Exception rules, and why the first format was wrong');
+T('The first version keyed an exception on the whole finding row: file, object, policy, namespace, path and the human readable detail sentence joined with pipes. It was precise and unusable. Nobody authors that by hand, and it stopped matching silently when a file moved or a detail string was reworded, which is the worst way for a security exception to fail.');
+T('Rules replace it. optOutRuleProblem() and ruleState() live in acs_policies.js so the page and anything built on the CLI cannot disagree about what a valid rule is or what it matches. Matching is * and ? only. Resist adding full regex: a waiver file is read under time pressure and a regex in one is a way to except more than was meant.');
+push([Bul('Exact entries still import and are applied BEFORE rules, so a reason somebody typed against one row is not overwritten by a broad rule loaded later. There is a test for that ordering.'),
+      Bul('ruleState returns active, expired or null. Expired is not the same as absent: the finding returns to scope carrying f.optOutExpired, is fixable again, and is listed separately in the report.'),
+      Bul('unmatchedRules() reports rules matching nothing loaded. Before it, a rule pointing at a renamed namespace was indistinguishable from one that was working.'),
+      Bul('exceptionsTemplate() is generated from the same build that reads it, and the test suite imports its examples. A template documenting a format the build rejects is worse than no template.')]);
+push(Note('warn', 'The bulk button refuses without a policy filter', [
+  'A rule with no policy would except every finding in the namespaces it names, including findings not on the screen and findings that do not exist yet. Pressing a button on a filtered table does not mean that, so it is refused rather than guessed.']));
 
 H2('Per finding exceptions in the page');
 T('Since 1.8.0 the page carries its own exception mechanism, which is narrower than a waiver file and deliberately so. An operator can opt a single finding out of the corrected YAML, one policy against one object, with a reason that is required rather than optional. Empty reasons, reasons too short to be an audit record, and a list of non answers are refused at the point of entry.');

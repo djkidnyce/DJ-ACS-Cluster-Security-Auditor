@@ -384,6 +384,57 @@ origin and often cannot keep one at all, so put the JSON in the repository besid
 manifests where it gets reviewed like anything else. An entry whose reason was deleted by
 hand is refused on the way back in rather than imported blank.
 
+### Rules, for when it is not one finding
+
+Clicking Opt out on forty operator deployments is forty clicks. A rule is one line:
+
+```json
+{ "policy": "ACS.016", "namespace": "openshift-*",
+  "reason": "Operators call the Kubernetes API. Removing the token stops them." }
+```
+
+`policy` and `reason` are required. `namespace`, `object` and `file` are optional patterns
+where `*` matches any run of characters and `?` matches one. Leave a field out and it
+matches everything. Nothing else is a wildcard, deliberately: a full regex in a waiver file
+is a way to except more than you meant to without noticing.
+
+A rule covers namespaces you load later, which is the whole difference from pinning exact
+findings, and it survives a file being moved, which the exact form does not. The exact
+form was previously the only option, and it meant authoring this by hand:
+
+    m/op.yaml|Deployment/oas-op|ACS.016|openshift-apiserver-operator|spec.automount...|Pod automounts a service account token
+
+`Opt out all shown` writes a rule from the filters you already have set. It refuses without
+a policy filter, because a rule with no policy would except every finding in scope
+including ones not on your screen. `Exceptions template` downloads a commented starter file
+documenting every field, with worked examples that load as they stand.
+
+### Expiry
+
+Add `"expires": "2027-03-31"` and the finding comes back into scope after that date, marked
+as an expired exception rather than quietly reappearing. It becomes fixable again, and the
+report lists it separately, because a decision that lapsed is not the same as a decision
+nobody made. The report also says how many of your exceptions have no expiry at all.
+
+An exception pinned to one exact finding wins over a rule. Pressing Opt out on a row is a
+decision about that row, and a broad rule loaded later does not overwrite the reason
+somebody typed against it.
+
+On import, rules that match nothing loaded are counted and named. A rule pointing at a
+renamed namespace used to look identical to one that was working.
+
+## Showing somebody the changes
+
+The Diff tab has **Download this diff as HTML**. One self contained page with every changed
+file side by side, the reference register, and any documented exceptions named as
+deliberately absent. No script tag, no external stylesheet, nothing fetched over the
+network, so it opens on a machine that can reach nothing. Attach it to a ticket instead of
+screenshotting findings one at a time.
+
+The step through view shows the same side by side layout: left is what you have, right is
+what you would get. All three surfaces share one pairing implementation, so they cannot
+disagree about what a change looks like.
+
 ## After the fixes land, and something is crashlooping
 
 `scripts/acs_rollout.sh` is the other half of the annotations below. It reads the cluster

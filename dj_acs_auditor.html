@@ -201,6 +201,7 @@ tr.done td{opacity:.5}
 .sev{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:700;text-transform:uppercase;white-space:nowrap}
 .pill.fixed{color:var(--low);border-color:var(--low);background:var(--add)}
 .pill.optout{color:var(--muted);border-color:var(--muted)}
+.pill.expired{color:var(--high);border-color:var(--high)}
 .pill.plat{color:var(--med);border-color:var(--med);font-size:10px;padding:0 5px}
 .nschip{background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:3px 9px;font-size:12px;display:inline-flex;align-items:center;gap:5px;margin:3px 4px 0 0;cursor:pointer}
 .nschip.plat{border-color:var(--med)}
@@ -209,6 +210,20 @@ tr.done td{opacity:.5}
 .optform textarea{width:100%;box-sizing:border-box;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:6px;font:inherit;font-size:13px}
 .optform .optmsg{min-height:17px;font-size:12px;color:var(--high)}
 tr.done .optout{opacity:.8}
+table.sbs{width:100%;border-collapse:collapse;font-family:ui-monospace,Consolas,monospace;
+  font-size:12px;table-layout:fixed;background:var(--code);border:1px solid var(--border);
+  border-radius:8px;overflow:hidden}
+table.sbs th{background:var(--panel2);text-align:left;padding:4px 9px;font-family:inherit;
+  font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+table.sbs td{padding:1px 9px;vertical-align:top;white-space:pre-wrap;word-break:break-all}
+table.sbs td.ln{width:42px;text-align:right;color:var(--muted);user-select:none;
+  background:var(--panel2);white-space:nowrap}
+table.sbs tr.add td.side.r{background:var(--add);color:var(--addfg)}
+table.sbs tr.rem td.side.l{background:var(--del);color:var(--delfg)}
+table.sbs tr.chg td.side.l{background:var(--del);color:var(--delfg)}
+table.sbs tr.chg td.side.r{background:var(--add);color:var(--addfg)}
+table.sbs tr.ctx td.side{color:var(--muted)}
+table.sbs tr.gap td{color:var(--muted);opacity:.6;font-style:italic;padding:2px 9px}
 pre.diff{background:var(--code);border:1px solid var(--border);border-radius:8px;padding:0;overflow-x:auto;font-family:ui-monospace,Consolas,monospace;font-size:12px;line-height:1.55;margin:0}
 pre.diff div{padding:1px 10px;white-space:pre}
 pre.diff .add{background:var(--add);color:var(--addfg)}
@@ -478,7 +493,9 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
         <div class="toolbar">
           <label class="chk"><input type="checkbox" id="dSelOnly"> Only the findings I have ticked</label>
           <label class="chk"><input type="checkbox" id="dCtx" checked> Hide unchanged lines</label>
+          <button class="primary" id="btnDiffHtml" title="Every file in one self contained HTML page you can attach to a ticket or email. No network, no screenshots.">Download this diff as HTML</button>
           <span class="note" id="dCount" style="margin:0"></span>
+          <span class="note flashmsg" style="margin:0;color:var(--accent)"></span>
         </div>
         <p class="note hidden" id="dEmpty"></p>
         <div class="dgrid">
@@ -574,7 +591,9 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
           </select></label>
         <button id="btnFSelAll">Select all shown</button>
         <button id="btnFSelNone">Clear selection</button>
+        <button id="btnOptBulk" title="Write one rule covering every finding the filters above are showing, with one reason">Opt out all shown</button>
         <button id="btnOptSave" title="Save the recorded exceptions as a JSON file you can keep with the manifests or load on another machine">Save exceptions</button>
+        <button id="btnOptTemplate" title="Download a commented starter file showing the format, with a worked example">Exceptions template</button>
         <button id="btnOptLoad" title="Load exceptions saved earlier or by someone else">Load exceptions</button>
         <input type="file" id="fOptLoad" accept=".json,application/json" style="display:none">
         <button class="primary" id="btnExportFixed">Download corrected YAML</button>
@@ -582,6 +601,7 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
         <span class="note flashmsg" style="margin:0;color:var(--accent)"></span>
       </div>
       <p class="note hidden" id="fModeWhy"></p>
+      <div id="bulkForm" class="optform hidden" style="margin:8px 0;padding:10px;border:1px solid var(--border);border-radius:6px;background:var(--panel2)"></div>
       <div class="tablewrap">
       <table id="rtable">
         <colgroup><col class="c-sel"><col class="c-sev"><col class="c-pol"><col class="c-ns"><col class="c-obj"><col class="c-file"><col class="c-det"><col class="c-kind"><col class="c-act"></colgroup>
@@ -1703,6 +1723,10 @@ const FSELECTED = new Set();
    takes it with it either way, so every read and write is wrapped and the exceptions
    also travel as a JSON file the export writes and the page reads back. */
 const OPTOUTS = new Map();
+/* Rules, in the order they were written. A finding can match more than one; the first
+   active match wins, so a specific rule placed above a broad one does what a reader
+   expects rather than whatever the iteration order happens to be. */
+const OPTRULES = [];
 const OPTOUT_STORE = 'acsOptOuts';
 const OPTOUT_MARK = 'dj-acs-auditor/exceptions';
 
@@ -1712,9 +1736,75 @@ function optOutRecord(f, reason) {
            path: f.path || '', when: refStamp(new Date()), tool: ACS_VERSION };
 }
 
+/* The format, as a file you can load as it stands. Documentation that lives somewhere
+   else goes stale; this is generated from the same code that reads it, and the worked
+   example is a real rule that this build will accept.
+
+   JSON has no comments, so the explanation goes in _readme fields. They are ignored on
+   import, which is why they are safe to leave in. */
+function exceptionsTemplate() {
+  return JSON.stringify({
+    mark: OPTOUT_MARK,
+    _readme: [
+      'An exceptions file for ' + ACS_TOOL + '.',
+      '',
+      'Two ways to say what an exception covers. Use rules.',
+      '',
+      'RULES match by pattern and are what you keep in git beside the manifests. A rule',
+      'needs a policy and a reason. namespace, object and file are optional patterns;',
+      'leave one out and it matches everything. * matches any run of characters and ? one',
+      'character. Nothing else is a wildcard, deliberately: a full regex in a waiver file',
+      'is a way to except more than you meant to without noticing.',
+      '',
+      'ENTRIES pin one exact finding and are what the Opt out button on a row writes. The',
+      'key includes the file path and the finding text, so an entry stops matching if the',
+      'file moves or the wording changes. Prefer a rule unless you mean this one finding',
+      'in this one file.',
+      '',
+      'reason is required on both and must say something. Blank, "n/a", "by design" and',
+      'anything under ' + OPT_OUT_MIN_REASON + ' characters are refused on import. An',
+      'exception with no reason cannot be told apart from a finding nobody looked at.',
+      '',
+      'expires is optional, YYYY-MM-DD. After that date the finding comes back into scope',
+      'marked as an expired exception. It does not vanish, because an exception that',
+      'lapsed silently is indistinguishable from one that was never written.',
+      '',
+      'approver and ticket are carried through to the report untouched. Use them.',
+      '',
+      'Fields beginning with an underscore are ignored, so these notes can stay in the',
+      'file. Delete the examples below before you use it.',
+    ],
+    rules: [
+      {
+        _example: 'Every operator namespace needs its API token. This is the one that',
+        _example2: 'caused workloads to stop when it was fixed blindly.',
+        policy: 'ACS.016',
+        namespace: 'openshift-*',
+        reason: 'Operators and control plane components call the Kubernetes API. Removing '
+              + 'the service account token stops them.',
+        approver: 'dj',
+        ticket: 'PLAT-882',
+      },
+      {
+        _example: 'Narrower: two policies, one object, with a deadline on it.',
+        policy: ['ACS.008', 'ACS.002'],
+        namespace: 'prod',
+        object: 'Deployment/legacy-web',
+        reason: 'Vendor image writes to its own filesystem and needs CAP_CHOWN. '
+              + 'Replacement tracked in PLAT-991.',
+        expires: '2027-03-31',
+        approver: 'dj',
+        ticket: 'PLAT-991',
+      },
+    ],
+    entries: [],
+  }, null, 2);
+}
+
 function optOutBundle() {
   return { mark: OPTOUT_MARK, tool: ACS_TOOL, version: ACS_VERSION,
            written: refStamp(new Date()),
+           rules: OPTRULES.map((r) => Object.assign({}, r)),
            entries: Array.from(OPTOUTS, ([key, v]) => Object.assign({ key: key }, v)) };
 }
 
@@ -1723,9 +1813,29 @@ function optOutBundle() {
    hand edited exception with the reason deleted is exactly the state this feature
    exists to make impossible. */
 function optOutImport(data) {
-  const out = { added: 0, rejected: 0 };
-  if (!data || !Array.isArray(data.entries)) { out.bad = true; return out; }
-  for (const e of data.entries) {
+  const out = { added: 0, rejected: 0, rules: 0, problems: [] };
+  if (!data || (!Array.isArray(data.entries) && !Array.isArray(data.rules))) {
+    out.bad = true;
+    return out;
+  }
+  for (const r of (data.rules || [])) {
+    const problem = optOutRuleProblem(r);
+    if (problem) {
+      /* Named, with the rule that caused it. "3 rejected" tells somebody that their file
+         is wrong and nothing about which line to fix. */
+      out.rejected++;
+      out.problems.push((r && r.policy ? String(r.policy) : 'rule ' + (out.rejected)) +
+        ': ' + problem);
+      continue;
+    }
+    OPTRULES.push({
+      policy: r.policy, namespace: r.namespace, object: r.object, file: r.file,
+      reason: String(r.reason).trim(), expires: r.expires || '',
+      approver: r.approver || '', ticket: r.ticket || '',
+    });
+    out.rules++;
+  }
+  for (const e of (data.entries || [])) {
     if (!e || !e.key || optOutReasonProblem(e.reason)) { out.rejected++; continue; }
     OPTOUTS.set(String(e.key), {
       reason: String(e.reason).trim(), policy: e.policy || '', acsPolicy: e.acsPolicy || '',
@@ -1752,11 +1862,46 @@ function optOutSave() {
    change log and the JSON all ask the finding instead of each remembering to consult a
    map, which is the shape of bug this file has shipped before. */
 function applyOptOuts(findings) {
+  const now = new Date();
   for (const f of findings || []) {
+    delete f.optOut;
+    delete f.optOutExpired;
     const rec = OPTOUTS.get(findingRowKey(f));
-    if (rec) f.optOut = rec; else delete f.optOut;
+    if (rec) { f.optOut = rec; continue; }
+    /* Rules after exact keys: a key written by pressing Opt out on one row is a deliberate
+       decision about that row, and it should not be overridden by a broad rule. */
+    let expired = null;
+    for (const r of OPTRULES) {
+      const state = ruleState(r, f, now);
+      if (state === 'active') {
+        f.optOut = { reason: r.reason, policy: f.policy.id, acsPolicy: f.policy.acsPolicy,
+                     obj: f.obj, file: f.file, ns: f.ns || '', detail: f.detail || '',
+                     path: f.path || '', when: '', tool: '', rule: r,
+                     expires: r.expires || '', approver: r.approver || '',
+                     ticket: r.ticket || '' };
+        expired = null;
+        break;
+      }
+      if (state === 'expired' && !expired) expired = r;
+    }
+    /* An expired rule puts the finding back in scope and says so. Dropping the rule
+       silently would be indistinguishable from never having written it, which is the
+       whole argument for having an expiry at all. */
+    if (!f.optOut && expired) f.optOutExpired = expired;
   }
   return findings;
+}
+
+const expiredCount = () => (STATE.findings || []).filter((f) => f.optOutExpired).length;
+
+/* Rules that matched nothing in what is currently loaded. An exception keyed to a file
+   that has been renamed, or a namespace nobody loaded, is not an exception at all, and
+   before this it failed silently. */
+function unmatchedRules() {
+  const now = new Date();
+  return OPTRULES.filter((r) =>
+    !(STATE.findings || []).some((f) => ruleState(r, f, now) !== null) &&
+    !(STATE.scanned || []).some((f) => ruleState(r, f, now) !== null));
 }
 
 const optOutCount = () => (STATE.findings || []).filter((f) => f.optOut).length;
@@ -1786,6 +1931,9 @@ function findingRows() {
    nothing to emit, so it gets a disabled box with the reason rather than no box, which
    would read as an oversight rather than an answer. */
 const fFixable = (f) => !f.applied && f.fixKind !== 'manual' && !f.optOut;
+/* f.optOutExpired deliberately does NOT appear above. An expired exception is a
+   finding that is back in scope, so it is selectable and fixable again. The pill is
+   what tells the reader it used to be excepted. */
 
 /* The row set currently drawn in #rtable, in draw order. renderTable computes it once;
    the selection handlers, refreshCounts and the delegated click handler read it rather
@@ -1853,6 +2001,9 @@ function syncFindingSelection(rows) {
         : ', none selected') +
       (optOutCount()
         ? ', ' + optOutCount() + ' opted out with a recorded reason'
+        : '') +
+      (expiredCount()
+        ? ', ' + expiredCount() + ' with an EXPIRED exception, back in scope'
         : '') +
       (drawn.length > 2000
         ? ' \u2014 that is a lot of rows to draw at once; the filters above will make this quicker.'
@@ -2100,9 +2251,15 @@ function renderTable() {
   for (let i = 0; i < rows.length; i++) {
     const f = rows[i];
     const sev = sevLabel(f.policy.severity);
-    const kindPill = f.optOut
-      ? '<span class="pill optout" title="' + esc('Opted out ' + (f.optOut.when || '') +
-          ': ' + f.optOut.reason) + '">Opted out</span>'
+    const kindPill = f.optOutExpired
+      ? '<span class="pill expired" title="' + esc('This exception expired on ' +
+          (f.optOutExpired.expires || '?') + '. It is back in scope. Reason given at the ' +
+          'time: ' + f.optOutExpired.reason) + '">Exception expired</span>'
+      : f.optOut
+      ? '<span class="pill optout" title="' + esc((f.optOut.rule
+            ? 'Opted out by a rule' + (f.optOut.expires ? ', expires ' + f.optOut.expires : '')
+            : 'Opted out ' + (f.optOut.when || '')) + ': ' + f.optOut.reason) + '">' +
+        (f.optOut.rule ? 'Opted out (rule)' : 'Opted out') + '</span>'
       : f.applied
       ? '<span class="pill fixed">Fixed</span>'
       : f.fixKind === 'auto' ? '<span class="pill auto">Auto</span>'
@@ -2343,15 +2500,24 @@ function handleOptOutForm(ev, form) {
  * stays where it belongs, on the things that produce files.
  */
 let DIFF_FILE = null;
+let DIFF_BUILT = null;
 
 function diffRows(before, after) {
-  /* Turn a unified diff into aligned rows. A run of removals followed by a run of
-     additions is the common case for a changed value, so pair them up rather than
-     stacking them: a value that changed should read as one row, not two. */
-  const d = diffLines(before, after);
+  return pairDiff(diffLines(before, after));
+}
+
+/* Turn a unified diff into aligned rows. A run of removals followed by a run of additions
+   is the common case for a changed value, so pair them up rather than stacking them: a
+   value that changed should read as one row, not two.
+
+   Split out of diffRows because three surfaces need it now: the Diff tab, the step through
+   modal and the HTML export. The modal already had a diff, in one column with + and -
+   markers, which is fine to read and poor to show somebody. */
+function pairDiff(d) {
   const rows = [];
   let i = 0;
   while (i < d.length) {
+    if (d[i].t === '@') { rows.push({ t: 'gap', l: d[i], r: d[i] }); i++; continue; }
     if (d[i].t === ' ') { rows.push({ t: 'ctx', l: d[i], r: d[i] }); i++; continue; }
     const rem = [], add = [];
     while (i < d.length && d[i].t === '-') { rem.push(d[i]); i++; }
@@ -2363,6 +2529,113 @@ function diffRows(before, after) {
     }
   }
   return rows;
+}
+
+/* The diff as one self contained file.
+ *
+ * The reason this exists is that the alternative was screenshotting the Diff tab once per
+ * finding and pasting the images into a ticket. Nobody reviews that, and a screenshot is
+ * not searchable, not diffable and not evidence of anything a month later.
+ *
+ * Self contained means no network, no CDN and no external stylesheet, because the people
+ * who need to read it are frequently on a machine that cannot reach anything. Every file
+ * is in the one document, collapsed, with the counts on the summary so a reviewer can see
+ * the shape of the change before opening a single one. */
+function buildDiffHtml(built, changed, meta) {
+  const E = esc;
+  const when = new Date().toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
+  const totalAdd = changed.reduce((n, c) => n + c.add, 0);
+  const totalDel = changed.reduce((n, c) => n + c.del, 0);
+
+  const fileHtml = changed.map((c, idx) => {
+    const rows = diffRows(c.before, c.after);
+    const body = rows.map((r) => {
+      const cls = r.t === 'ctx' ? 'ctx' : r.t;
+      return '<tr class="' + cls + '">' +
+        '<td class="ln">' + (r.l && r.l.an !== undefined ? r.l.an : '') + '</td>' +
+        '<td class="side l">' + (r.l ? E(r.l.text) : '') + '</td>' +
+        '<td class="ln">' + (r.r && r.r.bn !== undefined ? r.r.bn : '') + '</td>' +
+        '<td class="side r">' + (r.r ? E(r.r.text) : '') + '</td>' +
+        '</tr>';
+    }).join('');
+    return '<details class="f"' + (idx === 0 ? ' open' : '') + '>' +
+      '<summary><span class="p">' + E(c.name) + '</span>' +
+      '<span class="s"><b class="a">+' + c.add + '</b> <b class="d">-' + c.del + '</b></span>' +
+      '</summary>' +
+      '<table class="d"><thead><tr><th></th><th>Before, as loaded</th>' +
+      '<th></th><th>After, with the fixes applied</th></tr></thead>' +
+      '<tbody>' + body + '</tbody></table></details>';
+  }).join('');
+
+  /* What produced this, in the document rather than in the covering email. A diff with no
+     provenance is a picture of some YAML. */
+  const reg = (built.register || []).map((r) =>
+    '<tr><td><code>' + E(r.ref) + '</code></td><td>' + E(r.obj) + '</td><td>' +
+    E(r.file) + '</td><td>' + E(r.policies.join(', ')) + '</td><td>' +
+    (r.risky.length ? '<b class="warn">yes</b>, ' + E(r.risky.map((x) => x.policy.id).join(', ')) : 'no') +
+    '</td></tr>').join('');
+
+  const ex = (STATE.findings || []).filter((f) => f.optOut);
+  const exHtml = ex.length
+    ? '<h2>Documented exceptions</h2><p>' + ex.length + ' finding(s) were opted out and are ' +
+      'deliberately absent from this diff.</p><table class="meta"><thead><tr><th>Policy</th>' +
+      '<th>Object</th><th>Expires</th><th>Reason</th></tr></thead><tbody>' +
+      ex.map((f) => '<tr><td><code>' + E(f.policy.id) + '</code></td><td>' + E(f.obj) +
+        '</td><td>' + E(f.optOut.expires || 'never') + '</td><td>' + E(f.optOut.reason) +
+        '</td></tr>').join('') + '</tbody></table>'
+    : '';
+
+  return '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">' +
+    '<title>ACS Auditor diff, ' + E(when) + '</title><style>' +
+    ':root{--bg:#fff;--fg:#1c2430;--mut:#667085;--line:#e3e8ef;--panel:#f6f8fa;' +
+    '--add:#e6ffec;--del:#ffebe9;--addl:#aceebb;--dell:#ffc9c4;--acc:#1f6feb}' +
+    '@media(prefers-color-scheme:dark){:root{--bg:#0d1117;--fg:#e6edf3;--mut:#8b949e;' +
+    '--line:#30363d;--panel:#161b22;--add:#12261e;--del:#25171c;--addl:#1f6f3f;' +
+    '--dell:#8b2a2a;--acc:#58a6ff}}' +
+    'body{font-family:Segoe UI,system-ui,Arial,sans-serif;background:var(--bg);color:var(--fg);' +
+    'margin:0 auto;max-width:1400px;padding:28px 20px;line-height:1.5}' +
+    'h1{font-size:21px;border-bottom:3px solid var(--acc);padding-bottom:8px}' +
+    'h2{font-size:15px;color:var(--acc);margin-top:26px}' +
+    '.sub{color:var(--mut);font-size:13px}' +
+    '.warnbox{border-left:3px solid #d4a72c;background:var(--panel);padding:10px 13px;' +
+    'border-radius:0 6px 6px 0;font-size:13px;margin:14px 0}' +
+    'details.f{border:1px solid var(--line);border-radius:7px;margin:10px 0;overflow:hidden}' +
+    'details.f>summary{cursor:pointer;padding:9px 12px;background:var(--panel);' +
+    'display:flex;justify-content:space-between;gap:14px;font-size:13px;user-select:none}' +
+    '.p{font-family:ui-monospace,Consolas,monospace;word-break:break-all}' +
+    '.a{color:#1a7f37}.d{color:#cf222e}.warn{color:#cf222e}' +
+    'table.d{width:100%;border-collapse:collapse;font-family:ui-monospace,Consolas,monospace;' +
+    'font-size:12px;table-layout:fixed}' +
+    'table.d th{background:var(--panel);text-align:left;padding:5px 8px;font-family:inherit;' +
+    'font-size:11px;color:var(--mut);border-bottom:1px solid var(--line)}' +
+    'table.d td{padding:1px 8px;vertical-align:top;white-space:pre-wrap;word-break:break-all}' +
+    'td.ln{width:46px;color:var(--mut);text-align:right;user-select:none;background:var(--panel)}' +
+    'tr.add td.side.r{background:var(--add)}tr.rem td.side.l{background:var(--del)}' +
+    'tr.chg td.side.l{background:var(--del)}tr.chg td.side.r{background:var(--add)}' +
+    'table.meta{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:8px}' +
+    'table.meta th{background:var(--panel);text-align:left;padding:6px 8px}' +
+    'table.meta td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}' +
+    'code{font-family:ui-monospace,Consolas,monospace}' +
+    '</style></head><body>' +
+    '<h1>Proposed changes to your manifests</h1>' +
+    '<p class="sub">Generated ' + E(when) + ' by ' + E(ACS_TOOL) + ', mode ' +
+      E(currentMode()) + '. ' + changed.length + ' file(s), ' + built.applied.length +
+      ' fix(es), <b class="a">+' + totalAdd + '</b> <b class="d">-' + totalDel + '</b>.' +
+      (meta && meta.onlySelected ? ' Filtered to the findings that were ticked.' : '') +
+      '</p>' +
+    '<div class="warnbox"><b>Nothing here has been applied.</b> This is a comparison ' +
+      'between the YAML that was loaded and a copy with the fixes applied to it. No ' +
+      'command was run and no cluster was contacted. Left is what you have now, right is ' +
+      'what you would get.</div>' +
+    (reg ? '<h2>Reference register</h2><p class="sub">Run <code>' + E(built.runRef) +
+      '</code>. Each changed object is annotated with its reference, so a revision in the ' +
+      'cluster can be traced back to this document.</p>' +
+      '<table class="meta"><thead><tr><th>Reference</th><th>Object</th><th>File</th>' +
+      '<th>Policies</th><th>Can stop the workload</th></tr></thead><tbody>' + reg +
+      '</tbody></table>' : '') +
+    exHtml +
+    '<h2>The diff</h2>' + fileHtml +
+    '</body></html>';
 }
 
 function renderDiffTab() {
@@ -2381,6 +2654,10 @@ function renderDiffTab() {
   }).concat(built.generated.map((g) => ({
     name: g.name + '  (new file)', before: '', after: g.text,
     add: g.text.split('\n').length, del: 0 })));
+
+  /* Held for the export so the file somebody attaches to a ticket is the same computation
+     they were just looking at, rather than a second one that could differ. */
+  DIFF_BUILT = { built: built, changed: changed, onlySelected: !!only };
 
   const tb = $('dtable').querySelector('tbody');
   setCount('dCount', changed.length
@@ -2641,12 +2918,23 @@ function requestFix(f) {
 
 function closeModal() { $('modalHost').innerHTML = ''; }
 
+/* Side by side, the same as the Diff tab and the exported HTML. It used to be one column
+   of + and - lines, which reads fine to somebody who already knows what changed and is
+   hard to show to anybody else. Left is what you have, right is what you would get. */
 function diffHtml(diff) {
-  return '<pre class="diff">' + diff.map((d) => {
-    const cls = d.t === '+' ? 'add' : d.t === '-' ? 'del' : d.t === '@' ? 'gap' : 'ctx';
-    const mark = d.t === '@' ? '  ' : d.t + ' ';
-    return '<div class="' + cls + '">' + esc(mark + d.text) + '</div>';
-  }).join('') + '</pre>';
+  const rows = pairDiff(diff).map((r) => {
+    if (r.t === 'gap') {
+      return '<tr class="gap"><td colspan="4">' + esc(r.l.text) + '</td></tr>';
+    }
+    return '<tr class="' + r.t + '">' +
+      '<td class="ln">' + (r.l && r.l.an !== undefined ? r.l.an : '') + '</td>' +
+      '<td class="side l">' + (r.l ? esc(r.l.text) : '') + '</td>' +
+      '<td class="ln">' + (r.r && r.r.bn !== undefined ? r.r.bn : '') + '</td>' +
+      '<td class="side r">' + (r.r ? esc(r.r.text) : '') + '</td>' +
+      '</tr>';
+  }).join('');
+  return '<table class="sbs"><thead><tr><th></th><th>Now</th><th></th>' +
+    '<th>After this fix</th></tr></thead><tbody>' + rows + '</tbody></table>';
 }
 
 function showConfirm(f, pv, onYes) {
@@ -3146,6 +3434,106 @@ if ($('btnNsNoPlatform')) {
   });
 }
 
+/* A rule built from what the filters already describe. Opting out automountServiceAccount
+   on forty operators one row at a time is forty clicks and forty entries that all break
+   when a path changes; this is one rule that says what it means. */
+function bulkRuleFromFilters() {
+  const pol = $('fPolicy') ? $('fPolicy').value : '';
+  const ns = $('fNs') ? $('fNs').value : '';
+  const shown = FROWS.filter((f) => !f.applied && !f.optOut);
+  return { policy: pol, namespace: ns, shown: shown };
+}
+
+$('btnOptBulk').addEventListener('click', () => {
+  const { policy, namespace, shown } = bulkRuleFromFilters();
+  if (!shown.length) {
+    flash('Nothing is showing that could be opted out.', FLASH_REFUSAL_MS);
+    return;
+  }
+  /* Refused rather than guessed. A rule with no policy would except everything in the
+     namespaces it names, including findings that are not on screen and findings that do
+     not exist yet, which is not what pressing a button on a filtered table means. */
+  if (!policy) {
+    flash('Set the Policy filter first. A rule without a policy would except every ' +
+      'finding in scope, including ones not on this screen.', FLASH_REFUSAL_MS);
+    return;
+  }
+  const pols = Array.from(new Set(shown.map((f) => f.policy.id)));
+  const nss = Array.from(new Set(shown.map((f) => String(f.ns || ''))));
+  openBulkForm(policy, namespace, shown, pols, nss);
+});
+
+function openBulkForm(policy, namespace, shown, pols, nss) {
+  const box = $('bulkForm');
+  if (!box) return;
+  box.classList.remove('hidden');
+  box.innerHTML =
+    '<div style="font-weight:600;margin-bottom:4px">Opt out ' + esc(policy) +
+      (namespace ? ' in ' + esc(namespace) : ' in every namespace in scope') + '</div>' +
+    '<p class="note" style="margin:0 0 6px">This writes one rule, not ' + shown.length +
+      ' entries. It covers the ' + shown.length + ' finding(s) showing now and anything ' +
+      'loaded later that matches the same policy' +
+      (namespace ? ' and namespace' : '') + '. Objects: ' +
+      esc(shown.slice(0, 4).map((f) => f.obj).join(', ')) +
+      (shown.length > 4 ? ' and ' + (shown.length - 4) + ' more' : '') + '.</p>' +
+    (nss.length > 1 && !namespace
+      ? '<p class="note" style="color:var(--med);margin:0 0 6px">It spans ' + nss.length +
+        ' namespaces: ' + esc(nss.join(', ')) + '. Set the Namespace filter to narrow it.</p>'
+      : '') +
+    '<textarea class="optreason" rows="3" placeholder="Why does ' + esc(policy) +
+      ' not apply here?"></textarea>' +
+    '<p style="margin:6px 0 4px"><label class="chk">Expires ' +
+      '<input type="date" id="bulkExpiry" style="background:var(--panel2);color:var(--text);' +
+      'border:1px solid var(--border);border-radius:5px;padding:3px 6px;font-size:13px">' +
+      '</label> <span class="note" style="margin:0">Optional. After this date the findings ' +
+      'come back, marked as an expired exception rather than reappearing silently.</span></p>' +
+    '<div class="optmsg"></div>' +
+    '<button class="small primary" id="bulkSave">Save rule</button> ' +
+    '<button class="small" id="bulkCancel">Cancel</button>';
+
+  $('bulkCancel').addEventListener('click', () => box.classList.add('hidden'));
+  $('bulkSave').addEventListener('click', () => {
+    const ta = box.querySelector('.optreason');
+    const msg = box.querySelector('.optmsg');
+    const rule = { policy: policy, reason: String(ta.value).trim() };
+    if (namespace) rule.namespace = namespace;
+    const exp = $('bulkExpiry') ? $('bulkExpiry').value : '';
+    if (exp) rule.expires = exp;
+    const problem = optOutRuleProblem(rule);
+    if (problem) { msg.textContent = problem; ta.focus(); return; }
+    OPTRULES.push(rule);
+    optOutSave();
+    applyOptOuts(STATE.scanned);
+    STATE.findings = scopedFindings(STATE.scanned);
+    pruneFindingSelection();
+    box.classList.add('hidden');
+    render();
+    flash('Rule saved: ' + policy + (namespace ? ' in ' + namespace : '') +
+      '. It covers ' + optOutCount() + ' finding(s) now' +
+      (exp ? ' and expires ' + exp : '') + '.');
+  });
+}
+
+if ($('btnDiffHtml')) {
+  $('btnDiffHtml').addEventListener('click', () => {
+    if (!DIFF_BUILT || !DIFF_BUILT.changed.length) {
+      flash('There is no diff to export. Nothing would change with the current selection.',
+        FLASH_REFUSAL_MS);
+      return;
+    }
+    download('acs_diff_' + stamp() + '_' + currentMode() + '.html',
+      buildDiffHtml(DIFF_BUILT.built, DIFF_BUILT.changed, DIFF_BUILT),
+      'text/html');
+    flash(DIFF_BUILT.changed.length + ' file(s) written to one HTML page. It opens ' +
+      'offline and needs nothing installed.');
+  });
+}
+
+$('btnOptTemplate').addEventListener('click', () => {
+  download('acs_exceptions_template.json', exceptionsTemplate(), 'application/json');
+  flash('Template downloaded. It documents the format and is loadable as it stands.');
+});
+
 $('btnOptSave').addEventListener('click', () => {
   const b = optOutBundle();
   if (!b.entries.length) {
@@ -3174,12 +3562,23 @@ $('fOptLoad').addEventListener('change', async (e) => {
   }
   const r = optOutImport(data);
   optOutSave();
-  applyOptOuts(STATE.findings);
+  applyOptOuts(STATE.scanned);
+  STATE.findings = scopedFindings(STATE.scanned);
   pruneFindingSelection();
-  renderTable();
-  flash(r.added + ' exception(s) loaded' +
-    (r.rejected ? ', ' + r.rejected + ' rejected for having no usable reason' : '') + '.',
-    r.rejected ? FLASH_REFUSAL_MS : undefined);
+  render();
+  const dead = unmatchedRules();
+  const parts = [];
+  if (r.rules) parts.push(r.rules + ' rule(s)');
+  if (r.added) parts.push(r.added + ' exact entry(s)');
+  if (r.rejected) parts.push(r.rejected + ' rejected');
+  /* A rule that matched nothing is the silent failure this format exists to remove. It is
+     usually a namespace nobody loaded or a path that has since changed, and before this it
+     looked identical to a rule that was working. */
+  if (dead.length) parts.push(dead.length + ' matching NOTHING loaded');
+  flash('Loaded ' + (parts.join(', ') || 'nothing') + '.' +
+    (r.problems && r.problems.length ? ' First problem: ' + r.problems[0] : '') +
+    (dead.length ? ' Unmatched: ' + dead.map((x) => String(x.policy)).join(', ') : ''),
+    (r.rejected || dead.length) ? FLASH_REFUSAL_MS : undefined);
 });
 
 $('fileinput').addEventListener('change', async (e) => {
@@ -3622,14 +4021,46 @@ function exceptionSection(findings) {
   L.push('**not gone**. Each one is a decision somebody made, recorded here so the next');
   L.push('reader can agree or disagree with it rather than guess.');
   L.push('');
-  L.push('| Policy | Object | File | Recorded | Reason |');
-  L.push('|---|---|---|---|---|');
+  L.push('| Policy | Object | File | Source | Expires | Reason |');
+  L.push('|---|---|---|---|---|---|');
   for (const f of ex) {
     L.push('| `' + f.policy.id + '` ' + f.policy.acsPolicy + ' | ' + f.obj + ' | ' +
-      f.file + ' | ' + (f.optOut.when || '') + ' | ' +
+      f.file + ' | ' + (f.optOut.rule ? 'rule' : 'pinned ' + (f.optOut.when || '')) +
+      ' | ' + (f.optOut.expires || 'never') + ' | ' +
       String(f.optOut.reason).replace(/\|/g, '\\|').replace(/\n/g, ' ') + ' |');
   }
   L.push('');
+
+  /* An exception with no end date is the one the admin guide argues against at length,
+     so the document says how many of them there are rather than leaving it to be counted
+     off the table above. */
+  const forever = ex.filter((f) => !f.optOut.expires);
+  if (forever.length) {
+    L.push(forever.length + ' of these have no expiry and will stay excepted until');
+    L.push('somebody removes them. Consider a date on the ones that are waiting on work.');
+    L.push('');
+  }
+  /* Lapsed exceptions are listed as their own thing. They are not exceptions any more and
+     they are not ordinary findings either: somebody decided to accept this once, and the
+     decision ran out. That is worth a reader's attention in a way a fresh finding is not. */
+  const lapsed = (findings || []).filter((f) => f.optOutExpired);
+  if (lapsed.length) {
+    L.push('### Exceptions that have expired');
+    L.push('');
+    L.push(lapsed.length + ' finding(s) were excepted and the exception has run out. They');
+    L.push('are back in scope and are included in the counts above. They are listed here');
+    L.push('because a decision that lapsed is not the same as a decision nobody made.');
+    L.push('');
+    L.push('| Policy | Object | Expired | Reason given at the time |');
+    L.push('|---|---|---|---|');
+    for (const f of lapsed) {
+      L.push('| `' + f.policy.id + '` | ' + f.obj + ' | ' +
+        (f.optOutExpired.expires || '?') + ' | ' +
+        String(f.optOutExpired.reason).replace(/\|/g, '\\|').replace(/\n/g, ' ') + ' |');
+    }
+    L.push('');
+  }
+
   L.push('An exception is per policy per object. The same policy on any other object is');
   L.push('still in scope. To put one back in scope, open it in the Remediate tab and');
   L.push('remove the exception.');
