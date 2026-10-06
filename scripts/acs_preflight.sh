@@ -24,10 +24,60 @@
 #
 set -u
 
-URL="${1:-${ROX_ENDPOINT:-}}"
+show_help() {
+  cat <<'TXT'
+acs_preflight.sh  --  say which server you actually reached and what your token can read.
+
+Run this before acs_pull_all.sh. An empty pull is almost always one of two things: you
+reached a different server than you meant to, or the token lacks read on Image and
+Deployment rather than just Alert. This tells you which, per endpoint.
+
+Every call is a GET. It never writes to a cluster.
+
+USAGE
+  export ROX_API_TOKEN=...
+  ./acs_preflight.sh https://central-stackrox.apps.example.com [--insecure]
+
+  or with the endpoint in the environment:
+
+  export ROX_ENDPOINT=... ROX_API_TOKEN=...
+  ./acs_preflight.sh
+
+OPTIONS
+  --insecure        skip TLS verification. Your token goes on the wire unverified, so this
+                    is for diagnosis only and the script says so when you use it
+  -h, --help        this text
+
+ENVIRONMENT
+  ROX_ENDPOINT      Central URL, if not given as the first argument
+  ROX_API_TOKEN     ACS API token
+  ROX_CA            CA bundle to verify against. If set and unreadable the script refuses
+                    rather than falling back to the system trust store
+TXT
+}
+
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help) show_help; exit 0 ;;
+    --insecure) ;;
+    -*) echo "unknown option: $arg" >&2
+        echo "Run with --help for the options. Refusing rather than treating it as the" >&2
+        echo "endpoint, which would look like a connectivity failure instead of a typo." >&2
+        exit 2 ;;
+  esac
+done
+
+URL=""
+for arg in "$@"; do
+  case "$arg" in
+    -*) ;;
+    *) [ -z "$URL" ] && URL="$arg" ;;
+  esac
+done
+[ -n "$URL" ] || URL="${ROX_ENDPOINT:-}"
 TOKEN="${ROX_API_TOKEN:-}"
 CURL_TLS=""
-[ "${2:-}" = "--insecure" ] && CURL_TLS="-k"
+case " $* " in *" --insecure "*) CURL_TLS="-k" ;; esac
 # A CA path that does not resolve must be an error. Letting it through means curl
 # falls back to the system trust store, and a run that the operator believes is
 # verifying against their internal CA is verifying against something else entirely.

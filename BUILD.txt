@@ -1,7 +1,7 @@
 DJ's ACS Auditor
-version   1.9.0
-build     20260922-123921
-tests     1587 with jsdom, 922 without
+version   1.9.2
+build     20260929-151723
+tests     1749 with jsdom, 1084 without
 
 Reusing a filename across rebuilds is how a stale download gets unzipped over a repo
 and produces results that make no sense against the code you think you have. Check

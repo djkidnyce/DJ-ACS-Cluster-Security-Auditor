@@ -1072,6 +1072,53 @@ console.log('\nacs_rollout.sh, driven against a fake cluster');
   t('with no oc anywhere on PATH, restore still works', noOc.code === 0);
   t('and still produces the object', /"schedule"/.test(noOc.out));
 
+
+  console.log('\n  Run with no subcommand, it explains itself');
+  /* It used to print its own comment header via sed on a hardcoded line range, hash marks
+     and all, which reads exactly like a script that failed to execute and echoed its
+     source. That is how it was reported. The range had also gone stale when a subcommand
+     was added, cutting the last one off mid sentence. */
+  const help = run([]);
+  t('it exits 2, because no subcommand is a usage error', help.code === 2);
+  t('and it says what it is', /what is running, which revision/.test(help.out));
+  t('no line is a raw comment line from the file',
+    !help.out.split('\n').some((l) => /^\s*#/.test(l)));
+  t('it leads with the promise that it never runs anything',
+    /NEVER RUNS THEM/.test(help.out));
+
+  /* Every subcommand the case statement dispatches on has to appear in the help. This is
+     the assertion that would have caught the stale sed range: restore was dispatchable and
+     undocumented in the output for a whole release. */
+  const src = fs.readFileSync(path.join(DIR, 'acs_rollout.sh'), 'utf8');
+  const dispatch = src.slice(src.lastIndexOf('case "$CMD" in'));
+  const subs = (dispatch.match(/^\s{2}(\w+)\)/gm) || [])
+    .map((x) => x.trim().replace(')', ''));
+  t('the case statement has every subcommand this suite drives', subs.length === 7);
+  const listed = help.out.split('SUBCOMMANDS')[1].split('OPTIONS')[0];
+  for (const sub of subs) {
+    t('  ' + sub + ' is in the SUBCOMMANDS list, not merely mentioned somewhere',
+      new RegExp('^\\s+' + sub + '\\s', 'm').test(listed));
+  }
+  t('every option the parser accepts is documented too',
+    ['-n', '--namespace', '-o', '--out', '--to-revision', '-h', '--help']
+      .every((o) => help.out.indexOf(o) !== -1));
+  t('it shows a worked example of each of the two rollback verbs',
+    /rollout undo/.test(help.out) && /oc rollback/.test(help.out));
+
+  console.log('\n  Asking for help is not an error');
+  const h = run(['-h']);
+  t('-h exits 0', h.code === 0);
+  t('--help exits 0 too', run(['--help']).code === 0);
+  t('and the bare word help, which is what people type', run(['help']).code === 0);
+  t('and prints the same text', /SUBCOMMANDS/.test(h.out));
+
+  console.log('\n  A wrong subcommand says so before printing the help');
+  const wrong = run(['plann']);
+  t('it names what it did not understand', /Unknown subcommand: plann/.test(wrong.out));
+  t('and still exits non zero', wrong.code !== 0);
+  t('an unknown option is named as an option, not a subcommand',
+    /Unknown option: --nope/.test(run(['plan', '--nope']).out));
+
   console.log('\n  It never writes. That is the whole promise.');
   const log = calls();
   t('the fake oc was actually called, so the absence below means something',
@@ -1105,6 +1152,109 @@ console.log('\nacs_rollout.sh, driven against a fake cluster');
   }
 
   fs.rmSync(work, { recursive: true, force: true });
+}
+
+
+/* ---------------------------------------------------- every script, uniformly
+ *
+ * A script that prints its own comment header when you run it is indistinguishable from a
+ * script that failed to execute, and that is how it was reported from production. Three of
+ * the five did it. These assertions apply to every .sh in scripts/ rather than to the ones
+ * somebody remembered to cover, so a script added later is covered the day it lands.
+ */
+console.log('\nEvery script answers for itself, under bash and under dash');
+{
+  const { execFileSync } = require('child_process');
+  const os = require('os');
+  const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stub-'));
+  /* A stub oc that fails immediately. Without it, a script that reaches for a cluster can
+     sit waiting on somebody's real API server during a test run. */
+  fs.writeFileSync(path.join(stubDir, 'oc'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+
+  const shells = ['bash'];
+  for (const cand of ['/bin/dash', '/usr/bin/dash']) {
+    if (fs.existsSync(cand)) { shells.push(cand); break; }
+  }
+  t('dash is available, so portability is actually being checked', shells.length === 2);
+
+  const run = (shell, file, args) => {
+    try {
+      return { out: execFileSync(shell, [path.join(DIR, file)].concat(args), {
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000, cwd: os.tmpdir(),
+        env: { PATH: stubDir + ':/usr/bin:/bin', HOME: os.tmpdir() },
+      }), code: 0 };
+    } catch (e) {
+      return { out: (e.stdout || '') + (e.stderr || ''),
+               code: e.status === undefined ? -1 : e.status };
+    }
+  };
+
+  for (const f of sh) {
+    console.log('\n  ' + f);
+    const src = read(f);
+
+    /* The defect itself, banned by pattern. Any range into $0 goes stale as the file grows
+       and prints hash marks in the meantime. */
+    /* Comment lines stripped first. The check was flagging the comments that explain why
+       the pattern was removed, which is a test reading documentation as code. */
+    const code = src.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    t('  it does not print its own source as help',
+      !/sed -n ['"]?\d+,\d+p['"]? +"?\$0/.test(code) && !/cat +"?\$0/.test(code));
+    t('  it has a shebang', /^#!/.test(src));
+    t('  no CRLF line endings, which make the shebang unrunnable', src.indexOf('\r') === -1);
+
+    for (const shell of shells) {
+      const name = path.basename(shell);
+      t('  parses under ' + name, (() => {
+        try { execFileSync(shell, ['-n', path.join(DIR, f)], { stdio: 'ignore' }); return true; }
+        catch (e) { return false; }
+      })());
+
+      for (const flag of ['-h', '--help']) {
+        const r = run(shell, f, [flag]);
+        t('  ' + name + ' ' + flag + ' exits 0, because help is not an error', r.code === 0);
+        t('  ' + name + ' ' + flag + ' prints no raw comment line',
+          !r.out.split('\n').some((l) => /^\s*#/.test(l)));
+        t('  ' + name + ' ' + flag + ' says what the script is for',
+          r.out.replace(/\s+/g, ' ').length > 120);
+        t('  ' + name + ' ' + flag + ' documents its own options',
+          /-h, --help|--help/.test(r.out));
+      }
+
+      /* An unrecognised flag must be named and refused. acs_preflight.sh used to take it as
+         the Central URL, so a typo'd flag looked like a connectivity failure. */
+      const bad = run(shell, f, ['--not-a-real-flag']);
+      t('  ' + name + ' refuses an unknown option', bad.code !== 0);
+      t('  ' + name + ' and names it rather than guessing',
+        /not-a-real-flag/.test(bad.out));
+      t('  ' + name + ' without printing raw comment lines either',
+        !bad.out.split('\n').some((l) => /^\s*#/.test(l)));
+    }
+  }
+
+  console.log('\n  None of them write to a cluster on the help path');
+  for (const f of sh) {
+    const src = read(f);
+    const stripHeredocs = (text) => {
+      const out = [];
+      let end = null;
+      for (const line of text.split('\n')) {
+        if (end !== null) { if (line.trim() === end) end = null; continue; }
+        const m = line.match(/<<-?\s*'?"?([A-Za-z_][A-Za-z0-9_]*)'?"?/);
+        if (m) { end = m[1]; out.push(line); continue; }
+        out.push(line);
+      }
+      return out;
+    };
+    const executing = stripHeredocs(src)
+      .filter((l) => !/^\s*#/.test(l))
+      .filter((l) => !/\b(echo|printf|cat)\b/.test(l))
+      .filter((l) => /(\$OC|\boc|\bkubectl)\s+(apply|patch|delete|create|replace|scale|edit|annotate|label|rollback)\b/.test(l)
+                  || /(\$OC|\boc|\bkubectl)\s+rollout\s+undo\b/.test(l));
+    t('  ' + f + ' issues no cluster write outside a line that only prints',
+      executing.length === 0, executing.join(' | '));
+  }
+  fs.rmSync(stubDir, { recursive: true, force: true });
 }
 
 console.log('\n' + P + ' passed, ' + F + ' failed');

@@ -11,6 +11,73 @@ at least; removing or renaming one is a major.
 Every release is tagged. `git tag -l` is the list, and the tag matches the version this
 tool stamps into every report and patch header it writes.
 
+## 1.9.2 - 2026-09-29
+
+Every script audited after a production report that one of them "did not run". Three of the
+five had the same defect and two had others. Found by running each script rather than
+reading it.
+
+### Fixed
+
+- **`acs_pull_all.sh --help` and `acs_pull_via_oc.sh --help` printed the file's comment
+  header**, through `sed -n '2,40p' "$0"` and `sed -n '2,32p' "$0"`, hash marks and all.
+  Same defect fixed in `acs_rollout.sh` in 1.9.1. All three now print real help with
+  options, examples and environment variables.
+
+- **`acs_preflight.sh -h` tried to connect to a server called "-h".** The first argument was
+  taken as the Central URL unconditionally, so `-h`, `--help` and any mistyped flag became
+  the endpoint and the run failed looking like a connectivity problem rather than a usage
+  error. It now prints help, and an unrecognised option is named and refused.
+
+- **`acs_preflight.sh --insecure` only worked as the second argument.** Passed first it
+  became the URL. Position no longer matters.
+
+- **`acs_summary.sh` treated `--help` as an error**, exiting 2 with a usage message on
+  stderr, the same response as a mistake. It also took an unrecognised flag as the directory
+  name, so a typo reported a missing directory instead of a bad option. Both fixed.
+
+### Added
+
+- A regression suite over **every** `.sh` in `scripts/`, rather than the ones somebody
+  remembered to cover, so a script added later is covered the day it lands. Per script, under
+  both bash and dash: it parses, it has a shebang, it has no CRLF endings, `-h` and
+  `--help` exit 0 and print no raw comment line and document their own options, an unknown
+  option is named and refused, and the source contains no self printing pattern and no
+  executable cluster write verb.
+
+  The write verb check is heredoc aware. `acs_rollout.sh` names both `oc rollout undo` and
+  `oc rollback` in its help text on purpose, and a check that cannot tell printed text from
+  an executed command would either flag that or be useless.
+
+  PowerShell scripts were audited too. They use comment based help with param blocks, so
+  `Get-Help` works natively and they never had the defect.
+
+## 1.9.1 - 2026-09-29
+
+### Fixed
+
+- **`acs_rollout.sh` looked like it was not running.** With no subcommand it printed its own
+  comment header through `sed -n '2,50p' "$0"`, hash marks and all, which reads exactly like
+  a script that failed to execute and echoed its source. It now prints real help: the
+  subcommands, the options, worked examples, and the note that it prints commands rather
+  than running them. Reported from use.
+
+  The hardcoded line range had gone stale as well. The header grew past line 50 when
+  `restore` was added in 1.8.0, so that subcommand was cut off mid sentence and went
+  undocumented in the output for a release. A fixed line number pointing into a file that
+  grows is the same trap as indexing a table column by position, which this project also
+  shipped once.
+
+- **`acs_rollout.sh -h` did not show help.** As the first argument it was read as the
+  subcommand name and fell through to "unknown subcommand", which is unhelpful for the most
+  likely thing anybody types first. `-h`, `--help` and `help` now all print the help and
+  exit 0, while a missing or wrong subcommand still exits 2.
+
+- A test now asserts that every subcommand the case statement dispatches on appears in the
+  SUBCOMMANDS list, which is what the stale line range defeated. The first version of that
+  test matched the whole output and passed with a subcommand deleted from the list, because
+  its name still appeared under EXAMPLES.
+
 ## 1.9.0 - 2026-09-22
 
 ### Added

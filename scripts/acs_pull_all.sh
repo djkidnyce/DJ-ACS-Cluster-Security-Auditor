@@ -38,6 +38,48 @@
 #   runs never overwrite each other. --no-timestamp writes straight into -o.
 #
 set -u
+
+# Real help, not this file's comment header.
+#
+# It was `sed -n '2,40p' "$0"`, which printed the top of the file complete with the leading
+# hash marks. Output like that reads as a script that failed and echoed its source, which
+# is exactly how it was reported for a sibling script, and a hardcoded line range into a
+# file that grows goes stale silently.
+show_help() {
+  cat <<'TXT'
+acs_pull_all.sh  --  pull every finding ACS has: all severities, all lifecycle stages, all
+violation states, plus image and node CVEs including the snoozed ones.
+
+Every call is a GET. It never writes to a cluster.
+
+USAGE
+  export ROX_ENDPOINT=https://central-stackrox.apps.example.com
+  export ROX_API_TOKEN=...            # never pass the token as an argument
+  ./acs_pull_all.sh [options]
+
+OPTIONS
+  -o DIR            parent directory. Each run lands in DIR/acs_findings_<timestamp>/ so
+                    runs never overwrite each other
+  -n NAMESPACE      limit to one namespace
+  -c CLUSTER        limit to one cluster
+  -j JOBS           parallel hydration jobs. Default is modest on purpose
+      --no-timestamp  write straight into -o instead of a timestamped subdirectory
+      --no-summary    skip the markdown summary
+      --cacert FILE   verify Central against this CA bundle
+      --pin sha256//KEY  pin Central's public key instead of verifying a chain
+      --insecure      skip TLS verification. Your token goes on the wire. Avoid
+  -h, --help        this text
+
+ENVIRONMENT
+  ROX_ENDPOINT      Central URL. Also settable as the -e option if present
+  ROX_API_TOKEN     ACS API token. The token needs read on Image and Deployment, not just
+                    Alert, or the CVE pull comes back empty while alerts keep working
+  ROX_CA            path to a CA bundle, same effect as --cacert
+
+Run ./acs_preflight.sh first. It tells you which server you reached and what your token
+can actually read, which is the answer to almost every empty result.
+TXT
+}
 SCRIPTDIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
 # Where the run goes.
@@ -72,7 +114,7 @@ while [ $# -gt 0 ]; do
     --page) PAGE="$2"; shift 2 ;;
     --cacert) CACERT="$2"; shift 2 ;;
     --insecure) CURL_TLS="-k"; shift ;;
-    -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
+    -h|--help) show_help; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done

@@ -89,10 +89,65 @@ need() {
   exit 2
 }
 
-usage() { sed -n '2,50p' "$0"; exit 2; }
+# Real help, rather than the file's own comment header.
+#
+# This used to be `sed -n '2,50p' "$0"`, which printed the top of this file complete with
+# the leading hash marks. Run with no subcommand, it looked exactly like a script that had
+# failed to execute and echoed its source instead, and that is precisely how it was
+# reported. The hardcoded line range had also gone stale: the header grew past line 50 when
+# restore was added, so the last subcommand was cut off mid sentence. A fixed line number
+# pointing into a file that grows is the same trap as indexing a table column by position.
+usage() {
+  cat <<'TXT'
+acs_rollout.sh  --  what is running, which revision it is on, what changed it, and the
+command to put it back.
+
+IT PRINTS COMMANDS. IT NEVER RUNS THEM. Every call it makes is a read.
+
+USAGE
+  acs_rollout.sh <subcommand> [options]
+
+SUBCOMMANDS
+  plan                     broken workloads, auditor touched workloads, and the overlap
+  broken                   workloads with unhealthy pods, why, and how to go back
+  touched                  workloads carrying an auditor annotation, healthy or not
+  history [KIND/NAME]      revision history, with the change cause against each revision
+  snapshot                 write the lot to files, readable where the cluster is not
+  undo KIND/NAME           print the rollback command for one workload
+  restore FILE KIND/NAME   print one object from a capture, ready for you to apply
+
+OPTIONS
+  -n, --namespace NS       one namespace. Omit it for every namespace
+  -o, --out DIR            where snapshot writes. Default acs_rollout_<timestamp>
+      --to-revision N      target revision, for undo
+  -h, --help               this text
+
+EXAMPLES
+  acs_rollout.sh plan
+  acs_rollout.sh broken -n prod
+  acs_rollout.sh touched -n prod
+  acs_rollout.sh history -n prod deployment/payments-api
+  acs_rollout.sh snapshot -o ./rollback
+  acs_rollout.sh undo -n prod deployment/payments-api --to-revision 6
+  acs_rollout.sh restore ./rollback/workloads.json -n prod cronjob/nightly
+
+ENVIRONMENT
+  OC                       cluster client. Default oc. Set OC=kubectl to use kubectl
+
+Deployment, StatefulSet and DaemonSet take oc rollout undo. DeploymentConfig takes
+oc rollback. This prints whichever is right for the kind in front of it.
+TXT
+  echo
+  echo "Why each subcommand exists, at length, is in the comment header of this file:"
+  echo "  less $0"
+  exit "${1:-2}"
+}
 
 CMD="${1:-}"
 [ -n "$CMD" ] || usage
+case "$CMD" in
+  -h|--help|help) usage 0 ;;
+esac
 shift || true
 
 TARGET=""
@@ -101,7 +156,7 @@ while [ $# -gt 0 ]; do
     -n|--namespace) NS="${2:-}"; ALL_NS=0; shift 2 || usage ;;
     -o|--out)       OUTDIR="${2:-}"; shift 2 || usage ;;
     --to-revision)  TO_REV="${2:-}"; shift 2 || usage ;;
-    -h|--help)      usage ;;
+    -h|--help)      usage 0 ;;
     -*)             echo "Unknown option: $1" >&2; usage ;;
     *)
       if [ "$CMD" = "restore" ] && [ -z "$RESTORE_FILE" ]; then

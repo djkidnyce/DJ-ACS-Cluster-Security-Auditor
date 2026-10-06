@@ -7,7 +7,7 @@
       "type": "application",
       "bom-ref": "dj-acs-auditor",
       "name": "DJ's ACS Auditor",
-      "version": "1.9.0",
+      "version": "1.9.2",
       "description": "Audit Kubernetes and OpenShift manifests against Red Hat Advanced Cluster Security policy logic."
     },
     "properties": [

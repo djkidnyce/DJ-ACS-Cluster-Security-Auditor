@@ -28,6 +28,42 @@
 #
 set -u
 
+# Real help rather than this file's comment header, which used to be printed through a
+# hardcoded sed range and came out full of hash marks.
+show_help() {
+  cat <<'TXT'
+acs_pull_via_oc.sh  --  reach ACS Central through your existing oc session and pull the
+vulnerability data.
+
+oc cannot fetch this data itself. ACS findings are not Kubernetes objects and there is no
+CRD holding CVEs. What oc is good for is finding the namespace and route, getting the CA so
+TLS verification works, port forwarding when the route is unreachable, and reading the admin
+credential. This does all four, then makes the one HTTP call oc cannot make.
+
+Every call is a GET. It never writes to a cluster.
+
+USAGE
+  oc login <cluster>
+  ./acs_pull_via_oc.sh [options]
+
+OPTIONS
+  -n, --namespace NS    ACS namespace. Found automatically if omitted
+  -o, --out DIR         where to write. Default is a timestamped directory
+  -q, --query Q         ACS search query to narrow the pull
+      --timeout SEC     per request timeout
+      --admin           read the admin password from the central-htpasswd secret and use
+                        basic auth, instead of an API token
+      --port-forward    force oc port-forward rather than using the route
+      --port N          local port for the forward
+  -h, --help            this text
+
+AUTHENTICATION
+  ACS does not accept OpenShift tokens for its own API. oc whoami -t will be rejected.
+  Either export ROX_API_TOKEN with an ACS API token, which is scoped and revocable, or
+  pass --admin to use the generated admin account.
+TXT
+}
+
 NS=""
 OUT="acs_via_oc_$(date +%Y%m%d_%H%M%S)"
 QUERY=""
@@ -45,7 +81,7 @@ while [ $# -gt 0 ]; do
     --admin) USE_ADMIN=1; shift ;;
     --port-forward) FORCE_PF=1; shift ;;
     --port) PF_PORT="$2"; shift 2 ;;
-    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
+    -h|--help) show_help; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done

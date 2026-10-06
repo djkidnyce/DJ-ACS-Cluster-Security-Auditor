@@ -23,6 +23,32 @@
 #
 set -u
 
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help|-o) ;;
+    -*) echo "unknown option: $arg" >&2
+        echo "Run with --help for the options." >&2
+        exit 2 ;;
+  esac
+done
+
+case "${1:-}" in
+  -h|--help)
+    echo "acs_summary.sh  --  summarise a pull directory using only curl and jq."
+    echo ""
+    echo "For a machine where Node cannot be installed. It reads what acs_pull_all.sh"
+    echo "wrote and reports what ACS said. It reads files and nothing else."
+    echo ""
+    echo "USAGE"
+    echo "  ./acs_summary.sh <pull-directory> [-o out.md]"
+    echo ""
+    echo "  <pull-directory>   the directory acs_pull_all.sh wrote, for example"
+    echo "                     findings/acs_findings_20260821_143022"
+    echo "  -o out.md          write the summary to a file instead of standard output"
+    echo "  -h, --help         this text"
+    exit 0 ;;
+esac
+
 DIR="${1:-}"
 OUT=""
 [ "${2:-}" = "-o" ] && OUT="${3:-}"
