@@ -591,6 +591,12 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
           </select></label>
         <button id="btnFSelAll">Select all shown</button>
         <button id="btnFSelNone">Clear selection</button>
+        <label class="chk">Secrets
+          <select id="secretMode" title="What to generate alongside a credential that is moved out of a manifest. The stub needs nothing installed. ExternalSecret needs External Secrets Operator or a Vault operator to resolve it." style="background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:4px 8px;font-size:13px">
+            <option value="stub">Secret stub, nothing to install</option>
+            <option value="external">ExternalSecret, needs an operator</option>
+            <option value="none">Do not generate one</option>
+          </select></label>
         <button id="btnOptBulk" title="Write one rule covering every finding the filters above are showing, with one reason">Opt out all shown</button>
         <button id="btnOptSave" title="Save the recorded exceptions as a JSON file you can keep with the manifests or load on another machine">Save exceptions</button>
         <button id="btnOptTemplate" title="Download a commented starter file showing the format, with a worked example">Exceptions template</button>
@@ -1930,6 +1936,68 @@ function findingRows() {
 /* Only a finding with a mechanical fix can be selected for export. A manual one has
    nothing to emit, so it gets a disabled box with the reason rather than no box, which
    would read as an oversight rather than an answer. */
+const secretMode = () => ($('secretMode') ? $('secretMode').value : 'stub');
+
+/* PVC names already in use, per namespace, so a recommendation cannot propose one that
+   exists. Read from whatever was loaded: drop `oc get pvc -A -o json` on the page alongside
+   the manifests and the collision check becomes real rather than theoretical. Without it the
+   tool only knows about claims declared in the manifests it was given, which it says. */
+function existingPvcNames(ns) {
+  const out = [];
+  for (const f of STATE.files || []) {
+    for (const d of f.docs || []) {
+      if (!d || d.kind !== 'PersistentVolumeClaim') continue;
+      if (nsOf(d) !== ns) continue;
+      const n = d.metadata && d.metadata.name;
+      if (n && out.indexOf(n) === -1) out.push(n);
+    }
+  }
+  /* Claims a workload already references count as taken too, even when the claim object
+     itself was not loaded. */
+  for (const f of STATE.files || []) {
+    for (const d of f.docs || []) {
+      const ps = podSpec(d);
+      if (!ps || nsOf(d) !== ns) continue;
+      for (const v of (ps.volumes || [])) {
+        const c = v && v.persistentVolumeClaim && v.persistentVolumeClaim.claimName;
+        if (c && out.indexOf(c) === -1) out.push(c);
+      }
+    }
+  }
+  return out;
+}
+
+const pvcSourceLoaded = () => (STATE.files || []).some((f) =>
+  (f.docs || []).some((d) => d && d.kind === 'PersistentVolumeClaim'));
+
+/* One recommendation per hostPath volume in scope. Driven off the findings rather than the
+   selection, because ACS.012 is a manual policy: nothing is applied, so there is nothing to
+   tick. These are advisory artifacts and they go in a folder that says so. */
+function pvcRecommendations() {
+  const out = [];
+  const takenByNs = {};
+  for (const f of (STATE.findings || [])) {
+    if (f.policy.id !== 'ACS.012') continue;
+    const vol = String(f.detail).replace(/^Volume "([^"]+)".*/, '$1');
+    const hostPath = String(f.detail).replace(/.*mounts hostPath (\S+).*/, '$1');
+    const ns = f.ns || 'default';
+    if (!takenByNs[ns]) takenByNs[ns] = existingPvcNames(ns);
+    let kind = '', replicas = 0;
+    for (const file of STATE.files || []) {
+      for (const d of file.docs || []) {
+        if (nameOf(d) !== f.obj) continue;
+        kind = d.kind || '';
+        replicas = (d.spec && typeof d.spec.replicas === 'number') ? d.spec.replicas : 0;
+      }
+    }
+    const rec = pvcRecommendation({ objKind: kind, objName: f.obj, volumeName: vol,
+      hostPath: hostPath, namespace: ns, replicas: replicas, taken: takenByNs[ns] });
+    takenByNs[ns].push(rec.claimName);
+    out.push({ finding: f, rec: rec });
+  }
+  return out;
+}
+
 const fFixable = (f) => !f.applied && f.fixKind !== 'manual' && !f.optOut;
 /* f.optOutExpired deliberately does NOT appear above. An expired exception is a
    finding that is back in scope, so it is selectable and fixable again. The pill is
@@ -2500,7 +2568,6 @@ function handleOptOutForm(ev, form) {
  * stays where it belongs, on the things that produce files.
  */
 let DIFF_FILE = null;
-let DIFF_BUILT = null;
 
 function diffRows(before, after) {
   return pairDiff(diffLines(before, after));
@@ -2638,8 +2705,19 @@ function buildDiffHtml(built, changed, meta) {
     '</body></html>';
 }
 
-function renderDiffTab() {
-  const only = $('dSelOnly') && $('dSelOnly').checked;
+/* One builder, called fresh by the tab and by the export.
+ *
+ * The export used to read a DIFF_BUILT cache that only renderDiffTab() wrote, and render()
+ * does not call renderDiffTab(). So recording an exception on the Remediate tab left the
+ * cache holding the previous build, and the exported HTML showed the excepted change AND
+ * listed it as a documented exception, contradicting itself inside one document, while the
+ * corrected YAML export got it right. Reported from production.
+ *
+ * The cache existed so the exported file would match what the operator had been looking at.
+ * Computing it twice from the same state achieves that. Caching one of the two computations
+ * is what made them differ. */
+function buildDiffModel() {
+  const only = !!($('dSelOnly') && $('dSelOnly').checked);
   const wanted = STATE.findings.filter((f) =>
     fFixable(f) && (!only || FSELECTED.has(findingRowKey(f))));
   const built = buildFixedCopy(wanted);
@@ -2655,14 +2733,19 @@ function renderDiffTab() {
     name: g.name + '  (new file)', before: '', after: g.text,
     add: g.text.split('\n').length, del: 0 })));
 
-  /* Held for the export so the file somebody attaches to a ticket is the same computation
-     they were just looking at, rather than a second one that could differ. */
-  DIFF_BUILT = { built: built, changed: changed, onlySelected: !!only };
+  return { built: built, changed: changed, onlySelected: only, wanted: wanted.length };
+}
+
+function renderDiffTab() {
+  const model = buildDiffModel();
+  const only = model.onlySelected;
+  const built = model.built;
+  const changed = model.changed;
 
   const tb = $('dtable').querySelector('tbody');
   setCount('dCount', changed.length
     ? changed.length + ' file(s) would change, ' + built.applied.length + ' fix(es)'
-    : (wanted.length ? 'no file would change' : 'nothing selected'), false);
+    : (model.wanted ? 'no file would change' : 'nothing selected'), false);
 
   if (!changed.length) {
     $('dFiles').innerHTML = '';
@@ -3269,6 +3352,24 @@ function fullDiffText() {
    clone, so undo keeps restoring the loaded files byte for byte. Annotating on commit
    would mean undo had to know how to peel an annotation back off, and undo being exactly
    reversible is asserted by the suite. */
+/* A file nobody fixed is written back exactly as it was loaded.
+ *
+ * Both full export paths used to send every loaded file through dumpDocs(), which
+ * re-serialises the YAML. For a file with a finding that is the price of editing it. For a
+ * file with no findings at all it is pure destruction: comments go, including the ownership
+ * header and the change reference somebody put at the top of it, and quoting is normalised
+ * so "info" becomes info. The tool had no reason to touch that file and it rewrote it
+ * anyway. Reported from use, and verified against a ConfigMap carrying a CR number.
+ *
+ * The raw text is kept on the file object at load, so handing it straight back is both the
+ * correct output and the cheaper one. */
+function exportText(file, run) {
+  const fixed = (STATE.findings || []).some((f) =>
+    f.applied && f.file === file.name && f.fixKind !== 'generate');
+  if (!fixed && typeof file.text === 'string') return file.text;
+  return dumpDocs(annotatedDocs(file, run));
+}
+
 function annotatedDocs(file, run) {
   const hits = STATE.findings
     .filter((f) => f.applied && f.file === file.name && f.fixKind !== 'generate')
@@ -3301,7 +3402,7 @@ function newRun() {
 $('btnDownloadAll').addEventListener('click', async () => {
   const zip = new JSZip();
   const run = newRun();
-  for (const f of STATE.files) zip.file(f.name, dumpDocs(annotatedDocs(f, run)));
+  for (const f of STATE.files) zip.file(f.name, exportText(f, run));
   zip.file('CHANGE_LOG.md', changeLog(run));
   if (optOutCount()) zip.file('exceptions.json', JSON.stringify(optOutBundle(), null, 2));
   download('acs_remediated_' + stamp() + '.zip', await zip.generateAsync({ type: 'blob' }));
@@ -3309,7 +3410,7 @@ $('btnDownloadAll').addEventListener('click', async () => {
 });
 $('btnDownloadOne').addEventListener('click', () => {
   const run = newRun();
-  const all = STATE.files.map((f) => '# ' + f.name + '\n' + dumpDocs(annotatedDocs(f, run))).join('---\n');
+  const all = STATE.files.map((f) => '# ' + f.name + '\n' + exportText(f, run)).join('---\n');
   download('acs_remediated_' + stamp() + '.yaml', all, 'text/yaml');
   flash('Single YAML downloaded.');
 });
@@ -3516,15 +3617,16 @@ function openBulkForm(policy, namespace, shown, pols, nss) {
 
 if ($('btnDiffHtml')) {
   $('btnDiffHtml').addEventListener('click', () => {
-    if (!DIFF_BUILT || !DIFF_BUILT.changed.length) {
+    /* Built here and now, not read from whatever the tab last rendered. */
+    const model = buildDiffModel();
+    if (!model.changed.length) {
       flash('There is no diff to export. Nothing would change with the current selection.',
         FLASH_REFUSAL_MS);
       return;
     }
     download('acs_diff_' + stamp() + '_' + currentMode() + '.html',
-      buildDiffHtml(DIFF_BUILT.built, DIFF_BUILT.changed, DIFF_BUILT),
-      'text/html');
-    flash(DIFF_BUILT.changed.length + ' file(s) written to one HTML page. It opens ' +
+      buildDiffHtml(model.built, model.changed, model), 'text/html');
+    flash(model.changed.length + ' file(s) written to one HTML page. It opens ' +
       'offline and needs nothing installed.');
   });
 }
@@ -3844,6 +3946,51 @@ function buildFixedCopy(wanted) {
     target.docs = res.docs;
     applied.push(f);
   }
+  /* One Secret per object, with every key the corrected manifest actually references.
+   *
+   * Derived from the resulting YAML rather than from the findings, which is the only way to
+   * get this right. The ACS.010 fix rewrites every matching env var in a container at once,
+   * so a Deployment with two leaked credentials produces two findings but only the first one
+   * reaches applied; the second reports no change because the work was already done. Reading
+   * the findings therefore generated a Secret with one key while the manifest referenced
+   * two, and the second credential vanished into a reference to a key that did not exist.
+   * The manifest is the authority on what it needs. */
+  const mode = secretMode();
+  if (mode !== 'none') {
+    const wanted = {};
+    for (const file of files) {
+      if (file.generated) continue;
+      for (const doc of file.docs) {
+        const tpl = podSpec(doc);
+        if (!tpl) continue;
+        const ns = nsOf(doc);
+        for (const list of [tpl.containers, tpl.initContainers]) {
+          for (const c of (list || [])) {
+            for (const e of (c.env || [])) {
+              const ref = e && e.valueFrom && e.valueFrom.secretKeyRef;
+              if (!ref || !ref.name || !ref.key) continue;
+              /* Only Secrets this run is responsible for. A secretKeyRef the operator wrote
+                 themselves points at something that already exists and must not be
+                 overwritten by a stub with an empty value. */
+              if (ref.name !== secretArtifactName(String(nameOf(doc)).split('/').pop())) continue;
+              const k = ns + '|' + ref.name;
+              (wanted[k] = wanted[k] || { ns: ns, name: ref.name, obj: nameOf(doc), keys: [] });
+              if (wanted[k].keys.indexOf(ref.key) === -1) wanted[k].keys.push(ref.key);
+            }
+          }
+        }
+      }
+    }
+    const touchedNames = {};
+    for (const f of applied) if (f.policy.id === 'ACS.010') touchedNames[(f.ns || 'default') + '|' + secretArtifactName(String(f.obj).split('/').pop())] = true;
+    for (const g of Object.values(wanted)) {
+      if (!touchedNames[g.ns + '|' + g.name]) continue;
+      const art = secretArtifact({ namespace: g.ns, secretName: g.name,
+        keys: g.keys, mode: mode });
+      if (art) generated.push({ name: art.name, text: art.text, secretMode: art.mode });
+    }
+  }
+
   const touched = files.filter((f) => !f.generated &&
     JSON.stringify(f.docs) !== JSON.stringify(f.originalDocs));
 
@@ -3921,6 +4068,7 @@ if ($('btnExportFixed')) $('btnExportFixed').addEventListener('click', async () 
   const zip = new JSZip();
   zip.file('READ_THIS_FIRST.md', readme);
   if (optOutCount()) zip.file('exceptions.json', JSON.stringify(optOutBundle(), null, 2));
+  for (const r of pvcRecommendations()) zip.file('recommended/' + r.rec.name, r.rec.text);
   for (const f of touched) zip.file('corrected/' + f.name, dumpDocs(f.docs));
   for (const g of generated) zip.file('corrected/' + g.name, g.text);
   const blob = await zip.generateAsync({ type: 'blob' });
@@ -4003,6 +4151,107 @@ function namespaceSection(appliedList) {
     }
     L.push('');
   }
+  return L;
+}
+
+/* Secrets the corrected YAML points at that do not exist yet.
+ *
+ * ACS.010's fix rewrites a literal credential to a secretKeyRef and nothing creates the
+ * Secret. Apply it and the pod goes to CreateContainerConfigError with "secret not found",
+ * which is one of the two errors from the incident this whole annotation feature came out
+ * of. The reference was being created and the prerequisite was being left in a sentence
+ * nobody read.
+ *
+ * This section goes BEFORE the apply instructions, because the order is the fix: create the
+ * Secret, verify it, then apply. */
+/* The PVC recommendations, in the export, in their own clearly labelled folder. */
+function pvcSection(recs) {
+  const L = [];
+  if (!recs || !recs.length) return L;
+  L.push('');
+  L.push('## Recommended PersistentVolumeClaims, for review');
+  L.push('');
+  L.push('`recommended/` holds ' + recs.length + ' PersistentVolumeClaim(s), one per hostPath');
+  L.push('volume found. **These are not fixes and nothing has been applied.** Replacing a');
+  L.push('hostPath with a claim gives the container an empty volume: whatever is in the host');
+  L.push('directory stays on the node. For a cache that is fine. For anything stateful it is');
+  L.push('data loss wearing the costume of a security fix.');
+  L.push('');
+  if (!pvcSourceLoaded()) {
+    L.push('> The name collision check only saw claims declared in the manifests you loaded.');
+    L.push('> For a real check, drop `oc get pvc -A -o json` on the page alongside them and');
+    L.push('> export again.');
+    L.push('');
+  }
+  for (const r of recs) {
+    L.push('### ' + r.rec.claimName + '  for ' + r.finding.obj +
+      ', namespace ' + (r.finding.ns || 'default'));
+    L.push('');
+    L.push('Replaces: ' + r.finding.detail);
+    L.push('');
+    L.push('The volume in the workload would become:');
+    L.push('');
+    L.push('```yaml');
+    for (const line of String(r.rec.volumePatch).split('\n')) if (line) L.push(line);
+    L.push('```');
+    L.push('');
+    L.push('Before you apply any of it:');
+    L.push('');
+    for (const w of r.rec.warnings) L.push('* ' + w);
+    L.push('');
+  }
+  return L;
+}
+
+function secretPrereqSection(applied, generated) {
+  const L = [];
+  const pol = ACS_POLICIES.find((x) => x.id === 'ACS.010');
+  const hits = (applied || []).filter((f) => f.policy.id === 'ACS.010');
+  if (!hits.length || !pol || typeof pol.secretSteps !== 'function') return L;
+
+  L.push('');
+  L.push('## Do this BEFORE you apply anything');
+  L.push('');
+  L.push('**' + hits.length + ' credential(s) were moved out of the manifests into Secrets, and');
+  L.push('those Secrets do not exist yet.** Apply the corrected YAML first and the pods will');
+  L.push('go to `CreateContainerConfigError` with "secret not found", because the reference');
+  L.push('resolves to nothing. Create them, verify them, then apply.');
+  L.push('');
+  for (const f of hits) {
+    const env = String(f.detail).replace(/.*env "([^"]+)".*/, '$1');
+    const obj = String(f.obj || '');
+    const kind = (obj.split('/')[0] || 'deployment').toLowerCase();
+    const name = obj.split('/').pop();
+    const owner = secretArtifactName(name);
+    L.push('### ' + env + ' on ' + obj + ', namespace ' + (f.ns || 'default'));
+    L.push('');
+    L.push('```sh');
+    for (const line of pol.secretSteps(f.ns || 'default', owner,
+      secretKeyName(env), env, kind, name)) L.push(line);
+    L.push('```');
+    L.push('');
+  }
+  const arts = (generated || []).filter((g) => g.secretMode);
+  if (arts.length) {
+    L.push('### The Secret manifests in this archive');
+    L.push('');
+    for (const a of arts) {
+      L.push('* `corrected/' + a.name + '`' +
+        (a.secretMode === 'external'
+          ? ' is an ExternalSecret. It needs External Secrets Operator or a Vault operator '
+            + 'installed, and a SecretStore by the name it references. Set the remote path to '
+            + 'wherever the value actually lives in your backend before applying it.'
+          : ' is a Secret with the keys present and the values deliberately empty. Safe to '
+            + 'commit. Fill it with the oc command above rather than editing the file, so the '
+            + 'credential never lands in a file at all.'));
+    }
+    L.push('');
+    L.push('Neither carries a credential. A generated manifest with a real secret in it');
+    L.push('would be the same leak this policy exists to close, one directory further along.');
+    L.push('');
+  }
+  L.push('Nothing above was run for you. Read it, then run the parts you agree with.');
+  L.push('');
   return L;
 }
 
@@ -4127,6 +4376,8 @@ function buildExportReadme(applied, skipped, generated, touched, built) {
       L.push('');
     }
   }
+  for (const line of secretPrereqSection(applied, generated)) L.push(line);
+  for (const line of pvcSection(pvcRecommendations())) L.push(line);
   for (const line of namespaceSection(applied)) L.push(line);
   for (const line of exceptionSection(STATE.findings)) L.push(line);
   L.push('');

@@ -11,6 +11,209 @@ at least; removing or renaming one is a major.
 Every release is tagged. `git tag -l` is the list, and the tag matches the version this
 tool stamps into every report and patch header it writes.
 
+## 1.11.0 - 2026-10-11
+
+### Added
+
+- **The Secret that the ACS.010 fix points at is now generated.** The fix rewrites a literal
+  credential to a `secretKeyRef` and the Secret did not exist, so applying the corrected YAML
+  produced `CreateContainerConfigError: secret not found`. A Secrets selector on the
+  Remediate tab chooses what travels with the corrected manifests:
+
+  `Secret stub` is the default and needs nothing installed: a Secret with every key present
+  and the values deliberately empty, safe to commit, filled by the `oc create secret` command
+  the export already prints. `ExternalSecret` emits an External Secrets Operator manifest with
+  a `secretStoreRef` for a Vault backed store. `Do not generate one` for estates that manage
+  Secrets elsewhere.
+
+  Neither artifact carries a credential. A generated manifest holding a real secret would be
+  the same leak this policy exists to close, one directory further along.
+
+- **Recommended PersistentVolumeClaims for hostPath mounts.** Every hostPath volume gets a
+  claim written to `recommended/` in the export, named from the object and the volume, checked
+  against claims already declared in what you loaded. Drop `oc get pvc -A -o json` on the page
+  alongside the manifests and the collision check becomes real; without it the export says so.
+
+  ACS.012 stays manual and nothing is applied, because a PVC is not a mechanical equivalent of
+  a hostPath. The warnings travel with each claim: nothing is copied, so mounting it gives the
+  container an empty volume while the host directory stays on the node; a replica count above
+  one will not work with ReadWriteOnce; the size is a placeholder; the storage class is
+  deliberately absent so the cluster default applies. And when the workload is a DaemonSet the
+  first thing it says is that a hostPath there is usually the point, because a log shipper on
+  `/var/log` cannot be given the node filesystem by a claim.
+
+- **`scripts/acs_resources.sh`**, for the ACS.013 and ACS.014 placeholders. Thanos over
+  fourteen days where the `cluster-monitoring-view` role is available, `oc adm top` sampled
+  from cron where it is not, and it says which it used. Requests from the 50th percentile,
+  limits from the 99th times a headroom multiplier, both editable at the top of the file.
+
+  The memory limit is never left below the observed peak. A long tailed distribution puts the
+  99th percentile under the real maximum, so 99 samples at 100Mi and one at 800Mi yields a
+  150Mi limit by the obvious calculation and an OOM kill on the next spike. It clamps above
+  the peak and prints that it did. CPU is treated differently because exceeding a CPU limit
+  throttles rather than kills, so the Thanos path reports which containers are already being
+  throttled before you put a ceiling on them.
+
+  Every run states the window and the observation count, and under a day of samples it warns
+  that the memory limit is probably lower than the workload will need.
+
+### Fixed
+
+- **The new resources script passed its bearer token as a command line argument**, where
+  `ps` exposes it to anyone on the box, and treated a leading dash as a subcommand so a
+  mistyped flag reported a missing namespace instead of naming the flag. Both were caught by
+  the existing script suite the moment the file was added: the token now goes in a header file
+  at `umask 077` and trust is handled the same way as the ACS scripts, honouring `ROX_CA` and
+  refusing a CA path it cannot read.
+
+- **The generated Secret name did not match the manifest reference.** The fix stripped
+  hyphens, producing `paymentsapi-secrets`, while the artifact kept them, producing
+  `payments-api-secrets`. Both now come from one function, `secretArtifactName`, and the
+  tests pin the literal name so an unintended rename fails rather than two sides agreeing on
+  something wrong together.
+
+- **A second credential on the same container was lost.** The ACS.010 fix rewrites every
+  matching env var in a container at once, so a Deployment with two leaked credentials
+  produces two findings but only the first reaches `applied`; the second reports no change
+  because the work was already done. Deriving the Secret's keys from the findings therefore
+  generated one key while the manifest referenced two, and the second credential became a
+  reference to a key that did not exist. The keys are now read out of the corrected manifest,
+  which is the only authority on what it needs.
+
+- One Secret is generated per object rather than per credential. Three leaked env vars on one
+  Deployment produce one Secret with three keys, not three Secrets with the same name where
+  the last apply wins.
+
+### Changed
+
+- A fix that generates a companion artifact now shows that artifact in the Diff tab as a new
+  file, so a reviewer sees both halves of the change.
+
+## 1.10.0 - 2026-10-11
+
+Minor rather than patch: the `cis` field on every policy is replaced by `cisK8s` and
+`cisOcp`, which changes the shape of the findings JSON.
+
+### Fixed
+
+- **Every CIS citation named no benchmark, and the numbers were the OpenShift benchmark's
+  while the report said Kubernetes.** The two publications number the same controls
+  differently. CIS Kubernetes Benchmark v2.0.1 inserted a new 5.2.1, "Ensure that the cluster
+  has at least one active policy control mechanism in place", which shifts 5.2.2 through
+  5.2.8 down by one; the CIS Red Hat OpenShift Container Platform Benchmark v2.0.0 keeps the
+  older numbering. Nothing in the output could have revealed which one a number came from.
+
+  Both are now carried per policy and the citation line says which is which, for example
+  `CIS K8s 5.2.2 | CIS OCP 5.2.1` for privileged containers. Read out of the v2.0.1 and
+  v2.0.0 PDFs and checked control by control.
+
+- **Nine policies carried prose in the CIS field** such as "CIS General container hardening",
+  which rendered in the citation line looking like a citation. Those that have a real section
+  now carry it: ACS.010 is 5.4.1, "Prefer using secrets as files over secrets as environment
+  variables", in both benchmarks; ACS.011 and ACS.012 are Kubernetes 5.2.11, HostPath
+  volumes; ACS.019 is Kubernetes 5.2.12, HostPorts. The five with no CIS section anywhere
+  now say n/a and produce no CIS citation at all rather than prose.
+
+- **ACS.019 cited the wrong Docker control.** It was labelled "Docker CIS 5.7", which in CIS
+  Docker Benchmark v1.9.0 is "Ensure sshd is not run within containers". Privileged ports is
+  5.8. The policy is renamed and the correction is recorded.
+
+### Added
+
+- **A dated standards table**, rendered in the report above the Method section and in the
+  JSON as data. Per standard: the release the section numbers belong to, how the entry was
+  established, a checkable URL, and notes. Eight entries, including both CIS benchmarks, the
+  Docker benchmark, both DISA STIGs, and the current Kubernetes release.
+
+- **Staleness is computed from a review date rather than asserted.** Past 180 days the report
+  warns the reader to re-check the numbers before quoting them in an accreditation package,
+  and the JSON exposes `stale` for a pipeline to fail on. Supersession is tracked separately,
+  because reviewing a table does not un-supersede a benchmark.
+
+- Kubernetes 1.37.1 is recorded in the table, verified against kubernetes.io, so the distance
+  between a cited benchmark and the supported release window is visible.
+
+### Notes
+
+- No CIS rule text is reproduced anywhere in this repository. Section numbers are references;
+  the benchmark prose is not redistributable.
+- The DISA STIG fields remain control family pointers rather than V numbers. That mapping
+  still needs doing and is the obvious next piece.
+
+## 1.9.3 - 2026-10-06
+
+### Fixed, in the policy catalogue
+
+Prompted by one false positive report, every policy was audited against the secure pattern
+as well as the insecure one. Four more defects, two of them false negatives.
+
+- **ACS.010 flagged the secure pattern and its fix broke it.** The check matched the variable
+  NAME and never looked at the value, so `APP_PASSWORD_FILE=/etc/secrets/app/password` was
+  reported as a leaked credential and the auto fix replaced that path with a `secretKeyRef`.
+  The application then opens a file named after its own password. It also flagged the service
+  account token path that Kubernetes mounts itself. An absolute path, a `file://` URL and a
+  `$(VAR)` substitution are now recognised as references, while `PASSWORD_FILE=hunter2` is
+  still a finding because the value is not a path.
+
+- **ACS.007 missed `CAP_SYS_ADMIN`.** Capability names were compared without normalising the
+  `CAP_` prefix, so the prefixed form passed as clean. A false negative on a node takeover
+  capability is the worst kind this catalogue can produce.
+
+- **ACS.019 flagged every hostPort and its fix deleted them.** The policy is about privileged
+  ports, below 1024. It reported `hostPort: 8080` and then deleted it, so an ingress
+  controller or a node local agent was one automatic fix away from losing its binding. Now
+  only ports below 1024 are flagged or touched.
+
+- **ACS.009 reported a non zero `runAsUser` as possibly root.** An explicit non zero
+  `runAsUser` overrides the image USER, so the container does not run as root. True to the
+  letter and noise in practice: a team that sets `runAsUser` everywhere saw a finding on
+  every workload it owns.
+
+### Added
+
+- **`test/falsepos.cjs`.** Every policy with a check, driven against both a hardened
+  configuration and an insecure one, plus a fully hardened pod that must produce no findings
+  at all. A false positive wastes a reviewer's afternoon; a false negative leaves the thing
+  in production, so both directions are asserted.
+
+- **ACS.010 now ships the commands.** The policy stays automatic and the export gained a
+  section, placed before the apply instructions, giving the ordered steps per credential:
+  read the current value, create the Secret, verify what landed matches, apply the manifest,
+  watch the rollout, rotate. The order is the fix. Applying the corrected YAML before the
+  Secret exists is what produces `CreateContainerConfigError: secret not found`, which is one
+  of the two errors from the original incident.
+
+### Notes
+
+- Whether the kubelet accepts `capabilities.drop: ["all"]` in lowercase could not be verified
+  against a live cluster. The tool treats it as compliant, which matches how other scanners
+  compare it. Treat as unverified.
+- ACS.012 reports every `hostPath`, not only sensitive ones, and the detail names the path
+  rather than claiming it is sensitive. That is deliberate.
+- The catalogue carries no `PodSecurityPolicy` references, so it is not sitting on guidance
+  removed in Kubernetes 1.25, and it does cite Pod Security Admission.
+
+### Fixed
+
+- **The exported diff showed changes that had been opted out.** It read a `DIFF_BUILT` cache
+  written only by `renderDiffTab()`, and `render()` does not call `renderDiffTab()`. So
+  recording an exception on the Remediate tab left the export holding the build from before
+  it, and the file both showed the excepted change and listed it as a documented exception,
+  contradicting itself inside one document. The corrected YAML export was always right,
+  which is how the discrepancy was noticed. Reported from production.
+
+  The cache existed so the exported file would match what the operator had been looking at.
+  Computing it twice from the same state achieves that; caching one of the two computations
+  is precisely what made them differ. There is no cache now: `buildDiffModel()` is called
+  fresh by the tab and by the export, so neither can be stale and the two cannot disagree.
+
+  The same staleness applied to taking a namespace out of scope while not on the Diff tab.
+
+- A test now asserts the property rather than the symptom: nothing listed in the export as a
+  documented exception may appear in the reference register as an applied policy. It drives
+  the reported order, rendering the Diff tab first and recording the exception afterwards,
+  and reintroducing the cache fails it.
+
 ## 1.9.2 - 2026-09-29
 
 Every script audited after a production report that one of them "did not run". Three of the

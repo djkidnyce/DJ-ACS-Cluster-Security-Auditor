@@ -59,5 +59,91 @@ t('score bounded',before.score>=0&&after.score<=100);
 t('projection improves on current',after.score>before.score);
 t('severity counts populated',before.counts.Critical>0&&before.counts.High>0);
 t('categories scored',Object.keys(before.catScores).length>2);
+
+/* This catalogue printed "CIS 5.2.1" with no benchmark named for its entire life, and the
+   numbers turned out to be the OpenShift benchmark's while every heading said Kubernetes.
+   The two differ: Kubernetes v2.0.1 inserted a new 5.2.1 and shifted 5.2.2 onwards down one.
+   Nothing in the output could have revealed that, which is what these assertions are for. */
+console.log('\nEvery standard cited is declared, dated, and names its benchmark');
+{
+  t('there is a standards table', E.STANDARDS && Object.keys(E.STANDARDS).length >= 6);
+  const used = new Set();
+  for (const p of E.ACS_POLICIES) {
+    for (const k of ['cisK8s', 'cisOcp', 'nist', 'pss', 'stig']) {
+      if (p[k] && p[k] !== 'n/a') used.add(k === 'cisOcp' ? 'cisOcp' : k);
+    }
+  }
+  t('policies cite at least four standards, so this is a real check', used.size >= 4);
+  for (const k of used) t('  ' + k + ' is declared in the table', !!E.STANDARDS[k]);
+  for (const [k, st] of Object.entries(E.STANDARDS)) {
+    t('  ' + k + ' names a release', !!st.release && st.release.length > 1);
+    t('  ' + k + ' states its confidence', !!st.confidence);
+    t('  ' + k + ' carries a checkable URL', /^https:\/\//.test(st.url || ''));
+  }
+
+  console.log('\n  The two CIS benchmarks are not confused with each other');
+  const byId = (id) => E.ACS_POLICIES.find((p) => p.id === id);
+  /* The shift is the whole finding. Privileged containers is 5.2.2 in the Kubernetes
+     benchmark and 5.2.1 in the OpenShift one, and five more controls move the same way. */
+  const shifted = [['ACS.001','5.2.2','5.2.1'], ['ACS.005','5.2.3','5.2.2'],
+                   ['ACS.006','5.2.4','5.2.3'], ['ACS.004','5.2.5','5.2.4'],
+                   ['ACS.003','5.2.6','5.2.5'], ['ACS.009','5.2.7','5.2.6']];
+  for (const [id, k8s, ocp] of shifted) {
+    t('  ' + id + ' is ' + k8s + ' in Kubernetes and ' + ocp + ' in OpenShift',
+      byId(id).cisK8s === k8s && byId(id).cisOcp === ocp);
+  }
+  t('the citation line says which benchmark each number came from',
+    /CIS K8s 5\.2\.2/.test(E.citationsOf(byId('ACS.001')).join(' ')) &&
+    /CIS OCP 5\.2\.1/.test(E.citationsOf(byId('ACS.001')).join(' ')));
+  t('controls the OpenShift benchmark does not cover read n/a rather than guessing',
+    byId('ACS.012').cisOcp === 'n/a' && byId('ACS.019').cisOcp === 'n/a');
+  t('and those still carry their Kubernetes number',
+    byId('ACS.012').cisK8s === '5.2.11' && byId('ACS.019').cisK8s === '5.2.12');
+  t('policies with no CIS section at all say n/a in both',
+    byId('ACS.013').cisK8s === 'n/a' && byId('ACS.013').cisOcp === 'n/a');
+  t('and produce no CIS citation rather than prose that looks like one',
+    !/CIS/.test(E.citationsOf(byId('ACS.013')).join(' ')));
+
+  console.log('\n  The Docker citation names the right control');
+  /* It said Docker 5.7, which is "Ensure sshd is not run within containers". */
+  t('the policy no longer claims Docker 5.7',
+    !/5\.7/.test(byId('ACS.019').acsPolicy));
+  t('and the Docker benchmark entry records the correction',
+    /5\.8/.test(E.STANDARDS.cisDocker.note));
+
+  console.log('\n  The age is computed, and supersession is separate from staleness');
+  t('a review date is recorded', /^\d{4}-\d{2}-\d{2}$/.test(E.STANDARDS_ASOF));
+  t('age today is small, because the date is real', E.standardsAgeDays() < 400);
+  t('and it grows', E.standardsAgeDays(new Date(Date.now() + 90 * 86400000)) >= 90);
+  t('nothing is stale the day it is reviewed',
+    E.standardsAreStale(new Date(E.STANDARDS_ASOF + 'T00:00:00Z')) === false);
+  t('everything is stale long enough after it',
+    E.standardsAreStale(new Date(Date.now() + (E.STANDARDS_STALE_DAYS + 30) * 86400000)) === true);
+  t('nothing is superseded today, every entry having been read from the publication',
+    E.supersededStandards().length === 0);
+  /* Driven with a synthetic table so the mechanism is tested without inventing a fake
+     superseded standard in the shipped data. */
+  t('but the mechanism works when a release is superseded',
+    E.supersededStandards({ x: { label: 'X', release: 'v1', supersededBy: 'v2' } }).length === 1);
+
+  console.log('\n  The report and the JSON both carry it');
+  const d = { apiVersion:'apps/v1', kind:'Deployment', metadata:{ name:'a', namespace:'prod' },
+    spec:{ template:{ metadata:{}, spec:{ containers:[{ name:'c', image:'q/a:1',
+      securityContext:{ privileged:true } }] } } } };
+  const files = [{ name:'a.yaml', docs:[d], originalDocs:[d], errors:[] }];
+  const found = E.scanFiles(files);
+  const html = E.buildHtmlReport({ files: files, findings: found });
+  t('the report has a standards section', /Standards referenced/.test(html));
+  t('it comes before the method', html.indexOf('Standards referenced') < html.indexOf('<h2>Method</h2>'));
+  t('it names both CIS releases', /v2\.0\.1/.test(html) && /v2\.0\.0/.test(html));
+  t('it names the Kubernetes release, so the gap is visible', /1\.37\.1/.test(html));
+  t('it says when it was last reviewed', html.indexOf(E.STANDARDS_ASOF) !== -1);
+  const js = E.buildFindingsJson({ files: files, findings: found });
+  t('the JSON records the review date', js.standards.lastReviewed === E.STANDARDS_ASOF);
+  t('and the age as a number', typeof js.standards.ageDays === 'number');
+  t('and each finding carries both CIS numbers',
+    js.findings[0].standards.cisK8s !== undefined && js.findings[0].standards.cisOcp !== undefined);
+}
+
 console.log('\n'+P+' passed, '+F+' failed');
 process.exit(F?1:0);

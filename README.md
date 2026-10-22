@@ -17,6 +17,7 @@ Audit Kubernetes and OpenShift manifests against Red Hat Advanced Cluster Securi
 | `scripts/acs_pull_via_oc.sh` | Same, but reaches Central through your existing `oc` session |
 | `scripts/acs_pull_over_ssh.ps1` | PowerShell, when only a bastion can reach the cluster |
 | `scripts/acs_rollout.sh` | After the fixes land: revision history, what changed each workload, and the command to put it back. Prints commands, never runs them |
+| `scripts/acs_resources.sh` | CPU and memory requests and limits from measured use. Thanos over fourteen days, or `oc adm top` on a cron. Never applies anything |
 | `test/run_tests.js` | The whole suite, against the real engine, the page, the scripts and the CLI |
 
 Open the HTML file directly. There is nothing to install and no server to run.
@@ -434,6 +435,31 @@ screenshotting findings one at a time.
 The step through view shows the same side by side layout: left is what you have, right is
 what you would get. All three surfaces share one pairing implementation, so they cannot
 disagree about what a change looks like.
+
+## Resource limits, measured rather than guessed
+
+ACS.013 and ACS.014 insert a value flagged PLACEHOLDER because the tool cannot know the right
+number. `scripts/acs_resources.sh` produces it.
+
+```sh
+./scripts/acs_resources.sh recommend -n prod     # Thanos first, samples as the fallback
+./scripts/acs_resources.sh sample -n prod        # one sample, for cron
+./scripts/acs_resources.sh report -n prod        # read the samples back
+```
+
+Requests from the 50th percentile, limits from the 99th times a headroom multiplier.
+
+The memory limit is never left below the observed peak. Memory is not compressible, so
+exceeding the limit is an OOM kill rather than a slowdown, and a long tail can put the 99th
+percentile well under the real maximum: 99 samples at 100Mi and one at 800Mi gives a 150Mi
+limit by the naive calculation, and the next spike kills the container. The script clamps
+above the peak and says that it did.
+
+CPU throttles rather than kills, so the Thanos path also reports which containers are already
+being throttled before you put a ceiling on them.
+
+Every run states the window and the observation count, because a recommendation from forty
+minutes of samples and one from a fortnight look identical once they are YAML.
 
 ## After the fixes land, and something is crashlooping
 

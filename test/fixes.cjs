@@ -83,5 +83,63 @@ const rescanned=E.scanFiles([{name:'app.yaml',text:'',docs,errors:[]}]);
 t('no auto fixable findings remain',!rescanned.some(f=>f.fixKind==='auto'));
 t('manual findings persist',rescanned.some(f=>f.fixKind==='manual'));
 console.log('        remaining: '+rescanned.map(f=>f.policy.id).join(', '));
+
+/* ACS.010 matched on the variable name alone, so APP_PASSWORD_FILE=/etc/secrets/app was
+   reported as a leaked credential and the auto fix replaced the path with a secretKeyRef.
+   The application then opened a file named after its own password. It also flagged the
+   service account token path that Kubernetes mounts itself. */
+console.log('\nACS.010 reads the value, not just the variable name');
+{
+  const mk = (env) => ({ apiVersion: 'apps/v1', kind: 'Deployment',
+    metadata: { name: 'api', namespace: 'prod' },
+    spec: { template: { metadata: {}, spec: { containers: [{ name: 'c', image: 'q/a:1', env: [env] }] } } } });
+  const flagged = (env) => {
+    const d = mk(env);
+    return E.scanFiles([{ name: 'a.yaml', docs: [d], originalDocs: [d], errors: [] }])
+      .some((x) => x.policy.id === 'ACS.010');
+  };
+
+  const references = [
+    [{ name: 'APP_PASSWORD_FILE', value: '/etc/secrets/app/password' }, 'an absolute path, which is the secure pattern'],
+    [{ name: 'TOKEN_FILE', value: '/var/run/secrets/kubernetes.io/serviceaccount/token' }, 'the service account token path Kubernetes mounts itself'],
+    [{ name: 'PASSWORD_PATH', value: '/var/run/pw' }, 'a path under another name'],
+    [{ name: 'DB_PASSWORD', value: 'file:///run/secrets/db' }, 'a file URL'],
+    [{ name: 'DB_PASSWORD', value: '$(DB_SECRET)' }, 'a substitution something else resolves'],
+    [{ name: 'DB_PASSWORD', value: '${DB_SECRET}' }, 'the brace form of it'],
+  ];
+  for (const [env, label] of references) {
+    t('  not a finding: ' + label, !flagged(env));
+  }
+
+  const literals = [
+    [{ name: 'DB_PASSWORD', value: 's3cretP@ss' }, 'a literal password'],
+    [{ name: 'API_KEY', value: 'AKIAIOSFODNN7EXAMPLE' }, 'a literal key'],
+    [{ name: 'PASSWORD_FILE', value: 'hunter2' }, 'named _FILE but holding the secret itself'],
+    [{ name: 'DB_PASSWORD', value: 'relative/path/not/absolute' }, 'a relative path, which is not the file pattern'],
+  ];
+  for (const [env, label] of literals) {
+    t('  still a finding: ' + label, flagged(env));
+  }
+
+  /* The fix has to agree with the check. If it edits something the check never reported,
+     the diff shows a change nobody can trace to a finding. */
+  console.log('\n  The fix agrees with the check');
+  const pathDoc = mk({ name: 'APP_PASSWORD_FILE', value: '/etc/secrets/app/password' });
+  const before = JSON.stringify(pathDoc);
+  const pol = E.ACS_POLICIES.find((p) => p.id === 'ACS.010');
+  pol.fix(pathDoc);
+  t('  the fix leaves a path env var alone', JSON.stringify(pathDoc) === before);
+  const litDoc = mk({ name: 'DB_PASSWORD', value: 's3cretP@ss' });
+  pol.fix(litDoc);
+  const env0 = litDoc.spec.template.spec.containers[0].env[0];
+  t('  and still rewrites a literal one', !!env0.valueFrom && env0.value === undefined);
+
+  console.log('\n  The guard is exported so both surfaces share one definition');
+  t('  envValueIsReference is exported', typeof E.envValueIsReference === 'function');
+  t('  it says an absolute path is a reference', E.envValueIsReference('/etc/x') === true);
+  t('  and a literal is not', E.envValueIsReference('s3cret') === false);
+  t('  empty is not a reference either', E.envValueIsReference('') === false);
+}
+
 console.log('\n'+P+' passed, '+F+' failed');
 process.exit(F?1:0);

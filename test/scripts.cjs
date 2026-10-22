@@ -1162,6 +1162,140 @@ console.log('\nacs_rollout.sh, driven against a fake cluster');
  * the five did it. These assertions apply to every .sh in scripts/ rather than to the ones
  * somebody remembered to cover, so a script added later is covered the day it lands.
  */
+
+/* ---------------------------------------------------- acs_resources.sh
+ *
+ * Driven under execution against a fake oc, because the arithmetic is the whole product. A
+ * memory limit below the observed peak is an OOM kill on the next spike, which is the exact
+ * outcome the script exists to prevent, and no amount of reading the source proves it does
+ * not do that.
+ */
+console.log('\nacs_resources.sh, driven against a fake cluster');
+{
+  const { execFileSync } = require('child_process');
+  const os = require('os');
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'res-'));
+  const bin = path.join(work, 'bin');
+  fs.mkdirSync(bin);
+  const LOG = path.join(work, 'calls.log');
+  /* Answers oc adm top with a value that moves per call, refuses the Thanos route so the
+     fallback path is what runs, and records everything so the no writes claim is checkable. */
+  fs.writeFileSync(path.join(bin, 'oc'), [
+    '#!/bin/sh',
+    'echo "$*" >> "$OC_LOG"',
+    'case "$*" in',
+    '  "adm top pods --containers --no-headers -n prod")',
+    '    N=$(cat "$OC_STATE" 2>/dev/null || echo 0); N=$((N+1)); echo $N > "$OC_STATE"',
+    '    echo "payments-api-1 api $((40+N*7))m $((100+N*11))Mi"',
+    '    echo "payments-api-1 sidecar 3m 18Mi"',
+    '    exit 0 ;;',
+    '  "get route thanos-querier -n openshift-monitoring -o jsonpath={.spec.host}") exit 1 ;;',
+    'esac',
+    'case "$1" in whoami) echo dj; exit 0 ;; esac',
+    'exit 1',
+  ].join('\n'), { mode: 0o755 });
+
+  const { spawnSync } = require('child_process');
+  const SCRIPT = path.join(DIR, 'acs_resources.sh');
+  const run = (args, shell) => {
+    const r = spawnSync(shell || 'bash', [SCRIPT].concat(args), {
+      encoding: 'utf8', timeout: 60000, cwd: work,
+      env: { PATH: bin + ':/usr/bin:/bin', HOME: work, OC_LOG: LOG,
+             OC_STATE: path.join(work, 'n') },
+    });
+    return { out: (r.stdout || '') + (r.stderr || ''),
+             stdout: r.stdout || '', code: r.status === null ? -1 : r.status };
+  };
+
+  const samples = path.join(work, 's.tsv');
+  console.log('\n  Sampling, for a cluster with no monitoring access');
+  for (let i = 0; i < 8; i++) run(['sample', '-n', 'prod', '-o', samples]);
+  t('a sample file was written', fs.existsSync(samples));
+  const lines = fs.readFileSync(samples, 'utf8').trim().split('\n');
+  t('it has a header and one row per container per sample', lines.length === 1 + 16);
+  t('the header names the columns', /epoch\tnamespace\tpod\tcontainer\tcores\tbytes/.test(lines[0]));
+  t('units are parsed to cores and bytes, not left as 47m and 116Mi',
+    /\t0\.0\d+\t\d{6,}$/.test(lines[1]));
+
+  console.log('\n  The recommendation comes out as Kubernetes quantities');
+  const rep = run(['report', '-n', 'prod', '-o', samples]);
+  t('it runs', rep.code === 0);
+  t('both containers are reported', /container api/.test(rep.out) && /container sidecar/.test(rep.out));
+  t('requests and limits are both emitted', /requests:/.test(rep.out) && /limits:/.test(rep.out));
+  t('cpu is in millicores', /cpu: \d+m/.test(rep.out));
+  t('memory requests are in Mi, not a byte count nobody can check by eye',
+    /requests:[\s\S]*?memory: \d+Mi/.test(rep.out));
+  t('memory limits are too', /limits:[\s\S]*?memory: \d+Mi/.test(rep.out));
+  t('and no memory value is emitted as raw bytes',
+    !/memory: \d{5,}\s*$/m.test(rep.out));
+  t('it states the window and the observation count',
+    /Window: \d+ hour\(s\)/.test(rep.out) && /observation\(s\)/.test(rep.out));
+  t('it names the percentiles and the headroom it used',
+    /requests at p50, limits at p99 times headroom/.test(rep.out));
+  t('and says nothing was applied', /Nothing here was applied/.test(rep.out));
+
+  console.log('\n  Thin evidence is called out rather than dressed up as a number');
+  /* A recommendation from forty minutes of samples and one from a fortnight are identical
+     once they are YAML. */
+  t('under a day of samples produces a warning',
+    /less than a day of samples/.test(rep.out));
+  t('and it says the memory limit is probably too low as a result',
+    /lower than the workload will eventually need/.test(rep.out));
+
+  console.log('\n  A memory limit is never left below the observed peak');
+  /* The guard that matters. 99 samples at 100Mi and one at 800Mi: p99 reports 100Mi, so a
+     naive p99 times 1.5 limit is 150Mi and the next spike is an OOM kill. */
+  const tail = path.join(work, 'tail.tsv');
+  const rows = ['epoch\tnamespace\tpod\tcontainer\tcores\tbytes'];
+  for (let i = 1; i <= 99; i++) rows.push((1791700000 + i * 900) + '\tprod\tp1\tapi\t0.05\t104857600');
+  rows.push((1791700000 + 100 * 900) + '\tprod\tp1\tapi\t0.05\t838860800');
+  fs.writeFileSync(tail, rows.join('\n') + '\n');
+  const tailRep = run(['report', '-n', 'prod', '-o', tail]);
+  t('it reports the observed peak alongside the percentile',
+    /observed memory peak 800Mi, p99 100Mi/.test(tailRep.out));
+  const lim = (tailRep.out.match(/limits:[\s\S]*?memory: (\d+)Mi/) || [])[1];
+  t('the limit clears the peak rather than clipping it', Number(lim) >= 800);
+  t('and it says why it was raised',
+    /memory limit raised to clear the observed peak/.test(tailRep.out));
+  /* The naive answer, for contrast. If this ever passes, the clamp is gone. */
+  t('the naive p99 times headroom would have been an OOM kill', Number(lim) !== 150);
+
+  console.log('\n  Thanos first, samples as the fallback, and it says which');
+  const auto = run(['recommend', '-n', 'prod', '-o', samples]);
+  t('with no Thanos route it falls back', /falling back to collected samples/.test(auto.out));
+  t('and still produces a recommendation', /memory: \d+Mi/.test(auto.out));
+  const forced = run(['recommend', '-n', 'prod', '--source', 'thanos']);
+  t('asking for Thanos explicitly fails rather than silently sampling', forced.code !== 0);
+  t('and names the role that would be needed',
+    /cluster-monitoring-view/.test(forced.out));
+
+  console.log('\n  It refuses rather than guessing');
+  t('a missing namespace is refused', run(['report']).code !== 0);
+  t('and says so', /namespace is required/.test(run(['report']).out));
+  t('an unknown source is refused', run(['recommend', '-n', 'prod', '--source', 'magic']).code !== 0);
+  t('an unknown subcommand is refused', run(['frobnicate', '-n', 'prod']).code !== 0);
+  t('a missing sample file is refused rather than reported as zero use',
+    run(['report', '-n', 'prod', '-o', path.join(work, 'nope.tsv')]).code !== 0);
+
+  console.log('\n  And it never writes to the cluster');
+  const log = fs.existsSync(LOG) ? fs.readFileSync(LOG, 'utf8') : '';
+  t('the fake oc was called, so the absence below means something',
+    log.split('\n').filter(Boolean).length > 5);
+  t('no write verb was issued',
+    !/^(apply|patch|delete|create|replace|scale|edit|annotate|label|set)\b/m.test(log));
+  t('every call was a read',
+    log.split('\n').filter(Boolean).every((l) => /^(adm top|get |whoami)/.test(l)));
+
+  const dash = fs.existsSync('/bin/dash') ? '/bin/dash' : null;
+  if (dash) {
+    console.log('\n  Under dash as well');
+    const d = run(['report', '-n', 'prod', '-o', tail], dash);
+    t('the same recommendation comes out', /observed memory peak 800Mi/.test(d.out));
+    t('and the clamp still applies', /raised to clear the observed peak/.test(d.out));
+  }
+  fs.rmSync(work, { recursive: true, force: true });
+}
+
 console.log('\nEvery script answers for itself, under bash and under dash');
 {
   const { execFileSync } = require('child_process');

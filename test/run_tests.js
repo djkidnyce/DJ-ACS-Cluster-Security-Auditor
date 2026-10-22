@@ -18,6 +18,7 @@ const HERE = __dirname;
 const SUITES = [
   ['smoke.cjs', 'policy catalogue, scanning and scoring'],
   ['fixes.cjs', 'applying fixes, diffs and merge patches'],
+  ['falsepos.cjs', 'every policy against the secure pattern and the insecure one'],
   ['import.cjs', 'ACS violation import and correlation'],
   ['flow.cjs', 'the remediation page flow, preview, commit, undo'],
   ['live.cjs', 'live cluster connectors, token handling and sanitising'],

@@ -27,7 +27,7 @@
    test/version.cjs asserts it agrees with the newest CHANGELOG heading and with the git
    tag when one is checked out. A tool whose banner disagrees with its tag cannot be used
    as evidence, because you cannot tell which build produced a given report. */
-const ACS_VERSION = '1.9.2';
+const ACS_VERSION = '1.11.0';
 const ACS_TOOL = "DJ's ACS Auditor v" + ACS_VERSION;
 
 /* ACS severity scale and the weight each carries in the posture score. A Critical costs
@@ -45,7 +45,34 @@ function sevRank(s) { return (ACS_SEVERITY[s] || ACS_SEVERITY.LOW_SEVERITY).rank
 
 const WORKLOADS = ['Pod', 'Deployment', 'StatefulSet', 'DaemonSet', 'ReplicaSet', 'Job', 'CronJob', 'DeploymentConfig'];
 const DANGEROUS_CAPS = ['SYS_ADMIN', 'NET_ADMIN', 'SYS_PTRACE', 'SYS_MODULE', 'DAC_READ_SEARCH', 'SYS_RAWIO', 'BPF', 'PERFMON', 'SYS_BOOT'];
+
+/* Capability names are compared without the CAP_ prefix. Kubernetes expects SYS_ADMIN, but
+   CAP_SYS_ADMIN is written in the wild often enough that matching only the bare form meant
+   CAP_SYS_ADMIN sailed through as clean. A false negative on a node takeover capability is
+   the worst kind this catalogue can produce. */
+const capName = (c) => String(c == null ? '' : c).toUpperCase().replace(/^CAP_/, '');
 const SECRET_ENV_RE = /(PASS(WORD)?|PASSWD|PWD|SECRET|TOKEN|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|CREDENTIAL|CONN(ECTION)?[_-]?STR)/i;
+
+/* A secret shaped NAME does not mean a secret shaped VALUE.
+ *
+ * This policy matched on the variable name alone, so APP_PASSWORD_FILE=/etc/secrets/app
+ * was reported as a leaked credential. That is the opposite of the truth: pointing an env
+ * var at a file is the secure pattern, and the auto fix then replaced the path with a
+ * secretKeyRef, so the application opened a file named after its own password. It also
+ * flagged the service account token path that Kubernetes mounts itself.
+ *
+ * So the value has to be ruled out as a reference before the name is trusted. Deliberately
+ * narrow: an absolute path, a file URL, or a substitution that something else resolves.
+ * Everything else is still treated as a literal credential, because a false negative here
+ * leaves a password in git. */
+function envValueIsReference(value) {
+  const v = String(value == null ? '' : value).trim();
+  if (!v) return false;
+  if (v.charAt(0) === '/') return true;                    // /etc/secrets/app/password
+  if (/^file:\/\//i.test(v)) return true;                  // file:///run/secrets/db
+  if (v.charAt(0) === '$') return true;                    // $(SECRET) or ${SECRET}
+  return false;
+}
 const SOCKET_PATHS = ['/var/run/docker.sock', '/run/docker.sock', '/var/run/crio/crio.sock',
   '/run/containerd/containerd.sock', '/var/run/containerd/containerd.sock'];
 
@@ -102,7 +129,7 @@ const ACS_POLICIES = [
   lifecycleStages: ['DEPLOY'],
   severity: 'HIGH_SEVERITY',
   score: 8.8, vector: 'CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:C/C:H/I:H/A:H',
-  cis: '5.2.1', nist: 'AC-6, CM-7', pss: 'Baseline',
+  cisK8s: '5.2.2', cisOcp: '5.2.1', nist: 'AC-6, CM-7', pss: 'Baseline',
   stig: 'Privileged container controls (verify against your STIG release)',
   description: 'Alert on deployments with containers running in privileged mode',
   rationale: 'Containers running as privileged represent greater post exploitation risk by allowing an attacker to access all host devices, run a daemon inside the container, and escape isolation entirely.',
@@ -130,7 +157,7 @@ const ACS_POLICIES = [
   lifecycleStages: ['DEPLOY'],
   severity: 'MEDIUM_SEVERITY',
   score: 5.3, vector: 'CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:L/A:L',
-  cis: 'General container hardening', nist: 'CM-7, SI-7', pss: 'Recommended practice',
+  cisK8s: '5.6.3', cisOcp: '5.7.3', nist: 'CM-7, SI-7', pss: 'Recommended practice',
   stig: 'Container immutability controls (verify)',
   description: 'Alert on deployments with containers using a read-write root filesystem',
   rationale: 'A writable root filesystem lets an attacker who gains code execution persist tooling, tamper with binaries, and drift the running container away from the image that was scanned.',
@@ -157,7 +184,7 @@ const ACS_POLICIES = [
   lifecycleStages: ['DEPLOY'],
   severity: 'HIGH_SEVERITY',
   score: 7.8, vector: 'CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H',
-  cis: '5.2.5', nist: 'AC-6(10), CM-7', pss: 'Restricted',
+  cisK8s: '5.2.6', cisOcp: '5.2.5', nist: 'AC-6(10), CM-7', pss: 'Restricted',
   stig: 'Privilege escalation controls (verify)',
   description: 'Alert on containers that allow privilege escalation',
   rationale: 'Without allowPrivilegeEscalation set to false a process can gain more privileges than its parent through setuid binaries or file capabilities, defeating the container user restriction from below.',
@@ -184,7 +211,7 @@ const ACS_POLICIES = [
   lifecycleStages: ['DEPLOY'],
   severity: 'HIGH_SEVERITY',
   score: 8.1, vector: 'CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H',
-  cis: '5.2.4', nist: 'SC-7, AC-6', pss: 'Baseline',
+  cisK8s: '5.2.5', cisOcp: '5.2.4', nist: 'SC-7, AC-6', pss: 'Baseline',
   stig: 'Host namespace controls (verify)',
   description: 'Alert on deployments that use the host network namespace',
   rationale: 'hostNetwork places the pod directly on the node network stack. It can sniff node traffic, reach services bound only to localhost such as the kubelet API, and it bypasses NetworkPolicy completely.',
@@ -208,7 +235,7 @@ const ACS_POLICIES = [
   lifecycleStages: ['DEPLOY'],
   severity: 'HIGH_SEVERITY',
   score: 7.8, vector: 'CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H',
-  cis: '5.2.2', nist: 'AC-6, SC-39', pss: 'Baseline',
+  cisK8s: '5.2.3', cisOcp: '5.2.2', nist: 'AC-6, SC-39', pss: 'Baseline',
   stig: 'Host namespace controls (verify)',
   description: 'Alert on deployments that share the host process namespace',
   rationale: 'hostPID exposes every process on the node. Even without ptrace it leaks credentials from process arguments and environment, and it makes the node process table a shared resource.',
@@ -232,7 +259,7 @@ const ACS_POLICIES = [
   lifecycleStages: ['DEPLOY'],
   severity: 'MEDIUM_SEVERITY',
   score: 6.5, vector: 'CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:L/A:N',
-  cis: '5.2.3', nist: 'AC-6, SC-39', pss: 'Baseline',
+  cisK8s: '5.2.4', cisOcp: '5.2.3', nist: 'AC-6, SC-39', pss: 'Baseline',
   stig: 'Host namespace controls (verify)',
   description: 'Alert on deployments that share the host IPC namespace',
   rationale: 'hostIPC lets the container read and manipulate host shared memory segments and message queues belonging to other processes on the node.',
@@ -256,7 +283,7 @@ const ACS_POLICIES = [
   lifecycleStages: ['DEPLOY'],
   severity: 'HIGH_SEVERITY',
   score: 8.8, vector: 'CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:C/C:H/I:H/A:H',
-  cis: '5.2.8', nist: 'AC-6, CM-7', pss: 'Baseline',
+  cisK8s: '5.2.9', cisOcp: '5.2.8', nist: 'AC-6, CM-7', pss: 'Baseline',
   stig: 'Capability controls (verify)',
   description: 'Alert on deployments that add high risk Linux capabilities',
   rationale: 'Capabilities such as SYS_ADMIN, SYS_PTRACE and NET_ADMIN are documented container escape primitives. SYS_ADMIN alone is close to full root on the node.',
@@ -265,7 +292,7 @@ const ACS_POLICIES = [
   check(doc) {
     return eachC(doc, (c, l) => {
       const add = (c.securityContext && c.securityContext.capabilities && c.securityContext.capabilities.add) || [];
-      const bad = add.filter((a) => DANGEROUS_CAPS.includes(String(a).toUpperCase()));
+      const bad = add.filter((a) => DANGEROUS_CAPS.includes(capName(a)));
       return bad.length ? { obj: nameOf(doc), detail: 'Container "' + c.name + '" (' + l + ') adds ' + bad.join(', '),
         path: l + '.' + c.name + '.securityContext.capabilities.add' } : null;
     });
@@ -274,9 +301,9 @@ const ACS_POLICIES = [
     return eachC(doc, (c) => {
       const cap = c.securityContext && c.securityContext.capabilities;
       if (cap && Array.isArray(cap.add)) {
-        const bad = cap.add.filter((a) => DANGEROUS_CAPS.includes(String(a).toUpperCase()));
+        const bad = cap.add.filter((a) => DANGEROUS_CAPS.includes(capName(a)));
         if (bad.length) {
-          cap.add = cap.add.filter((a) => !DANGEROUS_CAPS.includes(String(a).toUpperCase()));
+          cap.add = cap.add.filter((a) => !DANGEROUS_CAPS.includes(capName(a)));
           if (!cap.add.length) delete cap.add;
           return 'container "' + c.name + '": removed capabilities ' + bad.join(', ');
         }
@@ -292,7 +319,7 @@ const ACS_POLICIES = [
   lifecycleStages: ['DEPLOY'],
   severity: 'MEDIUM_SEVERITY',
   score: 6.3, vector: 'CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:L/I:L/A:H',
-  cis: '5.2.9', nist: 'AC-6, CM-7', pss: 'Restricted',
+  cisK8s: '5.2.9', cisOcp: '5.2.9', nist: 'AC-6, CM-7', pss: 'Restricted',
   stig: 'Capability controls (verify)',
   description: 'Alert on containers that do not drop all capabilities',
   rationale: 'The container runtime grants a default set of roughly fourteen capabilities including NET_RAW and SETUID that almost no application uses. Every retained capability is unnecessary attack surface.',
@@ -301,7 +328,7 @@ const ACS_POLICIES = [
   check(doc) {
     return eachC(doc, (c, l) => {
       const cap = c.securityContext && c.securityContext.capabilities;
-      const dropsAll = cap && Array.isArray(cap.drop) && cap.drop.some((d) => String(d).toUpperCase() === 'ALL');
+      const dropsAll = cap && Array.isArray(cap.drop) && cap.drop.some((d) => capName(d) === 'ALL');
       return !dropsAll ? { obj: nameOf(doc), detail: 'Container "' + c.name + '" (' + l + ') does not drop ALL capabilities',
         path: l + '.' + c.name + '.securityContext.capabilities.drop' } : null;
     });
@@ -310,9 +337,9 @@ const ACS_POLICIES = [
     return eachC(doc, (c) => {
       const s = sc(c);
       const cap = s.capabilities || {};
-      const dropsAll = Array.isArray(cap.drop) && cap.drop.some((d) => String(d).toUpperCase() === 'ALL');
+      const dropsAll = Array.isArray(cap.drop) && cap.drop.some((d) => capName(d) === 'ALL');
       if (!dropsAll) {
-        const keep = (cap.add || []).filter((a) => String(a).toUpperCase() === 'NET_BIND_SERVICE');
+        const keep = (cap.add || []).filter((a) => capName(a) === 'NET_BIND_SERVICE');
         s.capabilities = { drop: ['ALL'] };
         if (keep.length) s.capabilities.add = keep;
         return 'container "' + c.name + '": capabilities drop ALL' + (keep.length ? ', kept ' + keep.join(', ') : '');
@@ -328,7 +355,7 @@ const ACS_POLICIES = [
   lifecycleStages: ['DEPLOY'],
   severity: 'HIGH_SEVERITY',
   score: 7.8, vector: 'CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H',
-  cis: '5.2.6', nist: 'AC-6, CM-6', pss: 'Restricted',
+  cisK8s: '5.2.7', cisOcp: '5.2.6', nist: 'AC-6, CM-6', pss: 'Restricted',
   stig: 'Non root execution controls (verify)',
   description: 'Alert on containers that may run as the root user',
   rationale: 'Root inside a container is root against the kernel. Combined with any breakout primitive or a writable host mount it becomes node compromise, and UID 0 defeats file ownership defences on mounted volumes.',
@@ -348,7 +375,15 @@ const ACS_POLICIES = [
       else if (podUid0 && csc.runAsUser === undefined)
         out.push({ obj: nameOf(doc), detail: 'Pod securityContext sets runAsUser 0, inherited by "' + c.name + '"',
           path: 'spec.securityContext.runAsUser' });
-      else if (!podNonRoot && csc.runAsNonRoot !== true)
+      /* An explicit non zero runAsUser overrides the image USER, so the container does not
+         run as root and the policy is satisfied. Reporting it as having "no runAsNonRoot
+         guarantee" was true to the letter and noise in practice: a team that sets
+         runAsUser everywhere saw a finding on every workload it owns. */
+      else if (!podNonRoot && csc.runAsNonRoot !== true &&
+               !(typeof csc.runAsUser === 'number' && csc.runAsUser > 0) &&
+               !(csc.runAsUser === undefined && ps.securityContext &&
+                 typeof ps.securityContext.runAsUser === 'number' &&
+                 ps.securityContext.runAsUser > 0))
         out.push({ obj: nameOf(doc), detail: 'Container "' + c.name + '" (' + list + ') has no runAsNonRoot guarantee',
           path: 'spec.securityContext.runAsNonRoot' });
     }
@@ -376,15 +411,45 @@ const ACS_POLICIES = [
   lifecycleStages: ['DEPLOY'],
   severity: 'CRITICAL_SEVERITY',
   score: 9.1, vector: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N',
-  cis: 'General secrets hygiene', nist: 'IA-5(7), SC-28, SA-11', pss: 'n/a',
+  cisK8s: '5.4.1', cisOcp: '5.4.1', nist: 'IA-5(7), SC-28, SA-11', pss: 'n/a',
   stig: 'Secrets in environment variables (verify)',
   description: 'Alert on deployments with environment variables that contain secrets',
   rationale: 'A literal credential in a manifest lives in git history, CI logs, kubectl describe output and every backup, permanently. Rotation requires a code change and a redeploy.',
-  remediation: 'Move the value into a Secret managed by an external store and reference it with valueFrom.secretKeyRef. Rotate the exposed credential immediately, it has to be treated as compromised.',
+  remediation: 'Move the value into a Secret and reference it with valueFrom.secretKeyRef. '
+    + 'Create the Secret BEFORE applying the manifest change, or the pod goes to '
+    + 'CreateContainerConfigError because the reference resolves to nothing. Rotate the '
+    + 'exposed credential immediately, it has to be treated as compromised.',
+  /* Printed against the finding and into the export. The tool does not run any of it. */
+  secretSteps(ns, secret, key, envName, objKind, objName) {
+    return [
+      '# 1. See what is there now, to confirm the value before you move it.',
+      'oc get ' + objKind + '/' + objName + ' -n ' + ns +
+        " -o jsonpath='{.spec.template.spec.containers[*].env[?(@.name==\"" + envName + "\")].value}{\"\\n\"}'",
+      '',
+      '# 2. Create the Secret that the corrected manifest will point at.',
+      '#    Read the value from a file or a prompt rather than the shell history.',
+      'read -rs -p "value for ' + envName + ': " V; echo',
+      'oc create secret generic ' + secret + ' -n ' + ns +
+        ' --from-literal=' + key + '="$V"',
+      'unset V',
+      '',
+      '# 3. Verify what landed matches what was in the manifest, before changing anything.',
+      'oc get secret ' + secret + ' -n ' + ns +
+        " -o jsonpath='{.data." + key + "}' | base64 -d; echo",
+      '',
+      '# 4. Only now apply the corrected manifest.',
+      'oc apply -f <the corrected file>',
+      'oc rollout status ' + objKind + '/' + objName + ' -n ' + ns + ' --timeout=120s',
+      '',
+      '# 5. Rotate the credential. It was in a manifest, so treat it as compromised',
+      '#    even if that manifest never left your laptop.',
+    ];
+  },
   fixKind: 'auto',
   check(doc) {
     return eachC(doc, (c, l) => Array.isArray(c.env)
-      ? c.env.filter((e) => e && typeof e.value === 'string' && e.value.length > 0 && SECRET_ENV_RE.test(e.name || ''))
+      ? c.env.filter((e) => e && typeof e.value === 'string' && e.value.length > 0 &&
+          SECRET_ENV_RE.test(e.name || '') && !envValueIsReference(e.value))
         .map((e) => ({ obj: nameOf(doc),
           detail: 'Container "' + c.name + '" (' + l + ') env "' + e.name + '" holds a literal credential',
           path: l + '.' + c.name + '.env.' + e.name }))
@@ -394,12 +459,16 @@ const ACS_POLICIES = [
     return eachC(doc, (c) => {
       if (!Array.isArray(c.env)) return null;
       const ch = [];
-      const owner = ((doc.metadata && doc.metadata.name) || 'app').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const owner = secretArtifactName((doc.metadata && doc.metadata.name) || 'app');
       for (const e of c.env)
-        if (e && typeof e.value === 'string' && e.value.length > 0 && SECRET_ENV_RE.test(e.name || '')) {
+        if (e && typeof e.value === 'string' && e.value.length > 0 &&
+            SECRET_ENV_RE.test(e.name || '') && !envValueIsReference(e.value)) {
           delete e.value;
-          e.valueFrom = { secretKeyRef: { name: owner + '-secrets', key: String(e.name).toLowerCase() } };
-          ch.push('container "' + c.name + '": env ' + e.name + ' now reads from Secret "' + owner + '-secrets" (create it out of band and ROTATE the exposed value)');
+          e.valueFrom = { secretKeyRef: { name: owner, key: secretKeyName(e.name) } };
+          ch.push('container "' + c.name + '": env ' + e.name + ' now reads from Secret "' +
+            owner + '" key "' + secretKeyName(e.name) +
+            '". CREATE THAT SECRET FIRST, then apply this file, or the pod will not start. ' +
+            'Then ROTATE the exposed value.');
         }
       return ch.length ? ch : null;
     });
@@ -412,7 +481,7 @@ const ACS_POLICIES = [
   lifecycleStages: ['DEPLOY'],
   severity: 'CRITICAL_SEVERITY',
   score: 9.3, vector: 'CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:C/C:H/I:H/A:H',
-  cis: 'General', nist: 'AC-6, SC-4', pss: 'Baseline',
+  cisK8s: '5.2.11', cisOcp: 'n/a', nist: 'AC-6, SC-4', pss: 'Baseline',
   stig: 'Host filesystem controls (verify)',
   description: 'Alert on deployments that mount the container runtime socket',
   rationale: 'The runtime socket is the control plane for every container on the node. Mounting it grants the ability to start a privileged container, mount the host filesystem and take the node. It is the most direct escape path in Kubernetes.',
@@ -433,7 +502,7 @@ const ACS_POLICIES = [
   lifecycleStages: ['DEPLOY'],
   severity: 'HIGH_SEVERITY',
   score: 8.8, vector: 'CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:C/C:H/I:H/A:H',
-  cis: 'PSS volume restrictions', nist: 'AC-6, SC-4', pss: 'Baseline',
+  cisK8s: '5.2.11', cisOcp: 'n/a', nist: 'AC-6, SC-4', pss: 'Baseline',
   stig: 'Host filesystem controls (verify)',
   description: 'Alert on deployments that mount a host path',
   rationale: 'A hostPath mount pierces container isolation. Mounting / or /etc is direct node compromise, and even a narrow path enables persistence and credential theft on the host.',
@@ -458,7 +527,7 @@ const ACS_POLICIES = [
   lifecycleStages: ['DEPLOY'],
   severity: 'MEDIUM_SEVERITY',
   score: 5.5, vector: 'CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H',
-  cis: 'General', nist: 'SC-5, SC-6', pss: 'n/a',
+  cisK8s: 'n/a', cisOcp: 'n/a', nist: 'SC-5, SC-6', pss: 'n/a',
   stig: 'Resource limit controls (verify)',
   description: 'Alert on containers without CPU requests or limits',
   rationale: 'Without limits a single pod can exhaust node CPU and evict its neighbours. It is a denial of service primitive available to any compromised or simply buggy workload.',
@@ -493,7 +562,7 @@ const ACS_POLICIES = [
   lifecycleStages: ['DEPLOY'],
   severity: 'MEDIUM_SEVERITY',
   score: 5.5, vector: 'CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H',
-  cis: 'General', nist: 'SC-5, SC-6', pss: 'n/a',
+  cisK8s: 'n/a', cisOcp: 'n/a', nist: 'SC-5, SC-6', pss: 'n/a',
   stig: 'Resource limit controls (verify)',
   description: 'Alert on containers without memory requests or limits',
   rationale: 'A container with no memory limit can consume the node until the kernel OOM killer intervenes, taking unrelated workloads with it. Memory is the resource that actually takes nodes down.',
@@ -528,7 +597,7 @@ const ACS_POLICIES = [
   lifecycleStages: ['BUILD', 'DEPLOY'],
   severity: 'MEDIUM_SEVERITY',
   score: 5.9, vector: 'CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N',
-  cis: 'General supply chain hygiene', nist: 'CM-2, SI-7, SR-11', pss: 'n/a',
+  cisK8s: 'n/a', cisOcp: 'n/a', nist: 'CM-2, SI-7, SR-11', pss: 'n/a',
   stig: 'Container image controls (verify)',
   description: 'Alert on deployments using an image with the latest tag or no tag',
   rationale: 'A latest or absent tag means the image content can change underneath you. What passed testing is not provably what runs in production, and a registry compromise silently redeploys attacker code on the next pull.',
@@ -553,7 +622,7 @@ const ACS_POLICIES = [
   lifecycleStages: ['DEPLOY'],
   severity: 'MEDIUM_SEVERITY',
   score: 6.5, vector: 'CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N',
-  cis: '5.1.6', nist: 'AC-6, IA-5', pss: 'n/a',
+  cisK8s: '5.1.6', cisOcp: '5.1.6', nist: 'AC-6, IA-5', pss: 'n/a',
   stig: 'Service account token controls (verify)',
   description: 'Alert on pods that automatically mount a service account token',
   rationale: 'Every pod receives a Kubernetes API credential at a well known path unless told otherwise. An attacker with code execution harvests it immediately and talks to the API server with whatever RBAC that account holds.',
@@ -581,7 +650,7 @@ const ACS_POLICIES = [
   lifecycleStages: ['DEPLOY'],
   severity: 'MEDIUM_SEVERITY',
   score: 5.3, vector: 'CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:L/I:L/A:N',
-  cis: '5.1.5', nist: 'AC-6, IA-2', pss: 'n/a',
+  cisK8s: '5.1.5', cisOcp: '5.1.5', nist: 'AC-6, IA-2', pss: 'n/a',
   stig: 'Service account controls (verify)',
   description: 'Alert on deployments that use the default service account',
   rationale: 'The default service account is shared by every pod in the namespace that does not opt out. Any RBAC granted to it, now or in future, silently flows to all of them.',
@@ -603,7 +672,7 @@ const ACS_POLICIES = [
   lifecycleStages: ['DEPLOY'],
   severity: 'MEDIUM_SEVERITY',
   score: 6.5, vector: 'CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N',
-  cis: '5.3.2', nist: 'SC-7, AC-4, CA-9', pss: 'n/a',
+  cisK8s: '5.3.2', cisOcp: '5.3.2', nist: 'SC-7, AC-4, CA-9', pss: 'n/a',
   stig: 'Network segmentation controls (verify)',
   description: 'Alert on deployments in a namespace with no ingress NetworkPolicy',
   rationale: 'Kubernetes networking is allow all by default. Without a NetworkPolicy every pod can reach every other pod, so one compromised workload can scan and attack the whole cluster east to west.',
@@ -612,13 +681,13 @@ const ACS_POLICIES = [
   fileset: true },
 
 { id: 'ACS.019',
-  acsPolicy: 'Docker CIS 5.7: do not map privileged ports within containers',
+  acsPolicy: 'Privileged ports mapped within containers',
   acsCriteria: 'Exposed Port',
   categories: ['Docker CIS', 'Network'],
   lifecycleStages: ['DEPLOY'],
   severity: 'LOW_SEVERITY',
   score: 3.7, vector: 'CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N',
-  cis: '5.7', nist: 'CM-7, SC-7', pss: 'n/a',
+  cisK8s: '5.2.12', cisOcp: 'n/a', nist: 'CM-7, SC-7', pss: 'n/a',
   stig: 'Non privileged host ports (verify)',
   description: 'Alert on containers binding a host port',
   rationale: 'hostPort binds the container directly to the node IP, bypassing Service level control and complicating scheduling. A port below 1024 sits in the privileged range.',
@@ -626,17 +695,26 @@ const ACS_POLICIES = [
   fixKind: 'auto',
   check(doc) {
     return eachC(doc, (c, l) => Array.isArray(c.ports)
-      ? c.ports.filter((p) => p && p.hostPort).map((p) => ({
-        obj: nameOf(doc),
-        detail: 'Container "' + c.name + '" (' + l + ') binds hostPort ' + p.hostPort + (p.hostPort < 1024 ? ' (privileged range)' : ''),
-        path: l + '.' + c.name + '.ports.hostPort',
-      })) : null);
+      /* Below 1024 only. The policy is about privileged ports, it flagged every hostPort,
+         and the fix deletes whatever it flags, so an ingress controller or a node local
+         agent on hostPort 8080 was an automatic fix away from losing its binding. */
+      ? c.ports.filter((p) => p && typeof p.hostPort === 'number' && p.hostPort > 0 && p.hostPort < 1024)
+        .map((p) => ({
+          obj: nameOf(doc),
+          detail: 'Container "' + c.name + '" (' + l + ') binds privileged hostPort ' + p.hostPort,
+          path: l + '.' + c.name + '.ports.hostPort',
+        })) : null);
   },
   fix(doc) {
     return eachC(doc, (c) => {
       if (!Array.isArray(c.ports)) return null;
       const ch = [];
-      for (const p of c.ports) if (p && p.hostPort) { ch.push('container "' + c.name + '": removed hostPort ' + p.hostPort); delete p.hostPort; }
+      for (const p of c.ports) {
+        if (p && typeof p.hostPort === 'number' && p.hostPort > 0 && p.hostPort < 1024) {
+          ch.push('container "' + c.name + '": removed privileged hostPort ' + p.hostPort);
+          delete p.hostPort;
+        }
+      }
       return ch.length ? ch : null;
     });
   } },
@@ -648,7 +726,7 @@ const ACS_POLICIES = [
   lifecycleStages: ['DEPLOY'],
   severity: 'HIGH_SEVERITY',
   score: 7.5, vector: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N',
-  cis: 'General', nist: 'AC-6, CM-7', pss: 'n/a',
+  cisK8s: 'n/a', cisOcp: 'n/a', nist: 'AC-6, CM-7', pss: 'n/a',
   stig: 'Dashboard controls (verify)',
   description: 'Alert on the Kubernetes dashboard being deployed',
   rationale: 'The dashboard is not inherently insecure, but it is repeatedly paired with an over permissive service account, and that combination has been the entry point in several widely reported cluster compromises.',
@@ -799,7 +877,7 @@ const POLICY_ALIASES = {
   'ACS.017': ['Deployment uses the default service account', 'Default service account in use'],
   'ACS.018': ['Deployments should have at least one ingress Network Policy',
               'Missing Ingress Network Policy', 'No ingress network policy'],
-  'ACS.019': ['Privileged Ports Mapped', 'Docker CIS 5.7', 'Host port mapped'],
+  'ACS.019': ['Privileged Ports Mapped', 'Docker CIS 5.8', 'Host port mapped'],
   'ACS.020': ['Kubernetes Dashboard Deployed', 'Kubernetes dashboard'],
 };
 
@@ -2160,10 +2238,26 @@ function buildFindingsJson(st) {
           ? { reason: f.optOut.reason, recorded: f.optOut.when || null,
               tool: f.optOut.tool || null }
           : null,
-        standards: { cis: f.policy.cis, nist: f.policy.nist, pss: f.policy.pss, stig: f.policy.stig },
+        standards: { cisK8s: f.policy.cisK8s, cisOcp: f.policy.cisOcp,
+                     nist: f.policy.nist, pss: f.policy.pss, stig: f.policy.stig },
       };
     }),
     acsOnly: st.onlyInAcs || [],
+    standards: {
+      lastReviewed: STANDARDS_ASOF,
+      ageDays: standardsAgeDays(),
+      stale: standardsAreStale(),
+      staleAfterDays: STANDARDS_STALE_DAYS,
+      superseded: supersededStandards().map(function (x) {
+        return { standard: x.key, cited: x.release, supersededBy: x.supersededBy };
+      }),
+      referenced: Object.keys(STANDARDS).reduce(function (acc, k) {
+        acc[k] = { label: STANDARDS[k].label, release: STANDARDS[k].release,
+                   confidence: STANDARDS[k].confidence, url: STANDARDS[k].url,
+                   supersededBy: STANDARDS[k].supersededBy || null };
+        return acc;
+      }, {}),
+    },
   };
   if (st.vulns) {
     out.vulnerabilities = {
@@ -2427,6 +2521,28 @@ function buildHtmlReport(st) {
     findingsHtml +
     riskHtml +
     vulnHtml +
+    '<h2>Standards referenced, and when they were last checked</h2>' +
+    '<p class="muted">A section number without a release is a number that was true once. ' +
+    'The Kubernetes and OpenShift CIS benchmarks number the same controls differently, so ' +
+    'each citation names which benchmark it came from.</p>' +
+    '<table><thead><tr><th>Standard</th><th>Release cited</th><th>Confidence</th>' +
+    '<th>Notes</th></tr></thead><tbody>' +
+    Object.keys(STANDARDS).map(function (k) {
+      var st = STANDARDS[k];
+      return '<tr><td><a href="' + E(st.url) + '">' + E(st.label) + '</a></td><td>' +
+        E(st.release) + '</td><td>' + E(st.confidence) + '</td><td>' + E(st.note) + '</td></tr>';
+    }).join('') + '</tbody></table>' +
+    '<p class="muted">Last reviewed ' + E(STANDARDS_ASOF) + ', ' + standardsAgeDays() +
+    ' days ago.</p>' +
+    (standardsAreStale()
+      ? '<div class="note"><strong>These citations have not been re-checked in over ' +
+        STANDARDS_STALE_DAYS + ' days.</strong> Verify the section numbers against the ' +
+        'current publications before quoting them in an accreditation package.</div>'
+      : '') +
+    supersededStandards().map(function (st) {
+      return '<div class="note"><strong>' + E(st.label) + ' ' + E(st.release) +
+        ' has been superseded by ' + E(st.supersededBy) + '.</strong> ' + E(st.note) + '</div>';
+    }).join('') +
     '<h2>Method</h2><p>Each policy mirrors a Red Hat ACS default security policy: same name, same ACS severity, same categories and lifecycle stage, with the ACS remediation guidance carried through. Severity drives a weighted posture score in which every applicable policy and object pair is one check, weighted Critical 18, High 10, Medium 5 and Low 2. Posture is passed weight over total applicable weight, and the denominator is derived only from what was scanned rather than what was found, so the current and projected numbers are directly comparable. CVSS style scores are for ranking configuration weakness classes, not instance specific vulnerability scoring. STIG references are mapping aids and must be verified against the current DISA release before they are cited in an accreditation package.</p>' +
     '<h2>Limits</h2><p>This is static analysis of manifest text. It does not query a cluster and does not replace ACS, admission control such as Pod Security Admission or Kyverno, or runtime enforcement. ACS policies that evaluate build metadata or runtime process behaviour cannot be assessed from YAML. Image CVEs appear here only when an ACS vulnerability export was supplied; this tool performs no scanning of its own, so an absence of CVEs below means none were imported, not that none exist.</p>' +
     '<h2>References</h2><ul>' + ACS_REFERENCES.map(function (r) { return '<li>' + anchor(r[1], r[0]) + '</li>'; }).join('') + '</ul>' +
@@ -3076,6 +3192,156 @@ function findingKey(f) { return f.file + '|' + f.obj + '|' + f.policy.id; }
  */
 const ACS_ANNOTATION = 'acs-auditor/applied';
 
+/* The Secret the ACS.010 fix points at, as an artifact rather than a sentence.
+ *
+ * The fix rewrites a literal credential to a secretKeyRef and the Secret does not exist.
+ * Apply that and the pod goes to CreateContainerConfigError, which is one of the two errors
+ * from the incident this tool was being used to clean up after. The prerequisite was living
+ * in prose nobody read, so now it is a file that travels with the corrected YAML.
+ *
+ * Two shapes. stub is the default and needs nothing installed: a Secret with the key present
+ * and the value deliberately absent, so the file is safe to commit and useless to an
+ * attacker. external emits an ExternalSecret for a Vault backed store, for when there is an
+ * operator to resolve it.
+ *
+ * Neither carries the credential. A generated manifest with a real secret in it would be the
+ * same leak this policy exists to close, one directory further along. */
+/* A PersistentVolumeClaim for a hostPath mount, as a recommendation and nothing more.
+ *
+ * This is NOT a mechanical equivalence and the tool must never apply it. Swapping a hostPath
+ * for a PVC gives the container an empty volume: whatever was in the host directory is still
+ * on the node and the workload comes up without it. For a cache that is fine. For a database
+ * that is data loss presented as a security fix, which is the single worst thing this tool
+ * could do, so the artifact is written to a recommended/ folder, labelled, and the warnings
+ * travel with it.
+ *
+ * Three things it refuses to guess. Size, because only the workload owner knows. Storage
+ * class, because the cluster default may not be the right one and naming a wrong class fails
+ * the claim at bind time. Access mode beyond the single node default, because that depends
+ * on replica count and the CSI driver's capabilities.
+ *
+ * And one case where the answer is simply no: a DaemonSet reading node state. A log shipper
+ * on /var/log or a node exporter on /proc is doing the thing hostPath exists for, and a PVC
+ * is the wrong answer however politely it is suggested. */
+function dns1123(x) {
+  return String(x || '').toLowerCase().replace(/[^a-z0-9-]/g, '-')
+    .replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 63) || 'volume';
+}
+
+function pvcName(objName, volumeName, taken) {
+  const base = dns1123(String(objName).split('/').pop() + '-' + volumeName);
+  const used = taken || [];
+  let name = base.length > 59 ? base.slice(0, 59) : base;
+  if (used.indexOf(name) === -1) return name;
+  /* A numeric suffix rather than a hash, so a second run over the same input proposes the
+     same name and the operator is not asked to review a rename that is not a change. */
+  for (let i = 2; i < 100; i++) {
+    const cand = name.slice(0, 59) + '-' + i;
+    if (used.indexOf(cand) === -1) return cand;
+  }
+  return name + '-x';
+}
+
+function pvcRecommendation(opts) {
+  const o = opts || {};
+  const kind = String(o.objKind || '');
+  const vol = String(o.volumeName || 'data');
+  const hostPath = String(o.hostPath || '');
+  const name = pvcName(o.objName, vol, o.taken);
+  const warnings = [];
+
+  if (/^DaemonSet$/i.test(kind)) {
+    warnings.push('This is a DaemonSet. A hostPath on a DaemonSet is usually the point: a log '
+      + 'shipper reading /var/log or an exporter reading /proc needs the node filesystem, and '
+      + 'a PersistentVolumeClaim cannot give it that. Check what this workload is for before '
+      + 'treating the PVC below as the answer.');
+  }
+  if (o.replicas && o.replicas > 1) {
+    warnings.push('The workload declares ' + o.replicas + ' replicas. ReadWriteOnce binds to '
+      + 'one node, so pods scheduled elsewhere will not start. Either the storage class '
+      + 'supports ReadWriteMany and the access mode needs changing, or this workload is not a '
+      + 'candidate for shared storage at all.');
+  }
+  warnings.push('Nothing is copied. Mounting this claim gives the container an empty volume, '
+    + 'and whatever is in ' + (hostPath || 'the host path') + ' stays on the node. Migrate the '
+    + 'data first if the workload needs it, and do not apply this to anything stateful until '
+    + 'you have.');
+  warnings.push('storage is a placeholder. Set it to what the workload actually needs.');
+  warnings.push('storageClassName is deliberately absent, so the cluster default applies. '
+    + 'Name one explicitly if the default is not the right tier.');
+
+  return {
+    name: 'pvc-' + name + '.yaml',
+    claimName: name,
+    warnings: warnings,
+    text: jsyaml.dump({
+      apiVersion: 'v1',
+      kind: 'PersistentVolumeClaim',
+      metadata: { name: name, namespace: o.namespace || 'default',
+        annotations: { 'acs-auditor/recommended-for':
+          (o.objName || '') + ' volume ' + vol + ' replacing hostPath ' + (hostPath || '?') } },
+      spec: { accessModes: ['ReadWriteOnce'],
+        resources: { requests: { storage: '1Gi' } } },
+    }, { noRefs: true }),
+    volumePatch: jsyaml.dump({ name: vol, persistentVolumeClaim: { claimName: name } },
+      { noRefs: true }),
+  };
+}
+
+function secretArtifactName(objName) {
+  return String(objName || 'app').toLowerCase().replace(/[^a-z0-9-]/g, '') + '-secrets';
+}
+
+function secretKeyName(envName) {
+  return String(envName || 'value').toLowerCase().replace(/[^a-z0-9._-]/g, '_');
+}
+
+function secretArtifact(opts) {
+  const o = opts || {};
+  const ns = o.namespace || 'default';
+  const name = o.secretName || secretArtifactName(o.objName);
+  const keys = (o.keys || []).map(secretKeyName);
+  if (!keys.length) return null;
+
+  if (o.mode === 'external') {
+    const store = o.storeName || 'vault-backend';
+    const path = o.remotePath || (ns + '/' + name);
+    return {
+      name: 'externalsecret-' + name + '.yaml',
+      mode: 'external',
+      text: jsyaml.dump({
+        apiVersion: 'external-secrets.io/v1beta1',
+        kind: 'ExternalSecret',
+        metadata: { name: name, namespace: ns },
+        spec: {
+          refreshInterval: '1h',
+          secretStoreRef: { name: store, kind: 'SecretStore' },
+          target: { name: name, creationPolicy: 'Owner' },
+          data: keys.map(function (k) {
+            return { secretKey: k, remoteRef: { key: path, property: k } };
+          }),
+        },
+      }, { noRefs: true }),
+    };
+  }
+
+  /* stringData with empty values rather than data with base64. An empty string is
+     unambiguous, and a reviewer can see at a glance that no credential is in the file. */
+  const sd = {};
+  for (const k of keys) sd[k] = '';
+  return {
+    name: 'secret-' + name + '.yaml',
+    mode: 'stub',
+    text: jsyaml.dump({
+      apiVersion: 'v1',
+      kind: 'Secret',
+      metadata: { name: name, namespace: ns },
+      type: 'Opaque',
+      stringData: sd,
+    }, { noRefs: true }),
+  };
+}
+
 /* An exception with no reason is indistinguishable from a finding nobody looked at.
    Six months on, the only difference between "we accepted this" and "we missed this"
    is whether somebody wrote down why, so the reason is required rather than optional
@@ -3351,9 +3617,119 @@ const ACS_REFERENCES = [
   ['CVSS v3.1 specification', 'https://www.first.org/cvss/v3.1/specification-document'],
 ];
 
+/* Which release of each standard the section numbers here refer to, and when somebody last
+ * checked. A section number without a release is a number that was true once.
+ *
+ * This catalogue spent its whole life printing "CIS 5.2.1" with no benchmark named, and the
+ * numbers turned out to be the OpenShift benchmark's while every heading said Kubernetes.
+ * The two genuinely differ: Kubernetes v2.0.1 inserted a new 5.2.1 and shifted 5.2.2
+ * onwards down one. Nobody could have noticed from the output.
+ *
+ * confidence records how the entry was established. verified means somebody read the
+ * publication. The review date drives a staleness warning so this cannot sit here going
+ * quietly out of date the way the bare numbers did. */
+const STANDARDS_ASOF = '2026-10-11';
+const STANDARDS_STALE_DAYS = 180;
+
+const STANDARDS = {
+  cisK8s: {
+    label: 'CIS Kubernetes Benchmark',
+    release: 'v2.0.1',
+    note: 'Every cisK8s number here was read out of the v2.0.1 PDF and checked against the '
+        + 'control it describes. v2.0.1 inserted a new 5.2.1, "Ensure that the cluster has at '
+        + 'least one active policy control mechanism in place", which shifts 5.2.2 through '
+        + '5.2.8 down by one relative to the OpenShift benchmark.',
+    confidence: 'verified against the v2.0.1 publication',
+    url: 'https://www.cisecurity.org/benchmark/kubernetes',
+  },
+  cisOcp: {
+    label: 'CIS Red Hat OpenShift Container Platform Benchmark',
+    release: 'v2.0.0',
+    note: 'Retains the older 5.2.x numbering, so its numbers differ from the Kubernetes '
+        + 'benchmark for the same controls. It has no section for HostPath volumes or '
+        + 'HostPorts, which is why those read n/a, and it adds 5.2.10 on privileged Security '
+        + 'Context Constraints with no Kubernetes equivalent. On an OpenShift cluster this is '
+        + 'the benchmark to quote.',
+    confidence: 'verified against the v2.0.0 publication',
+    url: 'https://www.cisecurity.org/benchmark/red_hat_openshift_container_platform/',
+  },
+  cisDocker: {
+    label: 'CIS Docker Benchmark',
+    release: 'v1.9.0',
+    note: 'Referenced only by the privileged ports policy. This catalogue previously cited '
+        + 'Docker 5.7 for it, which is "Ensure sshd is not run within containers". The '
+        + 'privileged ports control is 5.8.',
+    confidence: 'verified against the v1.9.0 publication',
+    url: 'https://www.cisecurity.org/benchmark/docker',
+  },
+  nist: {
+    label: 'NIST SP 800-53',
+    release: 'Rev 5',
+    note: 'Control identifiers are stable across Rev 5 updates.',
+    confidence: 'verified',
+    url: 'https://csrc.nist.gov/pubs/sp/800/53/r5/upd1/final',
+  },
+  pss: {
+    label: 'Kubernetes Pod Security Standards',
+    release: 'Baseline and Restricted profiles',
+    note: 'Profile names are stable. Pod Security Admission replaced PodSecurityPolicy, '
+        + 'removed in Kubernetes 1.25, and this catalogue cites profiles rather than PSP.',
+    confidence: 'verified',
+    url: 'https://kubernetes.io/docs/concepts/security/pod-security-standards/',
+  },
+  stig: {
+    label: 'DISA Kubernetes STIG',
+    release: 'V2R6, released 2026-02-12',
+    note: 'The stig field on each policy is a control family pointer, not a rule id. No V '
+        + 'number has been mapped to a policy yet, which is why every one still says verify.',
+    confidence: 'release verified against DISA, mapping not done',
+    url: 'https://public.cyber.mil/stigs/downloads/',
+  },
+  stigOcp: {
+    label: 'DISA Red Hat OpenShift Container Platform 4.x STIG',
+    release: 'V2R6, released 2026-05-13',
+    note: 'The more relevant of the two benchmarks for OpenShift clusters. Not mapped yet.',
+    confidence: 'release verified against DISA, mapping not done',
+    url: 'https://public.cyber.mil/stigs/downloads/',
+  },
+  kubernetes: {
+    label: 'Kubernetes',
+    release: '1.37.1, released 2026-09-15',
+    note: 'Supported series are 1.34 through 1.37. Recorded because a benchmark that '
+        + 'predates the supported window is a different kind of stale than one a few months '
+        + 'old. Verified against kubernetes.io/releases/1.37.',
+    confidence: 'verified',
+    url: 'https://kubernetes.io/releases/1.37/',
+  },
+};
+
+/* Computed, not asserted, so the claim cannot rot while still looking confident. */
+function standardsAgeDays(now) {
+  const asOf = new Date(STANDARDS_ASOF + 'T00:00:00Z').getTime();
+  return Math.max(0, Math.floor(((now || new Date()).getTime() - asOf) / 86400000));
+}
+
+function standardsAreStale(now) {
+  return standardsAgeDays(now) > STANDARDS_STALE_DAYS;
+}
+
+/* Entries whose publisher has issued a later major version. Separate from staleness on
+   purpose: reviewing the table does not un-supersede a benchmark, so this warning does not
+   clear when somebody touches the review date. Nothing is superseded today, every entry
+   having been read from the current publication, but the mechanism stays because the next
+   CIS release will supersede one of them. */
+function supersededStandards(table) {
+  const t = table || STANDARDS;
+  return Object.keys(t)
+    .filter(function (k) { return !!t[k].supersededBy; })
+    .map(function (k) { return Object.assign({ key: k }, t[k]); });
+}
+
 function citationsOf(p) {
   const bits = [];
-  if (p.cis && p.cis !== 'n/a') bits.push('CIS ' + p.cis);
+  /* Both benchmarks, because the numbers differ between them for the same control. */
+  if (p.cisK8s && p.cisK8s !== 'n/a') bits.push('CIS K8s ' + p.cisK8s);
+  if (p.cisOcp && p.cisOcp !== 'n/a') bits.push('CIS OCP ' + p.cisOcp);
   if (p.nist && p.nist !== 'n/a') bits.push('NIST 800-53: ' + p.nist);
   if (p.pss && p.pss !== 'n/a') bits.push('PSS: ' + p.pss);
   if (p.stig && p.stig !== 'n/a') bits.push('STIG: ' + p.stig);
@@ -3435,7 +3811,12 @@ if (typeof module !== 'undefined' && module.exports) {
     escHtml, anchor, buildHtmlReport, buildFindingsJson,
     diffLines, compactDiff, citationsOf, ACS_REFERENCES,
     annotateFixed, templateMeta, ACS_ANNOTATION, runRef, refStamp,
+  secretArtifact, secretArtifactName, secretKeyName,
+  pvcRecommendation, pvcName, dns1123,
   optOutReasonProblem, OPT_OUT_MIN_REASON, optOutRuleProblem, ruleState,
+  STANDARDS, STANDARDS_ASOF, STANDARDS_STALE_DAYS, standardsAgeDays, standardsAreStale,
+  supersededStandards,
+  envValueIsReference, capName,
   globMatch, globToRe, expiryProblem,
   };
 }

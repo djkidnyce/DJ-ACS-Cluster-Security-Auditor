@@ -10,6 +10,43 @@ Pull every finding ACS has, low to critical, from outside the browser.
 | `acs_pull_all.sh` | macOS, Linux, WSL, Git Bash. Written for bash 3.2 so it runs on a stock macOS shell. |
 | `acs_pull_all.ps1` | Windows PowerShell and PowerShell 7. |
 | `acs_rollout.sh` | After the fixes are applied: what is running, which revision it is on, what changed it, and the command to put it back. Prints commands, never runs them. |
+| `acs_resources.sh` | What to set CPU and memory requests and limits to, measured rather than guessed. Thanos over fourteen days, or `oc adm top` sampled on a cron. Prints YAML, never applies it. |
+
+## acs_resources.sh
+
+ACS.013 and ACS.014 report a missing request or limit, and the automatic fix inserts a value
+flagged PLACEHOLDER because the tool cannot know the right number. This produces the number.
+
+```sh
+./acs_resources.sh recommend -n prod            # Thanos first, samples as the fallback
+./acs_resources.sh sample -n prod               # one sample, for cron
+./acs_resources.sh report -n prod               # read the samples back
+```
+
+With monitoring access it queries Thanos for fourteen days of history and answers
+immediately. Without it, sample on a schedule and read it back when the window has filled:
+
+```sh
+*/15 * * * * cd /path && ./acs_resources.sh sample -n prod >/dev/null 2>&1
+```
+
+Requests come from the 50th percentile, limits from the 99th times a headroom multiplier,
+both editable at the top of the file.
+
+**The memory limit is never left below the observed peak.** Memory is not compressible, so
+exceeding the limit is an OOM kill rather than a slowdown, and a long tailed distribution can
+put the 99th percentile well under the real maximum. With 99 samples at 100Mi and one at
+800Mi, a naive p99 times headroom gives a 150Mi limit and the next spike kills the container.
+The script clamps the limit above the peak and says it did.
+
+CPU is different and the output treats it differently. Exceeding a CPU limit throttles rather
+than kills, which is survivable but is its own outage for anything latency sensitive, so the
+Thanos path also reads `container_cpu_cfs_throttled_periods_total` and tells you which
+containers are **already being throttled** before you put a ceiling on them.
+
+It also states the window and the observation count on every run, because a recommendation
+from forty minutes of samples and one from a fortnight look identical once they are YAML. Under
+a day of data it says so in the output.
 
 ## acs_rollout.sh
 

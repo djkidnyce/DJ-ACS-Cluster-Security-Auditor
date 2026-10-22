@@ -897,6 +897,69 @@ async function diffExport() {
   t('the excepted fix is not in the diff',
     !/privileged: false/.test(out2.text));
 
+
+  console.log('\n  An exception recorded after the Diff tab rendered still leaves the diff');
+  /* Reported from production. The export read a cache that only renderDiffTab() wrote, and
+     render() never calls it, so recording an exception on the Remediate tab left the export
+     holding the previous build. The file showed the excepted change and listed it as a
+     documented exception, contradicting itself, while the corrected YAML got it right.
+     The order below is the reported order and it is the whole point of the test. */
+  const h4 = await open('dj_acs_auditor.html',
+    'window.__load=(i)=>loadItems(i);window.__tab=(t)=>showTab(t);window.__S=()=>STATE;' +
+    'window.__rules=()=>OPTRULES;window.__sel=()=>FSELECTED;window.__key=(f)=>findingRowKey(f);' +
+    'window.__sync=()=>syncFindingSelection();' +
+    'window.__apply=()=>{applyOptOuts(STATE.scanned);STATE.findings=scopedFindings(STATE.scanned);};');
+  const d4 = ['apiVersion: apps/v1', 'kind: Deployment',
+    'metadata: { name: api, namespace: prod }', 'spec:', '  template:', '    spec:',
+    '      hostNetwork: true', '      containers:', '      - name: c', '        image: q/a:1',
+    '        securityContext: { privileged: true }'].join('\n');
+  h4.w.__load([{ name: 'm/a.yaml', text: d4 }]);
+  h4.$('fixMode').value = 'manual';
+  h4.$('fixMode').dispatchEvent(new h4.w.Event('change'));
+
+  h4.w.__tab('diff');                       // render first, which is what used to be cached
+  h4.w.__tab('remediate');                  // then record the exception elsewhere
+  h4.w.__rules().push({ policy: 'ACS.001',
+    reason: 'Accepted under waiver PSC-114 for this platform.' });
+  h4.w.__apply();
+
+  const out4 = [];
+  h4.w.download = (n, c) => out4.push({ name: n, text: c });
+  h4.$('btnDiffHtml').click();              // export without revisiting the Diff tab
+  const html4 = out4.find((g) => /\.html$/.test(g.name));
+  t('a file was written', !!html4);
+  t('the excepted fix is absent from the diff', !/privileged: false/.test(html4.text));
+  t('it is named as a documented exception instead', /PSC-114/.test(html4.text));
+  t('the fixes that were not excepted are still there',
+    /hostNetwork: false/.test(html4.text));
+  t('so the document does not contradict itself',
+    /PSC-114/.test(html4.text) && !/privileged: false/.test(html4.text));
+
+  /* The property, rather than this one case: nothing listed as an exception may also appear
+     as an applied change. Asserted by policy id against the register. */
+  const doc4 = new (require('jsdom').JSDOM)(html4.text).window.document;
+  const excepted = Array.from(doc4.querySelectorAll('table.meta tbody tr'))
+    .map((tr) => (tr.querySelector('code') || {}).textContent)
+    .filter(Boolean);
+  t('the exception table names the policy that was excepted',
+    excepted.indexOf('ACS.001') !== -1);
+  const regTable = Array.from(doc4.querySelectorAll('table.meta'))
+    .find((tbl) => /Policies/.test(tbl.querySelector('thead').textContent));
+  t('there is a reference register to check against', !!regTable);
+  const appliedCol = Array.from(regTable.querySelectorAll('tbody tr'))
+    .map((tr) => (tr.querySelectorAll('td')[3] || {}).textContent || '').join(' ');
+  t('and the register does not list the excepted policy as applied',
+    appliedCol.indexOf('ACS.001') === -1);
+  t('while it does list one that was applied', /ACS\.\d{3}/.test(appliedCol));
+
+  console.log('\n  Same for a namespace taken out of scope after rendering');
+  h4.w.__tab('diff');
+  h4.w.eval("NSOUT.add('prod'); STATE.findings = scopedFindings(STATE.scanned);");
+  out4.length = 0;
+  h4.$('btnDiffHtml').click();
+  t('with every namespace excluded there is nothing to export', out4.length === 0);
+  h4.cleanup();
+
   console.log('\n  Nothing to show is said, not exported as an empty page');
   w.eval("FSELECTED.clear();");
   $('dSelOnly').checked = true;
@@ -1700,6 +1763,283 @@ async function annotations() {
     left.spec.template.spec.containers[0].securityContext.privileged === true);
   h2.cleanup();
 
+
+  console.log('\n  A file with nothing to fix comes back byte for byte');
+  /* Both full export paths sent every loaded file through the YAML dumper. For a file with
+     no findings that is pure loss: comments go, including whatever ownership header and
+     change reference somebody put at the top, and quoting is normalised. The tool had no
+     reason to touch the file and rewrote it anyway. */
+  const h5 = await open('dj_acs_auditor.html',
+    'window.__load=(i)=>loadItems(i);window.__tab=(t)=>showTab(t);window.__S=()=>STATE;' +
+    'window.__out=(f,r)=>exportText(f,r);window.__run=()=>newRun();');
+  const needsFix = ['apiVersion: apps/v1', 'kind: Deployment',
+    'metadata: { name: api, namespace: prod }', 'spec:', '  template:', '    spec:',
+    '      containers:', '      - name: c', '        image: q/a:1',
+    '        securityContext: { privileged: true }'].join('\n');
+  const clean = ['# Owned by the platform team. Do not edit by hand.',
+    '# Reviewed 2026-03-02 under CR-4471.', 'apiVersion: v1', 'kind: ConfigMap',
+    'metadata:', '  name: app-config          # referenced by the api deployment',
+    '  namespace: prod', 'data:', '  LOG_LEVEL: "info"', '  TIMEOUT: "30"'].join('\n');
+  h5.w.__load([{ name: 'm/api.yaml', text: needsFix },
+               { name: 'm/config.yaml', text: clean }]);
+  t('the clean file really has no findings',
+    h5.w.__S().findings.filter((f) => f.file === 'm/config.yaml').length === 0);
+
+  const cf = h5.w.__S().files.find((f) => f.name === 'm/config.yaml');
+  const written = h5.w.__out(cf, h5.w.__run());
+  t('it is handed back exactly as loaded', written === clean);
+  t('the ownership header survives', /Do not edit by hand/.test(written));
+  t('the change reference survives, which is the one that matters',
+    /CR-4471/.test(written));
+  t('the inline comment survives', /referenced by the api deployment/.test(written));
+  t('quoting is not normalised', /LOG_LEVEL: "info"/.test(written));
+  t('and it carries no annotation, having had nothing done to it',
+    !/acs-auditor|change-cause/.test(written));
+
+  /* The file that WAS fixed is a different matter. Editing it means a YAML round trip and
+     comments are lost; that is the cost of the edit, not a defect, and the fix is what was
+     asked for. What it must have is the annotation. */
+  const af = h5.w.__S().files.find((f) => f.name === 'm/api.yaml');
+  h5.w.eval("for (const f of STATE.findings) if (f.file === 'm/api.yaml' && f.fixKind === 'auto') { STATE.applied.add(findingKey(f)); f.applied = true; }");
+  const fixedOut = h5.w.__out(af, h5.w.__run());
+  t('the fixed file is rewritten, which is what editing it means',
+    fixedOut !== needsFix);
+  t('and it does carry the annotation', /acs-auditor\/applied/.test(fixedOut));
+  h5.cleanup();
+
+
+  console.log('\n  The Secret that the fix points at does not exist yet, and the export says so');
+  /* ACS.010 rewrites a literal credential to a secretKeyRef and nothing creates the Secret.
+     Apply that first and the pod goes to CreateContainerConfigError with "secret not
+     found", which is one of the two errors from the incident. The reference was created and
+     the prerequisite lived in a sentence nobody read. */
+  const h6 = await open('dj_acs_auditor.html',
+    'window.__load=(i)=>loadItems(i);window.__tab=(t)=>showTab(t);window.__S=()=>STATE;' +
+    'window.__sel=()=>FSELECTED;window.__key=(f)=>findingRowKey(f);window.__sync=()=>syncFindingSelection();');
+  h6.w.__load([{ name: 'm/a.yaml', text: ['apiVersion: apps/v1', 'kind: Deployment',
+    'metadata: { name: payments-api, namespace: prod }', 'spec:', '  template:', '    spec:',
+    '      containers:', '      - name: c', '        image: q/a:1.2.3',
+    '        env: [{ name: DB_PASSWORD, value: s3cretP@ss }]'].join('\n') }]);
+  h6.w.__tab('remediate');
+  h6.$('fixMode').value = 'manual';
+  h6.$('fixMode').dispatchEvent(new h6.w.Event('change'));
+  h6.w.eval('for (const f of STATE.findings) if (fFixable(f)) FSELECTED.add(findingRowKey(f));');
+  h6.w.__sync();
+  const got6 = [];
+  h6.w.download = (n, c) => got6.push({ name: n, text: c });
+  delete h6.w.JSZip;
+  h6.$('btnExportFixed').click();
+  await new Promise((r) => setTimeout(r, 2500));
+  const md6 = got6.find((g) => /READ_THIS_FIRST/.test(g.name));
+  t('the export was written', !!md6);
+  t('it warns that the Secret does not exist yet',
+    /Do this BEFORE you apply anything/.test(md6.text));
+  t('it names the error you get if you ignore it',
+    /CreateContainerConfigError/.test(md6.text));
+  t('and it comes before the apply instructions, because the order is the fix',
+    md6.text.indexOf('Do this BEFORE') < md6.text.indexOf('## Applying them'));
+  t('it shows how to read the current value', /oc get deployment\/payments-api/.test(md6.text));
+  t('it creates the Secret the manifest will point at, by its exact name',
+    /oc create secret generic payments-api-secrets -n prod/.test(md6.text));
+  t('it reads the value from a prompt, not the shell history',
+    /read -rs -p/.test(md6.text));
+  t('it verifies what landed before anything is applied',
+    /oc get secret payments-api-secrets[\s\S]*base64 -d/.test(md6.text));
+  t('it says to rotate the credential afterwards', /[Rr]otate/.test(md6.text));
+  t('and it states that nothing was run for you',
+    /Nothing above was run for you/.test(md6.text));
+  h6.cleanup();
+
+
+  console.log('\n  The Secret the fix points at is generated, with every key it references');
+  const h7 = await open('dj_acs_auditor.html',
+    'window.__load=(i)=>loadItems(i);window.__tab=(t)=>showTab(t);window.__S=()=>STATE;' +
+    'window.__sel=()=>FSELECTED;window.__key=(f)=>findingRowKey(f);window.__sync=()=>syncFindingSelection();');
+  /* Two leaked credentials on one container. The fix rewrites both at once, so only the
+     first finding reaches applied and the second reports no change. Deriving the keys from
+     the findings produced a Secret with one key while the manifest referenced two, and the
+     second credential became a reference to a key that did not exist. */
+  h7.w.__load([{ name: 'm/a.yaml', text: ['apiVersion: apps/v1', 'kind: Deployment',
+    'metadata: { name: payments-api, namespace: prod }', 'spec:', '  template:', '    spec:',
+    '      containers:', '      - name: c', '        image: q/a:1.2.3', '        env:',
+    '        - { name: DB_PASSWORD, value: s3cretP@ss }',
+    '        - { name: API_KEY, value: AKIAIOSFODNN7EXAMPLE }'].join('\n') }]);
+  h7.w.__tab('remediate');
+  h7.$('fixMode').value = 'manual';
+  h7.$('fixMode').dispatchEvent(new h7.w.Event('change'));
+
+  const runMode = async (mode) => {
+    h7.$('secretMode').value = mode;
+    h7.w.eval('FSELECTED.clear(); for (const f of STATE.findings) if (fFixable(f)) FSELECTED.add(findingRowKey(f));');
+    h7.w.__sync();
+    const out = [];
+    h7.w.download = (n, c) => out.push({ name: n, text: c });
+    delete h7.w.JSZip;
+    h7.$('btnExportFixed').click();
+    await new Promise((r) => setTimeout(r, 2200));
+    return out;
+  };
+
+  const stub = await runMode('stub');
+  const sfile = stub.filter((g) => /^secret-/.test(g.name));
+  t('exactly one Secret is generated for the object, not one per credential',
+    sfile.length === 1);
+  const sec = h7.w.jsyaml.load(sfile[0].text);
+  t('it is a Secret', sec.kind === 'Secret');
+  t('it is in the right namespace', sec.metadata.namespace === 'prod');
+  t('and is named exactly as the manifest reference expects, hyphens intact',
+    sec.metadata.name === 'payments-api-secrets');
+  const skeys = Object.keys(sec.stringData || {});
+  t('it carries BOTH keys the manifest references', skeys.length === 2);
+  t('  db_password', skeys.indexOf('db_password') !== -1);
+  t('  api_key', skeys.indexOf('api_key') !== -1);
+  t('the values are empty, so the file is safe to commit',
+    skeys.every((k) => sec.stringData[k] === ''));
+  t('and neither credential appears anywhere in it',
+    !/s3cretP|AKIAIOSF/.test(sfile[0].text));
+
+  /* The name and key must match what the manifest asks for, or this is the same
+     CreateContainerConfigError one directory further along. */
+  const yml = stub.find((g) => /\.ya?ml$/.test(g.name) && !/^secret-/.test(g.name));
+  const dep7 = h7.w.jsyaml.load(yml.text);
+  const refs = dep7.spec.template.spec.containers[0].env
+    .map((e) => e.valueFrom.secretKeyRef);
+  t('every reference in the manifest names the generated Secret',
+    refs.every((r) => r.name === sec.metadata.name));
+  t('and every key it asks for exists in that Secret',
+    refs.every((r) => skeys.indexOf(r.key) !== -1));
+
+  console.log('\n  ExternalSecret instead, for a Vault backed store');
+  const ext = await runMode('external');
+  const efile = ext.filter((g) => /^externalsecret-/.test(g.name));
+  t('an ExternalSecret is generated', efile.length === 1);
+  const es = h7.w.jsyaml.load(efile[0].text);
+  t('it is an ExternalSecret', es.kind === 'ExternalSecret');
+  t('it names a SecretStore to resolve against', !!es.spec.secretStoreRef.name);
+  t('it targets the same Secret name the manifest references',
+    es.spec.target.name === sec.metadata.name);
+  t('it maps both keys', es.spec.data.length === 2);
+  t('and it holds no credential either', !/s3cretP|AKIAIOSF/.test(efile[0].text));
+  t('no plain Secret stub is emitted as well',
+    ext.filter((g) => /^secret-/.test(g.name)).length === 0);
+
+  console.log('\n  Or nothing, for somebody who manages Secrets elsewhere');
+  const none = await runMode('none');
+  t('no artifact is generated', none.filter((g) => /secret/i.test(g.name)).length === 0);
+  t('but the manifest is still corrected',
+    /secretKeyRef/.test(none.find((g) => /\.ya?ml$/.test(g.name)).text));
+  h7.cleanup();
+
+
+  console.log('\n  hostPath volumes get a recommended PVC, and a refusal to pretend it is a fix');
+  const h8 = await open('dj_acs_auditor.html',
+    'window.__load=(i)=>loadItems(i);window.__tab=(t)=>showTab(t);window.__S=()=>STATE;' +
+    'window.__recs=()=>pvcRecommendations();window.__sync=()=>syncFindingSelection();');
+  const dep8 = ['apiVersion: apps/v1', 'kind: Deployment',
+    'metadata: { name: payments-api, namespace: prod }', 'spec:', '  replicas: 3',
+    '  template:', '    spec:', '      containers:', '      - { name: c, image: q/a:1.2.3 }',
+    '      volumes:', '      - { name: cache, hostPath: { path: /opt/app/cache } }'].join('\n');
+  const ds8 = ['apiVersion: apps/v1', 'kind: DaemonSet',
+    'metadata: { name: log-shipper, namespace: prod }', 'spec:', '  template:', '    spec:',
+    '      containers:', '      - { name: c, image: q/a:1.2.3 }', '      volumes:',
+    '      - { name: varlog, hostPath: { path: /var/log } }'].join('\n');
+  h8.w.__load([{ name: 'm/a.yaml', text: dep8 }, { name: 'm/b.yaml', text: ds8 }]);
+  let recs8 = h8.w.__recs();
+  t('one recommendation per hostPath volume', recs8.length === 2);
+  t('the claim name is derived from the object and the volume',
+    recs8.some((r) => r.rec.claimName === 'payments-api-cache'));
+  t('it is a valid DNS name', recs8.every((r) => /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(r.rec.claimName)));
+  t('and no longer than Kubernetes allows', recs8.every((r) => r.rec.claimName.length <= 63));
+
+  console.log('\n  It will not collide with a claim that already exists');
+  /* The collision check is only real if the tool can see the claims. Dropping
+     oc get pvc -A -o json on the page alongside the manifests is what makes it so. */
+  h8.w.__load([{ name: 'm/pvc.yaml', text: ['apiVersion: v1', 'kind: PersistentVolumeClaim',
+    'metadata: { name: payments-api-cache, namespace: prod }',
+    'spec: { accessModes: [ReadWriteOnce], resources: { requests: { storage: 5Gi } } }'].join('\n') }]);
+  recs8 = h8.w.__recs();
+  t('the existing claim name is not proposed again',
+    !recs8.some((r) => r.rec.claimName === 'payments-api-cache'));
+  t('a numbered name is proposed instead',
+    recs8.some((r) => r.rec.claimName === 'payments-api-cache-2'));
+  t('and two recommendations in one namespace do not collide with each other',
+    new Set(recs8.map((r) => r.rec.claimName)).size === recs8.length);
+
+  console.log('\n  The warnings are the point, not the manifest');
+  const dep8r = recs8.find((r) => /payments/.test(r.finding.obj));
+  const ds8r = recs8.find((r) => /log-shipper/.test(r.finding.obj));
+  t('it says plainly that nothing is copied',
+    dep8r.rec.warnings.some((x) => /[Nn]othing is copied/.test(x)));
+  t('and names the host path whose contents stay behind',
+    dep8r.rec.warnings.some((x) => /\/opt\/app\/cache/.test(x)));
+  t('three replicas against ReadWriteOnce is called out',
+    dep8r.rec.warnings.some((x) => /3 replicas/.test(x) && /ReadWriteOnce/.test(x)));
+  /* A log shipper on /var/log is doing the thing hostPath exists for. Recommending a PVC
+     there is actively wrong, so it is the first thing said. */
+  t('a DaemonSet is warned about before anything else',
+    /DaemonSet/.test(ds8r.rec.warnings[0]));
+  t('the size is flagged as a placeholder',
+    dep8r.rec.warnings.some((x) => /placeholder/.test(x)));
+  t('and the absent storage class is explained rather than left blank',
+    dep8r.rec.warnings.some((x) => /storageClassName/.test(x)));
+
+  console.log('\n  Nothing is applied, and the artifact says what it is for');
+  const claim = h8.w.jsyaml.load(dep8r.rec.text);
+  t('it is a PersistentVolumeClaim', claim.kind === 'PersistentVolumeClaim');
+  t('in the workload namespace', claim.metadata.namespace === 'prod');
+  t('with no storageClassName, so the cluster default applies',
+    claim.spec.storageClassName === undefined);
+  t('it records which workload and volume it was proposed for',
+    /payments-api/.test(claim.metadata.annotations['acs-auditor/recommended-for']) &&
+    /cache/.test(claim.metadata.annotations['acs-auditor/recommended-for']));
+  t('the volume patch references the claim by name',
+    h8.w.jsyaml.load(dep8r.rec.volumePatch).persistentVolumeClaim.claimName === claim.metadata.name);
+  t('ACS.012 is still a manual policy, so none of this is auto applied',
+    h8.w.__S().findings.filter((f) => f.policy.id === 'ACS.012')
+      .every((f) => f.fixKind === 'manual'));
+
+  console.log('\n  And it lands in the export in a folder that says recommended');
+  h8.w.__tab('remediate');
+  h8.$('fixMode').value = 'manual';
+  h8.$('fixMode').dispatchEvent(new h8.w.Event('change'));
+  h8.w.eval('for (const f of STATE.findings) if (fFixable(f)) FSELECTED.add(findingRowKey(f));');
+  h8.w.__sync();
+  const out8 = [];
+  h8.w.download = (n, c) => out8.push({ name: n, text: c });
+  delete h8.w.JSZip;
+  h8.$('btnExportFixed').click();
+  await new Promise((r) => setTimeout(r, 2500));
+  const md8 = out8.find((g) => /READ_THIS_FIRST/.test(g.name));
+  t('the export describes the recommendations',
+    /Recommended PersistentVolumeClaims, for review/.test(md8.text));
+  t('it says they are not fixes', /not fixes and nothing has been applied/.test(md8.text));
+  t('it warns about data loss on stateful workloads',
+    /data loss/.test(md8.text));
+  t('with a claim loaded, it does not print the caveat about not seeing the cluster',
+    !/oc get pvc -A -o json/.test(md8.text));
+
+  /* And the other way round. A fresh page with no PersistentVolumeClaim loaded must say the
+     collision check is only as good as what it was given. */
+  const h9 = await open('dj_acs_auditor.html',
+    'window.__load=(i)=>loadItems(i);window.__tab=(t)=>showTab(t);' +
+    'window.__sync=()=>syncFindingSelection();window.__S=()=>STATE;');
+  h9.w.__load([{ name: 'm/a.yaml', text: dep8 }]);
+  h9.w.__tab('remediate');
+  h9.$('fixMode').value = 'manual';
+  h9.$('fixMode').dispatchEvent(new h9.w.Event('change'));
+  h9.w.eval('for (const f of STATE.findings) if (fFixable(f)) FSELECTED.add(findingRowKey(f));');
+  h9.w.__sync();
+  const out9 = [];
+  h9.w.download = (n, c) => out9.push({ name: n, text: c });
+  delete h9.w.JSZip;
+  h9.$('btnExportFixed').click();
+  await new Promise((r) => setTimeout(r, 2500));
+  const md9 = out9.find((g) => /READ_THIS_FIRST/.test(g.name));
+  t('with no claim loaded, it says the collision check only saw the manifests',
+    /oc get pvc -A -o json/.test(md9.text));
+  h9.cleanup();
+  h8.cleanup();
+
   console.log('\n  Looking at the page does not stamp what is loaded');
   t('the loaded YAML carries no annotation',
     !/acs-auditor\/applied/.test(w.jsyaml.dump(w.__S().files[0].docs[0])));
@@ -1782,8 +2122,14 @@ t('and says why rather than going blank', /Nothing is ticked/.test($('dEmpty').t
 const one=w.__S().findings.filter(f=>f.file==='m/a.yaml'&&!f.applied&&f.fixKind!=='manual')[0];
 w.__sel().add(w.__key(one));
 $('dSelOnly').dispatchEvent(new w.Event('change'));
-t('ticking one finding brings back exactly its file',
-  w.document.querySelectorAll('#dFiles button.dfile').length===1);
+const dfiles = Array.from(w.document.querySelectorAll('#dFiles button.dfile'))
+  .map((b) => b.dataset.f);
+t('ticking one finding brings back its file',
+  dfiles.some((n) => n === 'm/a.yaml'));
+t('and not the file it was not ticked on',
+  !dfiles.some((n) => n === 'm/b.yaml'));
+t('anything else in the list is a generated artifact, not another loaded manifest',
+  dfiles.every((n) => n === 'm/a.yaml' || /new file/.test(n)));
 
 console.log('\n  Hide unchanged lines');
 $('dCtx').checked=false; $('dCtx').dispatchEvent(new w.Event('change'));
