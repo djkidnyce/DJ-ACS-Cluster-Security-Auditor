@@ -291,7 +291,7 @@ Auto covers: `privileged`, `allowPrivilegeEscalation`, `readOnlyRootFilesystem`,
 
 **Manual** means the right answer depends on context the scanner cannot see, so it is explained and left alone. Pinning an image digest needs to know which build is blessed. Removing a `hostPath` needs a storage decision. Replacing the default service account needs the replacement to exist first. Guessing at these breaks working systems, and a security tool that breaks production gets switched off, which leaves you less secure than before it was installed.
 
-Two fixes insert placeholder resource values. They are flagged as PLACEHOLDER in the confirmation dialog and in the change log, and they need tuning to your workload before deploy. The secret rewrite is flagged too, because it cannot un-leak a credential that is already in git history: rotate it.
+The two resource fixes derive a limit from whatever request is already there, and flag it as PLACEHOLDER only when there was no request to derive from. Either way the number wants checking against measured use before deploy. The secret rewrite is flagged too, because it cannot un-leak a credential that is already in git history: rotate it.
 
 ## Taking the result
 
@@ -436,10 +436,52 @@ The step through view shows the same side by side layout: left is what you have,
 what you would get. All three surfaces share one pairing implementation, so they cannot
 disagree about what a change looks like.
 
-## Resource limits, measured rather than guessed
+## Resource limits
 
-ACS.013 and ACS.014 insert a value flagged PLACEHOLDER because the tool cannot know the right
-number. `scripts/acs_resources.sh` produces it.
+### What the fix writes
+
+ACS.013 and ACS.014 never change a value that is already on the container. Not the request,
+not the limit. Only a missing value is filled in. Raising a request changes what the
+scheduler reserves on every replica, and overwriting a limit somebody tuned is not this
+tool's call to make.
+
+A missing limit is the request times the multiplier, or the floor, whichever is larger:
+
+| | multiplier | floor | default request |
+|---|---|---|---|
+| CPU | 5x | 500m | 100m |
+| memory | 4x | 512Mi | 128Mi |
+
+So a 10Mi memory request yields a 512Mi limit rather than 40Mi. All six values are settable
+from the Resource limits panel on the Remediate tab, or on the CLI with
+`--cpu-multiplier`, `--mem-multiplier`, `--cpu-floor`, `--mem-floor`, `--cpu-request` and
+`--mem-request`. A value that is not a usable quantity is refused and quoted back, not
+silently defaulted.
+
+Where there was no request to derive from, the request itself is invented and the change
+note says PLACEHOLDER in those words. Where only a limit is present, the request is set to
+match it, which is what Kubernetes already defaults it to anyway.
+
+### Guaranteed QoS
+
+`--guaranteed`, or the mode selector in the panel, sets each filled in limit equal to its
+request. Those containers become Guaranteed: last to be evicted under node memory pressure,
+and reserving the full amount whether or not it is used.
+
+It is also inferred per container when the other resource on that container is already
+pinned request equal to limit, on the reading that somebody did that deliberately. The
+inference is marked INFERRED in the change note every time it fires. It reads intent off a
+sibling field and it will sometimes be wrong, which is why it is never silent.
+
+Guaranteed cannot honour the floor, because the only way to clear a floor while keeping
+limit equal to request is to raise the request, and an existing request is not changed here.
+When the request is below the floor the change note carries a WARNING naming the floor it
+could not reach.
+
+### Measured rather than derived
+
+A derived limit is only as good as the request it came from, and that request was often
+itself a guess. `scripts/acs_resources.sh` produces a measured number.
 
 ```sh
 ./scripts/acs_resources.sh recommend -n prod     # Thanos first, samples as the fallback

@@ -114,6 +114,18 @@ FIXING  (all of these require --mode manual or --mode auto)
   --in-place            With --mode auto, overwrite the source files instead of
                         writing to --out. Refuses unless the git tree is clean.
   --only <ACS.001,...>  Only these policy ids.
+
+Resource limits, for ACS.013 and ACS.014. A value already on the container is never
+overwritten; only a missing one is filled in. The limit becomes the request times the
+multiplier, or the floor, whichever is larger.
+
+  --cpu-multiplier <n>  Default 5.
+  --mem-multiplier <n>  Default 4.
+  --cpu-floor <q>       Smallest cpu limit to write. Default 500m.
+  --mem-floor <q>       Smallest memory limit to write. Default 512Mi.
+  --cpu-request <q>     Request to use when there is none to derive from. Default 100m.
+  --mem-request <q>     Request to use when there is none to derive from. Default 128Mi.
+  --guaranteed          Make every filled in limit equal its request, for Guaranteed QoS.
   --skip <ACS.013,...>  Everything except these policy ids.
   --dry-run             Show what --mode auto would change and write nothing.
   --fix                 Deprecated alias for --mode auto. Warns.
@@ -177,6 +189,13 @@ function parseArgs(argv) {
         break;
       case '--only': o.only = String(next() || '').split(',').map(function (x) { return x.trim().toUpperCase(); }).filter(Boolean); break;
       case '--skip': o.skip = String(next() || '').split(',').map(function (x) { return x.trim().toUpperCase(); }).filter(Boolean); break;
+      case '--cpu-multiplier': o.cpuMultiplier = next(); break;
+      case '--mem-multiplier': o.memMultiplier = next(); break;
+      case '--cpu-floor': o.cpuFloor = next(); break;
+      case '--mem-floor': o.memFloor = next(); break;
+      case '--cpu-request': o.cpuRequest = next(); break;
+      case '--mem-request': o.memRequest = next(); break;
+      case '--guaranteed': o.resMode = 'guaranteed'; break;
       case '--dry-run': o.dryRun = true; break;
       case '--fail-on': o.failOn = String(next() || 'none').toLowerCase(); break;
       case '-h': case '--help': console.log(USAGE); process.exit(0); break;
@@ -190,6 +209,40 @@ function parseArgs(argv) {
 }
 
 const opts = parseArgs(process.argv.slice(2));
+
+/* Push the resource settings into the engine before anything is scanned or fixed.
+ *
+ * Refused rather than defaulted: a limit derived from a number the operator thought they
+ * had set, but had not, is worse than no limit at all. */
+(function applyResourceOpts() {
+  const given = {};
+  const quantities = [['cpuFloor', true], ['memFloor', false], ['cpuRequest', true],
+                      ['memRequest', false]];
+  for (const [key, isCpu] of quantities) {
+    if (opts[key] === undefined) continue;
+    const v = String(opts[key]).trim();
+    const parsed = isCpu ? E.parseCpu(v) : E.parseMem(v);
+    if (isNaN(parsed) || !(parsed > 0)) {
+      console.error('Not a usable quantity for --' +
+        key.replace(/([A-Z])/g, function (m) { return '-' + m.toLowerCase(); }) +
+        ': "' + v + '"');
+      process.exit(2);
+    }
+    given[key] = v;
+  }
+  for (const key of ['cpuMultiplier', 'memMultiplier']) {
+    if (opts[key] === undefined) continue;
+    const n = Number(opts[key]);
+    if (!(n >= 1) || !isFinite(n)) {
+      console.error('A multiplier has to be a number of at least 1, got "' +
+        opts[key] + '" for --' + (key === 'cpuMultiplier' ? 'cpu' : 'mem') + '-multiplier');
+      process.exit(2);
+    }
+    given[key] = n;
+  }
+  if (opts.resMode) given.mode = opts.resMode;
+  if (Object.keys(given).length) E.resSettings(given);
+})();
 /* Any one of these is a complete input on its own.
  *
  *   --path       a repository of manifests

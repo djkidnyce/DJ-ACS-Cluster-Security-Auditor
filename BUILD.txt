@@ -1,7 +1,11 @@
 DJ's ACS Auditor
-version   1.11.0
-build     20261011-161912
-tests     1997 with jsdom, 1257 without
+version   1.13.0
+build     20261104-210202
+tests     2074 with jsdom, 1256 without
+          Those are the numbers from a clean clone of this repository. A working copy
+          that also has handoff.md reports 2082 and 1264, because eight assertions in
+          test/ci.cjs read that file and skip when it is absent. handoff.md is not
+          published, so the higher numbers are not reproducible from here.
 
 Reusing a filename across rebuilds is how a stale download gets unzipped over a repo
 and produces results that make no sense against the code you think you have. Check

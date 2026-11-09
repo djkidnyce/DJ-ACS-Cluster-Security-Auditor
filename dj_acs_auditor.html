@@ -202,6 +202,7 @@ tr.done td{opacity:.5}
 .pill.fixed{color:var(--low);border-color:var(--low);background:var(--add)}
 .pill.optout{color:var(--muted);border-color:var(--muted)}
 .pill.expired{color:var(--high);border-color:var(--high)}
+.pill.res{color:var(--acc,var(--accent));border-color:var(--accent)}
 .pill.plat{color:var(--med);border-color:var(--med);font-size:10px;padding:0 5px}
 .nschip{background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:3px 9px;font-size:12px;display:inline-flex;align-items:center;gap:5px;margin:3px 4px 0 0;cursor:pointer}
 .nschip.plat{border-color:var(--med)}
@@ -597,6 +598,7 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
             <option value="external">ExternalSecret, needs an operator</option>
             <option value="none">Do not generate one</option>
           </select></label>
+        <button id="btnResPanel" title="Set how CPU and memory limits are derived from whatever request is already on the container">Resource limits...</button>
         <button id="btnOptBulk" title="Write one rule covering every finding the filters above are showing, with one reason">Opt out all shown</button>
         <button id="btnOptSave" title="Save the recorded exceptions as a JSON file you can keep with the manifests or load on another machine">Save exceptions</button>
         <button id="btnOptTemplate" title="Download a commented starter file showing the format, with a worked example">Exceptions template</button>
@@ -607,6 +609,26 @@ export ROX_API_TOKEN=&lt;ACS API token&gt;
         <span class="note flashmsg" style="margin:0;color:var(--accent)"></span>
       </div>
       <p class="note hidden" id="fModeWhy"></p>
+      <div id="resForm" class="optform hidden" style="margin:8px 0;padding:10px;border:1px solid var(--border);border-radius:6px;background:var(--panel2)">
+        <strong style="font-size:13px">How CPU and memory limits are derived</strong>
+        <p class="note" style="margin:4px 0 8px">A value already on the container is a decision somebody made and is never overwritten. Only a missing value is filled in. The limit is the request times the multiplier, or the floor, whichever is larger.</p>
+        <div class="controls" style="margin:0">
+          <label class="chk">Mode
+            <select id="resMode" title="Multiplier gives Burstable QoS, which is evicted before Guaranteed under node memory pressure but does not reserve the headroom. Equal to the request gives Guaranteed." style="background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:4px 8px;font-size:13px">
+              <option value="multiplier">Limit is the request times a multiplier</option>
+              <option value="guaranteed">Limit equals the request, Guaranteed QoS</option>
+            </select></label>
+          <label class="chk">CPU multiplier <input type="number" id="resCpuMult" min="1" max="100" step="0.5" style="width:62px;background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:4px 6px;font-size:13px"></label>
+          <label class="chk">Memory multiplier <input type="number" id="resMemMult" min="1" max="100" step="0.5" style="width:62px;background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:4px 6px;font-size:13px"></label>
+          <label class="chk">CPU floor <input type="text" id="resCpuFloor" style="width:62px;background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:4px 6px;font-size:13px"></label>
+          <label class="chk">Memory floor <input type="text" id="resMemFloor" style="width:62px;background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:4px 6px;font-size:13px"></label>
+          <label class="chk">Default CPU request <input type="text" id="resCpuReq" style="width:62px;background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:4px 6px;font-size:13px"></label>
+          <label class="chk">Default memory request <input type="text" id="resMemReq" style="width:62px;background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:4px 6px;font-size:13px"></label>
+          <button id="btnResReset">Back to defaults</button>
+          <span class="note" id="resProblem" style="margin:0;color:var(--bad)"></span>
+        </div>
+        <p class="note" id="resWorked" style="margin:8px 0 0"></p>
+      </div>
       <div id="bulkForm" class="optform hidden" style="margin:8px 0;padding:10px;border:1px solid var(--border);border-radius:6px;background:var(--panel2)"></div>
       <div class="tablewrap">
       <table id="rtable">
@@ -727,7 +749,7 @@ function rescan() {
      and asking each of them to remember the namespace scope is how one of them forgets.
      The two arrays share their elements, so marking a finding applied is visible through
      both. */
-  STATE.scanned = applyOptOuts(scanFiles(STATE.files));
+  STATE.scanned = applyResolutions(applyOptOuts(scanFiles(STATE.files)));
   STATE.findings = scopedFindings(STATE.scanned);
   /* Preserve which findings have already been applied across a rescan. */
   for (const f of STATE.scanned) f.applied = STATE.applied.has(findingKey(f));
@@ -859,11 +881,30 @@ function renderAuditTab() {
 
   const before = computePosture(scopedFiles(), STATE.findings, false);
   const after = computePosture(scopedFiles(), STATE.findings, true);
+  /* A third number, because the second one was never reachable by doing the right thing.
+     Manual findings always count against the projected score, so a workload hardened in
+     every respect but one hostPath sat at 94 projected and 97 actual with the six points
+     invisible. This shows what the recorded resolutions are worth, kept separate from the
+     auto fix projection because one is a change the tool can make and the other rests on
+     your assertion that a claim exists. */
+  const resolvedAsFixed = STATE.findings.map((f) =>
+    (f.resolution && f.fixKind === 'manual')
+      ? Object.assign({}, f, { fixKind: 'auto', selected: true }) : f);
+  const afterAll = resolvedCount()
+    ? computePosture(scopedFiles(), resolvedAsFixed, true) : null;
 
   $('cards').innerHTML =
     '<div class="card"><div class="num" style="color:' + scoreColour(before.score) + '">' + before.score + '</div><div class="lbl">Posture, grade ' + before.grade + '</div></div>' +
     '<div class="card"><div class="num" style="color:' + scoreColour(after.score) + '">' + after.score + '</div><div class="lbl">After auto fixes</div></div>' +
+    (afterAll
+      ? '<div class="card"><div class="num" style="color:' + scoreColour(afterAll.score) + '">' +
+        afterAll.score + '</div><div class="lbl">Plus ' + resolvedCount() +
+        ' resolved</div></div>'
+      : '') +
     '<div class="card"><div class="num">' + STATE.findings.length + '</div><div class="lbl">Findings</div></div>' +
+    '<div class="card"><div class="num">' + STATE.applied.size + '</div><div class="lbl">Fixes applied</div></div>' +
+    '<div class="card"><div class="num">' + STATE.findings.filter((f) => !f.applied && f.fixKind !== 'manual').length + '</div><div class="lbl">Auto fixable left</div></div>' +
+    '<div class="card"><div class="num">' + STATE.findings.filter((f) => !f.applied && f.fixKind === 'manual' && !f.resolution).length + '</div><div class="lbl">Need a decision</div></div>' +
     '<div class="card crit"><div class="num">' + before.counts.Critical + '</div><div class="lbl">Critical</div></div>' +
     '<div class="card high"><div class="num">' + before.counts.High + '</div><div class="lbl">High</div></div>' +
     '<div class="card med"><div class="num">' + before.counts.Medium + '</div><div class="lbl">Medium</div></div>' +
@@ -908,17 +949,12 @@ renderVulnPanel();
   const manual = open.filter((f) => f.fixKind === 'manual').length;
   const confirmed = STATE.findings.filter((f) => f.confirmedByAcs).length;
 
-  $('cards').innerHTML =
-    '<div class="card"><div class="num" style="color:' + scoreColour(posture.score) + '">' + posture.score + '</div><div class="lbl">Posture, grade ' + posture.grade + '</div></div>' +
-    '<div class="card"><div class="num" style="color:' + scoreColour(projected.score) + '">' + projected.score + '</div><div class="lbl">After remaining fixes</div></div>' +
-    '<div class="card crit"><div class="num">' + posture.counts.Critical + '</div><div class="lbl">Critical</div></div>' +
-    '<div class="card high"><div class="num">' + posture.counts.High + '</div><div class="lbl">High</div></div>' +
-    '<div class="card med"><div class="num">' + posture.counts.Medium + '</div><div class="lbl">Medium</div></div>' +
-    '<div class="card low"><div class="num">' + posture.counts.Low + '</div><div class="lbl">Low</div></div>' +
-    '<div class="card"><div class="num">' + STATE.applied.size + '</div><div class="lbl">Fixes applied</div></div>' +
-    '<div class="card"><div class="num">' + autoLeft + '</div><div class="lbl">Auto fixable left</div></div>' +
-    '<div class="card"><div class="num">' + manual + '</div><div class="lbl">Need a decision</div></div>' +
-    (STATE.acs ? '<div class="card"><div class="num" style="color:var(--crit)">' + confirmed + '</div><div class="lbl">Confirmed live by ACS</div></div>' : '');
+  /* The cards are render()'s, and only render()'s. This function used to write them as
+     well and, being the later of the two writers, silently replaced whatever the Audit half
+     had put there: a card added in render() simply never appeared. The comment above
+     claimed that had been fixed. It had not. The remediate specific numbers moved into
+     render() rather than being written from here. */
+
 
   $('btnUndo').disabled = STATE.history.length === 0;
   $('btnReset').disabled = STATE.history.length === 0;
@@ -1733,6 +1769,41 @@ const OPTOUTS = new Map();
    active match wins, so a specific rule placed above a broad one does what a reader
    expects rather than whatever the iteration order happens to be. */
 const OPTRULES = [];
+
+/* Resolutions: the mirror image of an exception.
+ *
+ * An exception says this finding is accepted. A resolution says the prerequisite has been
+ * created, so the mechanical half of the fix can now run. Both are decisions a person made
+ * and both belong in the same register, because the thing worth handing up the chain is one
+ * document showing what was fixed and what was accepted, not two.
+ *
+ * The value is taken from the artifact the tool already generated rather than typed, so the
+ * name the manifest ends up pointing at is the name in the file that was applied. Retyping
+ * it is how a manifest comes to reference a claim that does not exist.
+ *
+ * What the tool cannot do is check. It has no cluster access, so a resolution is an
+ * assertion, and the export puts the verification command ahead of the apply instructions
+ * for exactly that reason. */
+const RESOLVED = new Map();
+
+function resolutionRecord(f, artifact, value) {
+  return Object.assign({
+    policy: f.policy.id, obj: f.obj, ns: f.ns || '', file: f.file,
+    detail: f.detail || '', artifact: artifact || '',
+    when: refStamp(new Date()), tool: ACS_VERSION,
+  }, value || {});
+}
+
+const resolutionOf = (f) => RESOLVED.get(findingRowKey(f)) || null;
+const resolvedCount = () => (STATE.findings || []).filter((f) => f.resolution).length;
+
+function applyResolutions(findings) {
+  for (const f of findings || []) {
+    const r = RESOLVED.get(findingRowKey(f));
+    if (r) f.resolution = r; else delete f.resolution;
+  }
+  return findings;
+}
 const OPTOUT_STORE = 'acsOptOuts';
 const OPTOUT_MARK = 'dj-acs-auditor/exceptions';
 
@@ -1811,6 +1882,7 @@ function optOutBundle() {
   return { mark: OPTOUT_MARK, tool: ACS_TOOL, version: ACS_VERSION,
            written: refStamp(new Date()),
            rules: OPTRULES.map((r) => Object.assign({}, r)),
+           resolutions: Array.from(RESOLVED, ([key, v]) => Object.assign({ key: key }, v)),
            entries: Array.from(OPTOUTS, ([key, v]) => Object.assign({ key: key }, v)) };
 }
 
@@ -1820,7 +1892,8 @@ function optOutBundle() {
    exists to make impossible. */
 function optOutImport(data) {
   const out = { added: 0, rejected: 0, rules: 0, problems: [] };
-  if (!data || (!Array.isArray(data.entries) && !Array.isArray(data.rules))) {
+  if (!data || (!Array.isArray(data.entries) && !Array.isArray(data.rules) &&
+                !Array.isArray(data.resolutions))) {
     out.bad = true;
     return out;
   }
@@ -1840,6 +1913,13 @@ function optOutImport(data) {
       approver: r.approver || '', ticket: r.ticket || '',
     });
     out.rules++;
+  }
+  for (const r of (data.resolutions || [])) {
+    /* A resolution with no value is not a resolution. Imported blank it would mark a finding
+       fixable and then produce no fix, which reads as the tool having silently done nothing. */
+    if (!r || !r.key || !(r.claimName || r.saName)) { out.rejected++; continue; }
+    RESOLVED.set(String(r.key), r);
+    out.resolutions = (out.resolutions || 0) + 1;
   }
   for (const e of (data.entries || [])) {
     if (!e || !e.key || optOutReasonProblem(e.reason)) { out.rejected++; continue; }
@@ -1938,6 +2018,73 @@ function findingRows() {
    would read as an oversight rather than an answer. */
 const secretMode = () => ($('secretMode') ? $('secretMode').value : 'stub');
 
+/* ------------------------------------------------- resource limit settings
+ *
+ * These feed resourcePlan in the engine. Nothing here is applied until a fix runs, and a
+ * bad value is refused rather than silently falling back to a default, because a limit
+ * quietly derived from a number nobody chose is the failure this panel exists to avoid. */
+const RES_FIELDS = [
+  ['resMode', 'mode'], ['resCpuMult', 'cpuMultiplier'], ['resMemMult', 'memMultiplier'],
+  ['resCpuFloor', 'cpuFloor'], ['resMemFloor', 'memFloor'],
+  ['resCpuReq', 'cpuRequest'], ['resMemReq', 'memRequest'],
+];
+
+function resFillPanel() {
+  for (const [id, key] of RES_FIELDS) if ($(id)) $(id).value = RES_SETTINGS[key];
+  resApplySettings();
+}
+
+/* Validate first, then commit. A multiplier of zero or a floor of "512 megs" has to be
+   refused here; by the time it reaches a container it is already in someone's YAML. */
+function resApplySettings() {
+  const problems = [];
+  const next = {};
+  for (const [id, key] of RES_FIELDS) {
+    if (!$(id)) continue;
+    const v = String($(id).value).trim();
+    if (key === 'mode') { next[key] = v; continue; }
+    if (key.indexOf('Multiplier') !== -1) {
+      const n = Number(v);
+      if (!(n >= 1) || !isFinite(n)) { problems.push(key + ' "' + v + '"'); continue; }
+      next[key] = n;
+      continue;
+    }
+    const isCpu = key.indexOf('cpu') === 0;
+    const parsed = isCpu ? parseCpu(v) : parseMem(v);
+    if (isNaN(parsed) || !(parsed > 0)) { problems.push(key + ' "' + v + '"'); continue; }
+    next[key] = v;
+  }
+  if (problems.length) {
+    $('resProblem').textContent = 'Not a usable quantity: ' + problems.join(', ') +
+      '. Nothing was changed.';
+    return false;
+  }
+  $('resProblem').textContent = '';
+  resSettings(next);
+  resWorkedExample();
+  return true;
+}
+
+/* Show the arithmetic on a real number rather than asking anyone to trust the multiplier. */
+function resWorkedExample() {
+  const s = RES_SETTINGS;
+  if (s.mode === 'guaranteed') {
+    $('resWorked').textContent = 'Every filled in limit will equal its request, so those '
+      + 'containers become Guaranteed. They are the last to be evicted under node memory '
+      + 'pressure and they reserve the full amount whether or not it is used.';
+    return;
+  }
+  const ex = (kind, req) => {
+    const plan = resourcePlan({ name: 'x', resources: { requests: { [kind]: req } } }, kind);
+    return req + ' becomes ' + plan.limit;
+  };
+  $('resWorked').textContent = 'With these settings: cpu request ' + ex('cpu', '100m')
+    + ', cpu request ' + ex('cpu', '2') + ', memory request ' + ex('memory', '10Mi')
+    + ' (the floor), memory request ' + ex('memory', '1Gi') + '. A container that already '
+    + 'has the other resource pinned request equal to limit gets a limit equal to its '
+    + 'request instead, and the change note says so.';
+}
+
 /* PVC names already in use, per namespace, so a recommendation cannot propose one that
    exists. Read from whatever was loaded: drop `oc get pvc -A -o json` on the page alongside
    the manifests and the collision check becomes real rather than theoretical. Without it the
@@ -1998,7 +2145,11 @@ function pvcRecommendations() {
   return out;
 }
 
-const fFixable = (f) => !f.applied && f.fixKind !== 'manual' && !f.optOut;
+/* A manual finding with a resolution recorded is mechanically fixable: the policy has a fix
+   that reads the resolution, and without one that fix returns null. So the gate is whether
+   the policy can act, not whether it was labelled manual at scan time. */
+const fFixable = (f) => !f.applied && !f.optOut &&
+  (f.fixKind !== 'manual' || (!!f.resolution && !!f.policy.fix));
 /* f.optOutExpired deliberately does NOT appear above. An expired exception is a
    finding that is back in scope, so it is selectable and fixable again. The pill is
    what tells the reader it used to be excepted. */
@@ -2319,7 +2470,12 @@ function renderTable() {
   for (let i = 0; i < rows.length; i++) {
     const f = rows[i];
     const sev = sevLabel(f.policy.severity);
-    const kindPill = f.optOutExpired
+    const kindPill = f.resolution
+      ? '<span class="pill res" title="' + esc('Prerequisite recorded as applied: ' +
+          (f.resolution.claimName || f.resolution.saName || '') +
+          (f.resolution.artifact ? ' from ' + f.resolution.artifact : '') +
+          '. The fix is mechanical now.') + '">Ready to fix</span>'
+      : f.optOutExpired
       ? '<span class="pill expired" title="' + esc('This exception expired on ' +
           (f.optOutExpired.expires || '?') + '. It is back in scope. Reason given at the ' +
           'time: ' + f.optOutExpired.reason) + '">Exception expired</span>'
@@ -2367,6 +2523,16 @@ function renderTable() {
            ones. A finding with no mechanical fix is the most likely thing to sit
            unexplained for a year, so it is the one that most needs somewhere to say
            why it is being left. */
+        /* Offered only where the policy has a resolution driven fix and the artifact the
+           operator would apply has been generated. Nothing to tick otherwise. */
+        (!f.applied && f.fixKind === 'manual' && f.policy.fix && !f.optOut
+          ? '<button class="small rres" title="' + esc(f.resolution
+              ? 'Recommendation recorded as applied. Open to review or undo it.'
+              : 'Tick this once you have applied the matching file from recommended/. The '
+                + 'fix then uses the name from that file, so the manifest points at what you '
+                + 'actually created.') + '">' +
+            (f.resolution ? 'Applied' : 'Mark applied') + '</button> '
+          : '') +
         (f.applied ? ''
           : '<button class="small ropt" title="' + esc(f.optOut
               ? 'Opted out. Open to read, change or remove the recorded reason.'
@@ -2499,6 +2665,13 @@ function bindFindingTable() {
     const fixBtn = ev.target.closest('button.rfix');
     if (fixBtn) { ev.stopPropagation(); if (!fixBtn.disabled) requestFix(f); return; }
 
+    const resBtn = ev.target.closest('button.rres');
+    if (resBtn) {
+      ev.stopPropagation();
+      markRecommendationApplied(f);
+      return;
+    }
+
     const optBtn = ev.target.closest('button.ropt');
     if (optBtn) {
       ev.stopPropagation();
@@ -2517,6 +2690,55 @@ function bindFindingTable() {
 /* Saving re-renders the table, which destroys the form. That is intended: the row has
    to come back showing the pill, the disabled checkbox and the Exception button, and
    rendering it from the finding is the only way those three agree with each other. */
+/* Plug and play: the value comes out of the artifact the tool generated, so the operator
+   applies recommended/<file> as it stands and ticks the box. Nothing is retyped, which is
+   the whole point: a retyped claim name is how a manifest comes to reference something that
+   does not exist. */
+function recommendationFor(f) {
+  if (f.policy.id === 'ACS.012') {
+    const hit = pvcRecommendations().find((r) => findingRowKey(r.finding) === findingRowKey(f));
+    if (!hit) return null;
+    return { artifact: 'recommended/' + hit.rec.name,
+             value: { claimName: hit.rec.claimName,
+                      volumeName: String(f.detail).replace(/^Volume "([^"]+)".*/, '$1') },
+             warnings: hit.rec.warnings };
+  }
+  if (f.policy.id === 'ACS.017') {
+    const art = serviceAccountArtifact({ objName: f.obj, namespace: f.ns || 'default' });
+    return { artifact: 'recommended/' + art.name,
+             value: { saName: art.saName }, warnings: art.warnings };
+  }
+  return null;
+}
+
+function markRecommendationApplied(f) {
+  const key = findingRowKey(f);
+  if (RESOLVED.has(key)) {
+    RESOLVED.delete(key);
+    delete f.resolution;
+    optOutSave();
+    applyResolutions(STATE.scanned);
+    pruneFindingSelection();
+    render();
+    flash('Marked as not applied. ' + f.policy.id + ' on ' + f.obj + ' is manual again.');
+    return;
+  }
+  const rec = recommendationFor(f);
+  if (!rec) {
+    flash('No recommended file was generated for this finding, so there is nothing to ' +
+      'point the fix at.', FLASH_REFUSAL_MS);
+    return;
+  }
+  RESOLVED.set(key, resolutionRecord(f, rec.artifact, rec.value));
+  f.resolution = RESOLVED.get(key);
+  optOutSave();
+  applyResolutions(STATE.scanned);
+  render();
+  flash(f.policy.id + ' on ' + f.obj + ' is ready to fix, using ' +
+    (rec.value.claimName || rec.value.saName) + ' from ' + rec.artifact +
+    '. Tick the row to include it, and make sure that file is applied first.');
+}
+
 function handleOptOutForm(ev, form) {
   const row = ev.target.closest('tr.fdet');
   const owner = row && row.previousElementSibling;
@@ -2981,6 +3203,11 @@ function commitFix(f, pv) {
     STATE.history.push({
       fileName: pv.file.name,
       prevDocs: structuredClone(pv.file.docs),
+      /* This one fix's own before and after, kept so a per fix patch can be built later.
+         Without them the patch export had to diff the original against the final state,
+         which put every fix applied to an object into every patch file for that object. */
+      beforeDoc: pv.res.beforeDoc ? structuredClone(pv.res.beforeDoc) : null,
+      afterDoc: pv.res.afterDoc ? structuredClone(pv.res.afterDoc) : null,
       finding: f, changes: pv.changes,
     });
     pv.file.docs = pv.res.docs;
@@ -3423,21 +3650,45 @@ $('btnPatches').addEventListener('click', async () => {
       if (f) { zip.file('new/' + h.generatedFile, dumpDocs(f.docs)); n++; }
       continue;
     }
-    const file = fileOf(h.fileName);
-    if (!file || !file.originalDocs) continue;
-    const idx = file.docs.findIndex((d) => nameOf(d) === h.finding.obj);
-    const orig = file.originalDocs.find((d) => nameOf(d) === h.finding.obj);
-    if (idx < 0 || !orig) continue;
-    const patch = buildMergePatch(orig, file.docs[idx]);
-    zip.file('patches/' + h.finding.policy.id + '_' + h.finding.obj.replace(/[^A-Za-z0-9]/g, '_') + '.yaml',
+    /* Diff this fix's own before and after.
+     *
+     * This used to diff the file's original state against its final state, so a Deployment
+     * with a cpu fix and a memory fix produced two patch files that were byte for byte
+     * identical, each containing both changes while being named after one of them. Anyone
+     * applying a subset got fields from fixes they had not chosen. */
+    if (!h.beforeDoc || !h.afterDoc) continue;
+    const patch = buildMergePatch(h.beforeDoc, h.afterDoc);
+    const target = (h.afterDoc.kind || 'Unknown').toLowerCase() + '/' +
+      ((h.afterDoc.metadata && h.afterDoc.metadata.name) || 'unnamed');
+    const nsFlag = (h.afterDoc.metadata && h.afterDoc.metadata.namespace)
+      ? ' -n ' + h.afterDoc.metadata.namespace : '';
+    n++;
+    zip.file('patches/' + String(n).padStart(3, '0') + '_' + h.finding.policy.id + '_' +
+        h.finding.obj.replace(/[^A-Za-z0-9]/g, '_') + '.yaml',
       '# Strategic merge patch generated by ' + ACS_TOOL + '\n' +
       '# ' + h.finding.policy.id + ' ' + h.finding.policy.acsPolicy + '\n' +
+      '#\n' +
+      '# Apply this as a STRATEGIC merge patch, never as a plain merge patch:\n' +
+      '#\n' +
+      '#   oc patch ' + target + nsFlag + ' --type=strategic --patch-file=' +
+        String(n).padStart(3, '0') + '_' + h.finding.policy.id + '_' +
+        h.finding.obj.replace(/[^A-Za-z0-9]/g, '_') + '.yaml\n' +
+      '#\n' +
+      '# The container list below carries only the containers this fix touched, and only the\n' +
+      '# fields it changed. A strategic patch merges that list by container name and leaves\n' +
+      '# every other container and field alone. That is already the default for oc patch\n' +
+      '# and kubectl patch, so the command above spells out what you would get anyway.\n' +
+      '#\n' +
+      '# It spells it out because --type=merge does something else entirely: a JSON merge\n' +
+      '# patch REPLACES the whole container list with what this file contains, deleting\n' +
+      '# the image, ports, env and every container not named here. Do not reach for it,\n' +
+      '# and do not feed this file to a tool that applies JSON merge patches.\n' +
+      '#\n' +
       '# Apply through your GitOps process. This file is data, not a command.\n' +
       jsyaml.dump(patch, { noRefs: true }));
-    n++;
   }
   if (!n) { flash('No changes applied yet, so there are no patches to write.', FLASH_REFUSAL_MS); return; }
-  zip.file('README.md', '# Merge patches\n\nOne strategic merge patch per applied fix, containing only the changed fields.\nUse these when the manifests are templated by Helm or Kustomize and cannot be edited directly.\n\nGenerated by ' + ACS_TOOL + '.\n');
+  zip.file('README.md', '# Merge patches\n\nOne strategic merge patch per applied fix, containing only the fields that fix changed.\nUse these when the manifests are templated by Helm or Kustomize and cannot be edited directly.\n\n## Apply them as strategic patches\n\n    oc patch <kind>/<name> -n <namespace> --type=strategic --patch-file=<file>\n\nStrategic is already the default for `oc patch` and `kubectl patch`, so that command\nspells out what you would get anyway. It spells it out because `--type=merge` does\nsomething else entirely.\n\nThese patches name a single container inside\n`spec.template.spec.containers`, and only the fields that changed on it. A strategic\npatch merges that list by container name and leaves every other container and field\nalone. A JSON merge patch, which is `--type=merge`, replaces the entire container list\nwith what the patch contains, deleting the image, ports, env and any other container in\nthe workload. Do not use it here, and do not feed these files to a tool that applies\nJSON merge patches.\n\nThe files are numbered in the order the fixes were applied. Apply them in that order.\n\nGenerated by ' + ACS_TOOL + '.\n');
   download('acs_merge_patches_' + stamp() + '.zip', await zip.generateAsync({ type: 'blob' }));
   flash(n + ' patch file(s) downloaded.');
 });
@@ -3451,6 +3702,22 @@ $('btnChangeLog').addEventListener('click', () => {
 });
 
 /* --------------------------------------------------------------- input wiring */
+
+$('btnResPanel').addEventListener('click', () => {
+  const f = $('resForm');
+  f.classList.toggle('hidden');
+  if (!f.classList.contains('hidden')) resFillPanel();
+});
+$('btnResReset').addEventListener('click', () => {
+  resSettings({ mode: 'multiplier', cpuMultiplier: 5, memMultiplier: 4,
+    cpuFloor: '500m', memFloor: '512Mi', cpuRequest: '100m', memRequest: '128Mi' });
+  resFillPanel();
+  flash('Resource limit settings are back to the defaults.');
+});
+for (const [id] of RES_FIELDS) {
+  const el = $(id);
+  if (el) el.addEventListener('change', () => { resApplySettings(); });
+}
 
 $('btnStep').addEventListener('click', startStepping);
 $('btnApplyAll').addEventListener('click', reviewApplyAll);
@@ -4069,6 +4336,11 @@ if ($('btnExportFixed')) $('btnExportFixed').addEventListener('click', async () 
   zip.file('READ_THIS_FIRST.md', readme);
   if (optOutCount()) zip.file('exceptions.json', JSON.stringify(optOutBundle(), null, 2));
   for (const r of pvcRecommendations()) zip.file('recommended/' + r.rec.name, r.rec.text);
+  for (const f of (STATE.findings || [])) {
+    if (f.policy.id !== 'ACS.017' || f.optOut) continue;
+    const art = serviceAccountArtifact({ objName: f.obj, namespace: f.ns || 'default' });
+    zip.file('recommended/' + art.name, art.text);
+  }
   for (const f of touched) zip.file('corrected/' + f.name, dumpDocs(f.docs));
   for (const g of generated) zip.file('corrected/' + g.name, g.text);
   const blob = await zip.generateAsync({ type: 'blob' });
@@ -4199,6 +4471,50 @@ function pvcSection(recs) {
     L.push('');
     for (const w of r.rec.warnings) L.push('* ' + w);
     L.push('');
+  }
+  return L;
+}
+
+/* What must exist before the corrected YAML is applied, for the manual findings that were
+   marked resolved. The tool has no cluster access, so this is the operator's assertion and
+   the verification command is printed rather than run. Apply the manifest before the claim
+   exists and the pod sits in Pending on persistentvolumeclaim not found, which is the
+   ACS.010 dangling reference failure wearing different clothes. */
+function resolutionPrereqSection(applied) {
+  const L = [];
+  const hits = (applied || []).filter((f) => f.resolution);
+  if (!hits.length) return L;
+  L.push('');
+  L.push('## These must exist before you apply anything');
+  L.push('');
+  L.push(hits.length + ' manual finding(s) were fixed because you marked the matching');
+  L.push('recommendation as applied. The corrected YAML now references objects that have to');
+  L.push('be in the cluster already.');
+  L.push('');
+  for (const f of hits) {
+    const r = f.resolution;
+    const ns = f.ns || 'default';
+    L.push('### ' + f.policy.id + ' on ' + f.obj);
+    L.push('');
+    L.push('From `' + (r.artifact || 'recommended/') + '`, recorded ' + (r.when || '') + '.');
+    L.push('');
+    L.push('```sh');
+    if (r.claimName) {
+      L.push('# Confirm the claim exists and is Bound, not just created.');
+      L.push('oc get pvc ' + r.claimName + ' -n ' + ns);
+      L.push('# Pending means no volume was provisioned, and the pod will wait on it too.');
+    }
+    if (r.saName) {
+      L.push('# Confirm the account exists.');
+      L.push('oc get serviceaccount ' + r.saName + ' -n ' + ns);
+    }
+    L.push('```');
+    L.push('');
+    if (r.claimName) {
+      L.push('Nothing was copied out of the host path. Mounting the claim gives the container');
+      L.push('an empty volume. If this workload is stateful, migrate the data before applying.');
+      L.push('');
+    }
   }
   return L;
 }
@@ -4376,6 +4692,7 @@ function buildExportReadme(applied, skipped, generated, touched, built) {
       L.push('');
     }
   }
+  for (const line of resolutionPrereqSection(applied)) L.push(line);
   for (const line of secretPrereqSection(applied, generated)) L.push(line);
   for (const line of pvcSection(pvcRecommendations())) L.push(line);
   for (const line of namespaceSection(applied)) L.push(line);

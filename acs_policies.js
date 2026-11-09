@@ -27,7 +27,7 @@
    test/version.cjs asserts it agrees with the newest CHANGELOG heading and with the git
    tag when one is checked out. A tool whose banner disagrees with its tag cannot be used
    as evidence, because you cannot tell which build produced a given report. */
-const ACS_VERSION = '1.11.0';
+const ACS_VERSION = '1.13.0';
 const ACS_TOOL = "DJ's ACS Auditor v" + ACS_VERSION;
 
 /* ACS severity scale and the weight each carries in the posture score. A Critical costs
@@ -508,6 +508,29 @@ const ACS_POLICIES = [
   rationale: 'A hostPath mount pierces container isolation. Mounting / or /etc is direct node compromise, and even a narrow path enables persistence and credential theft on the host.',
   remediation: 'Requires a human decision: replace the hostPath with a PersistentVolumeClaim, ConfigMap, Secret or emptyDir. If a node path is genuinely unavoidable, mount it readOnly, scope it to the narrowest directory and pair it with an admission policy.',
   fixKind: 'manual',
+  /* Mechanical only once somebody has said which claim to use. The edit itself was never the
+     hard part; the missing input was. resolution.claimName arrives from the recommended PVC
+     the operator applied, so the name the manifest points at is the name in the file they
+     just created rather than one they retyped. */
+  fix(doc, finding) {
+    const r = finding && finding.resolution;
+    if (!r || !r.claimName) return null;
+    const ps = podSpec(doc);
+    if (!ps || !Array.isArray(ps.volumes)) return null;
+    const ch = [];
+    for (const v of ps.volumes) {
+      if (!v || !v.hostPath) continue;
+      if (r.volumeName && v.name !== r.volumeName) continue;
+      if (SOCKET_PATHS.includes(String(v.hostPath.path || ''))) continue;
+      const was = String(v.hostPath.path || '?');
+      delete v.hostPath;
+      v.persistentVolumeClaim = { claimName: r.claimName };
+      ch.push('volume "' + v.name + '": hostPath ' + was + ' now a claim on "' + r.claimName
+        + '". THE CLAIM MUST EXIST FIRST or the pod stays Pending, and nothing was copied '
+        + 'out of ' + was + '.');
+    }
+    return ch.length ? ch : null;
+  },
   check(doc) {
     const ps = podSpec(doc);
     if (!ps || !Array.isArray(ps.volumes)) return [];
@@ -531,7 +554,7 @@ const ACS_POLICIES = [
   stig: 'Resource limit controls (verify)',
   description: 'Alert on containers without CPU requests or limits',
   rationale: 'Without limits a single pod can exhaust node CPU and evict its neighbours. It is a denial of service primitive available to any compromised or simply buggy workload.',
-  remediation: 'Set resources.requests.cpu and resources.limits.cpu on every container. Values inserted by the fix are placeholders and must be tuned to the real workload before deploy.',
+  remediation: 'Set resources.requests.cpu and resources.limits.cpu on every container. The fix never changes a value that is already there. A missing limit is derived from the request, at the request times the multiplier or the floor, whichever is larger. A limit derived this way is only as good as the request it came from, and a request the fix had to invent is a placeholder. Measure with scripts/acs_resources.sh before you trust either.',
   fixKind: 'auto',
   check(doc) {
     return eachC(doc, (c, l) => {
@@ -543,17 +566,7 @@ const ACS_POLICIES = [
         path: l + '.' + c.name + '.resources.cpu' } : null;
     });
   },
-  fix(doc) {
-    return eachC(doc, (c) => {
-      if (!c.resources) c.resources = {};
-      const ch = [];
-      if (!c.resources.requests) c.resources.requests = {};
-      if (!c.resources.limits) c.resources.limits = {};
-      if (!c.resources.requests.cpu) { c.resources.requests.cpu = '100m'; ch.push('container "' + c.name + '": cpu request 100m (PLACEHOLDER, tune it)'); }
-      if (!c.resources.limits.cpu) { c.resources.limits.cpu = '500m'; ch.push('container "' + c.name + '": cpu limit 500m (PLACEHOLDER, tune it)'); }
-      return ch.length ? ch : null;
-    });
-  } },
+  fix(doc) { return applyResourceFix(doc, 'cpu'); } },
 
 { id: 'ACS.014',
   acsPolicy: 'No memory request or limit specified',
@@ -566,7 +579,7 @@ const ACS_POLICIES = [
   stig: 'Resource limit controls (verify)',
   description: 'Alert on containers without memory requests or limits',
   rationale: 'A container with no memory limit can consume the node until the kernel OOM killer intervenes, taking unrelated workloads with it. Memory is the resource that actually takes nodes down.',
-  remediation: 'Set resources.requests.memory and resources.limits.memory on every container. Values inserted by the fix are placeholders and must be tuned before deploy.',
+  remediation: 'Set resources.requests.memory and resources.limits.memory on every container. The fix never changes a value that is already there. A missing limit is derived from the request, at the request times the multiplier or the floor, whichever is larger, which is why a 10Mi request yields the 512Mi floor rather than 40Mi. Memory is not compressible: too low a limit is an OOM kill, not throttling. Measure with scripts/acs_resources.sh before you trust a derived number.',
   fixKind: 'auto',
   check(doc) {
     return eachC(doc, (c, l) => {
@@ -578,17 +591,7 @@ const ACS_POLICIES = [
         path: l + '.' + c.name + '.resources.memory' } : null;
     });
   },
-  fix(doc) {
-    return eachC(doc, (c) => {
-      if (!c.resources) c.resources = {};
-      const ch = [];
-      if (!c.resources.requests) c.resources.requests = {};
-      if (!c.resources.limits) c.resources.limits = {};
-      if (!c.resources.requests.memory) { c.resources.requests.memory = '128Mi'; ch.push('container "' + c.name + '": memory request 128Mi (PLACEHOLDER, tune it)'); }
-      if (!c.resources.limits.memory) { c.resources.limits.memory = '512Mi'; ch.push('container "' + c.name + '": memory limit 512Mi (PLACEHOLDER, tune it)'); }
-      return ch.length ? ch : null;
-    });
-  } },
+  fix(doc) { return applyResourceFix(doc, 'memory'); } },
 
 { id: 'ACS.015',
   acsPolicy: 'Latest tag',
@@ -656,6 +659,19 @@ const ACS_POLICIES = [
   rationale: 'The default service account is shared by every pod in the namespace that does not opt out. Any RBAC granted to it, now or in future, silently flows to all of them.',
   remediation: 'Requires a human decision: create a dedicated ServiceAccount per workload and set spec.serviceAccountName. The account must exist before the workload deploys, so a scanner cannot do this safely on its own.',
   fixKind: 'manual',
+  /* Mechanical once a service account has been named. The recommended artifact creates a
+     bare account with no RoleBindings, which is strictly better than the namespace default
+     that every other workload in the namespace also uses. */
+  fix(doc, finding) {
+    const r = finding && finding.resolution;
+    if (!r || !r.saName) return null;
+    const ps = podSpec(doc);
+    if (!ps) return null;
+    if (ps.serviceAccountName === r.saName) return null;
+    ps.serviceAccountName = r.saName;
+    return ['pod: serviceAccountName set to "' + r.saName + '". THAT ACCOUNT MUST EXIST '
+      + 'FIRST or the pod will not be admitted.'];
+  },
   check(doc) {
     const ps = podSpec(doc);
     if (!ps) return [];
@@ -3192,6 +3208,171 @@ function findingKey(f) { return f.file + '|' + f.obj + '|' + f.policy.id; }
  */
 const ACS_ANNOTATION = 'acs-auditor/applied';
 
+/* Resource quantities, parsed and formatted.
+ *
+ * The two resource fixes inserted frozen placeholders and never looked at what was already
+ * there. Deriving a limit from a real request is better, and it needs quantity arithmetic,
+ * which is where silent wrongness lives: Kubernetes accepts 128Mi and 128M and they differ
+ * by five per cent, accepts 1e3, accepts a bare byte count, and accepts 0.5 for CPU.
+ *
+ * The output is formatted back into the largest binary unit that divides evenly, so a
+ * derived limit reads as 2Gi rather than 2147483648 and a reviewer can check it by eye. */
+const MEM_UNITS = { Ki: 1024, Mi: 1048576, Gi: 1073741824, Ti: 1099511627776,
+                    K: 1000, M: 1000000, G: 1000000000, T: 1000000000000,
+                    k: 1000 };
+
+function parseCpu(q) {
+  const v = String(q == null ? '' : q).trim();
+  if (!v) return NaN;
+  if (/^[0-9.]+m$/.test(v)) return parseFloat(v) / 1000;
+  const n = Number(v);
+  return isNaN(n) ? NaN : n;
+}
+
+function formatCpu(cores) {
+  if (!(cores > 0)) return '10m';
+  const milli = Math.ceil(cores * 1000);
+  /* Whole cores read better as 2 than 2000m, and Kubernetes accepts both. */
+  return (milli % 1000 === 0) ? String(milli / 1000) : (milli + 'm');
+}
+
+function parseMem(q) {
+  const v = String(q == null ? '' : q).trim();
+  if (!v) return NaN;
+  const m = v.match(/^([0-9.eE+-]+)\s*([A-Za-z]+)?$/);
+  if (!m) return NaN;
+  const n = Number(m[1]);
+  if (isNaN(n)) return NaN;
+  if (!m[2]) return n;
+  const mult = MEM_UNITS[m[2]];
+  return mult === undefined ? NaN : n * mult;
+}
+
+function formatMem(bytes) {
+  if (!(bytes > 0)) return '1Mi';
+  const b = Math.ceil(bytes);
+  for (const u of ['Ti', 'Gi', 'Mi', 'Ki']) {
+    const f = MEM_UNITS[u];
+    /* The quotient has to be readable as well as exact. 2048000000 divides evenly by Ki and
+       comes out as 2000000Ki, which is correct and useless to a reviewer, so a unit only
+       wins if it also gets the number under four digits. */
+    if (b >= f && b % f === 0 && b / f < 8192) return (b / f) + u;
+  }
+  /* Not an even multiple of anything, so round up to the next whole Mi rather than emitting
+     a raw byte count nobody can check. Up, never down: rounding a memory limit down is the
+     direction that gets a container killed. */
+  return Math.ceil(b / MEM_UNITS.Mi) + 'Mi';
+}
+
+/* The settings behind both resource fixes. Read through a getter so the page can set them
+   without this module knowing the page exists. */
+const RES_SETTINGS = {
+  cpuRequest: '100m',
+  memRequest: '128Mi',
+  cpuMultiplier: 5,
+  memMultiplier: 4,
+  cpuFloor: '500m',
+  memFloor: '512Mi',
+  mode: 'multiplier',
+};
+
+function resSettings(over) {
+  if (over) for (const k of Object.keys(RES_SETTINGS)) {
+    if (over[k] !== undefined && over[k] !== null && over[k] !== '') RES_SETTINGS[k] = over[k];
+  }
+  return RES_SETTINGS;
+}
+
+/* Is the OTHER resource on this container explicitly pinned, request equal to limit?
+ *
+ * That is the only evidence of intent available from the manifest. A pod is Guaranteed only
+ * when every container pins both resources, which cannot be true here because a value is
+ * missing, so this reads the sibling resource rather than the pod's QoS class. It is an
+ * inference and it is stated in the change note every time it fires rather than applied
+ * quietly. */
+function siblingIsPinned(c, kind) {
+  const other = kind === 'cpu' ? 'memory' : 'cpu';
+  const r = (c.resources && c.resources.requests) || {};
+  const l = (c.resources && c.resources.limits) || {};
+  if (!r[other] || !l[other]) return false;
+  const pr = other === 'cpu' ? parseCpu(r[other]) : parseMem(r[other]);
+  const pl = other === 'cpu' ? parseCpu(l[other]) : parseMem(l[other]);
+  return !isNaN(pr) && !isNaN(pl) && pr === pl;
+}
+
+/* What to put where, and why, for one container and one resource. */
+function resourcePlan(c, kind, settings) {
+  const cfg = settings || RES_SETTINGS;
+  const isCpu = kind === 'cpu';
+  const parse = isCpu ? parseCpu : parseMem;
+  const fmt = isCpu ? formatCpu : formatMem;
+  const r = (c.resources && c.resources.requests) || {};
+  const l = (c.resources && c.resources.limits) || {};
+  const haveReq = !!r[kind], haveLim = !!l[kind];
+  const mult = isCpu ? Number(cfg.cpuMultiplier) : Number(cfg.memMultiplier);
+  const floor = parse(isCpu ? cfg.cpuFloor : cfg.memFloor);
+  const out = { request: null, limit: null, notes: [] };
+
+  /* A limit with no request: Kubernetes already defaults the request to the limit, so
+     writing that down changes nothing and is the least surprising thing to record. */
+  if (!haveReq && haveLim) {
+    out.request = String(l[kind]);
+    out.notes.push('request set to the existing limit, which is what Kubernetes already '
+      + 'defaults it to');
+    return out;
+  }
+
+  const reqRaw = haveReq ? String(r[kind]) : String(isCpu ? cfg.cpuRequest : cfg.memRequest);
+  if (!haveReq) {
+    out.request = reqRaw;
+    out.notes.push('request ' + reqRaw + ' is a PLACEHOLDER, nothing in the manifest to '
+      + 'derive it from');
+  }
+  if (haveLim) return out;
+
+  const reqVal = parse(reqRaw);
+  if (isNaN(reqVal) || !(reqVal > 0)) {
+    out.limit = fmt(floor);
+    out.notes.push('limit set to the floor, because the request "' + reqRaw
+      + '" could not be read as a quantity');
+    return out;
+  }
+
+  const guaranteed = cfg.mode === 'guaranteed' || siblingIsPinned(c, kind);
+  if (guaranteed) {
+    out.limit = fmt(reqVal);
+    out.notes.push(cfg.mode === 'guaranteed'
+      ? 'limit set equal to the request for Guaranteed QoS, as selected'
+      : 'limit set equal to the request because ' + (isCpu ? 'memory' : 'cpu')
+        + ' on this container is already pinned request equal to limit, which reads as '
+        + 'Guaranteed being intended. INFERRED, change the mode if that is wrong');
+    /* The floor cannot apply here. Guaranteed means limit equals request, so clearing a
+       floor would mean raising the request, and an existing request is not ours to raise.
+       Saying nothing would leave a 10Mi memory limit in place under a setting the operator
+       chose expecting a floor of 512Mi, so the tension is reported rather than resolved. */
+    if (reqVal < floor) {
+      out.notes.push('WARNING: that is below the ' + fmt(floor) + ' floor, which Guaranteed '
+        + 'QoS cannot honour without raising the request, and an existing request is not '
+        + 'changed by this tool. Either raise the request yourself or switch off Guaranteed '
+        + 'for this workload');
+    }
+    return out;
+  }
+
+  const scaled = reqVal * mult;
+  if (scaled < floor) {
+    out.limit = fmt(floor);
+    out.notes.push('limit raised to the floor ' + fmt(floor) + ': the request ' + reqRaw
+      + ' times ' + mult + ' is only ' + fmt(scaled) + ', and a limit that small is '
+      + (isCpu ? 'throttling waiting to happen' : 'an OOM kill on the first spike'));
+  } else {
+    out.limit = fmt(scaled);
+    out.notes.push('limit ' + fmt(scaled) + ' derived from the request ' + reqRaw + ' times '
+      + mult + '. Derived, not measured: it is only as good as that request');
+  }
+  return out;
+}
+
 /* The Secret the ACS.010 fix points at, as an artifact rather than a sentence.
  *
  * The fix rewrites a literal credential to a secretKeyRef and the Secret does not exist.
@@ -3285,6 +3466,30 @@ function pvcRecommendation(opts) {
     }, { noRefs: true }),
     volumePatch: jsyaml.dump({ name: vol, persistentVolumeClaim: { claimName: name } },
       { noRefs: true }),
+  };
+}
+
+function serviceAccountArtifact(opts) {
+  const o = opts || {};
+  const name = dns1123(String(o.objName || 'app').split('/').pop() + '-sa');
+  return {
+    name: 'serviceaccount-' + name + '.yaml',
+    saName: name,
+    warnings: [
+      'This account has no RoleBindings and therefore no permissions, which is the point: '
+        + 'it replaces the namespace default account that every other workload shares, so a '
+        + 'token stolen from this pod grants nothing. If the workload does call the '
+        + 'Kubernetes API, bind it the narrowest Role it needs and nothing wider.',
+      'automountServiceAccountToken is false on the account. The pod spec setting wins where '
+        + 'both are present, and ACS.016 sets it there too.',
+    ],
+    text: jsyaml.dump({
+      apiVersion: 'v1',
+      kind: 'ServiceAccount',
+      metadata: { name: name, namespace: o.namespace || 'default',
+        annotations: { 'acs-auditor/recommended-for': String(o.objName || '') } },
+      automountServiceAccountToken: false,
+    }, { noRefs: true }),
   };
 }
 
@@ -3496,6 +3701,32 @@ function dumpDocs(docs) {
   return docs.map((d) => jsyaml.dump(d, { noRefs: true, lineWidth: 120 })).join('---\n');
 }
 
+/* Fill in one missing resource value per container, deriving the limit from whatever request
+   is already there.
+ *
+ * The governing rule is that an existing value is a decision somebody made and this does not
+ * touch it. Only an absent value is written. Raising a request changes what the scheduler
+ * reserves across every replica, and overwriting a limit someone tuned is how a tool loses
+ * trust, so neither happens here no matter what the multiplier works out to. */
+function applyResourceFix(doc, kind) {
+  return eachC(doc, (c) => {
+    const plan = resourcePlan(c, kind);
+    if (plan.request === null && plan.limit === null) return null;
+    if (!c.resources) c.resources = {};
+    const ch = [];
+    if (plan.request !== null) {
+      if (!c.resources.requests) c.resources.requests = {};
+      c.resources.requests[kind] = plan.request;
+    }
+    if (plan.limit !== null) {
+      if (!c.resources.limits) c.resources.limits = {};
+      c.resources.limits[kind] = plan.limit;
+    }
+    for (const n of plan.notes) ch.push('container "' + c.name + '": ' + kind + ' ' + n);
+    return ch.length ? ch : null;
+  });
+}
+
 /* Apply exactly one policy to one object and return the rewritten documents plus a
    description of what changed. One policy at a time is what makes preview, confirm and undo
    possible per fix rather than all or nothing. */
@@ -3509,7 +3740,7 @@ function applyOneFix(fileDocs, finding) {
     if (nameOf(docs[i]) !== finding.obj) continue;
     const snapshot = structuredClone(fileDocs[i]);
     try {
-      const ch = policy.fix(docs[i]);
+      const ch = policy.fix(docs[i], finding);
       if (ch && ch.length) {
         changes.push(...(Array.isArray(ch) ? ch : [ch]));
         beforeDoc = snapshot;
@@ -3811,7 +4042,9 @@ if (typeof module !== 'undefined' && module.exports) {
     escHtml, anchor, buildHtmlReport, buildFindingsJson,
     diffLines, compactDiff, citationsOf, ACS_REFERENCES,
     annotateFixed, templateMeta, ACS_ANNOTATION, runRef, refStamp,
-  secretArtifact, secretArtifactName, secretKeyName,
+  parseCpu, formatCpu, parseMem, formatMem, resourcePlan, resSettings, RES_SETTINGS,
+  siblingIsPinned, applyResourceFix,
+  secretArtifact, secretArtifactName, secretKeyName, serviceAccountArtifact,
   pvcRecommendation, pvcName, dns1123,
   optOutReasonProblem, OPT_OUT_MIN_REASON, optOutRuleProblem, ruleState,
   STANDARDS, STANDARDS_ASOF, STANDARDS_STALE_DAYS, standardsAgeDays, standardsAreStale,

@@ -40,7 +40,25 @@ t('every policy has a STIG reference',E.ACS_POLICIES.every(p=>p.stig&&p.stig!=='
 t('every policy has CVSS score and vector',E.ACS_POLICIES.every(p=>p.score>0&&/^CVSS:3\.1/.test(p.vector)));
 t('ids unique',new Set(E.ACS_POLICIES.map(p=>p.id)).size===20);
 t('auto fixes have a fix function',E.ACS_POLICIES.filter(p=>p.fixKind==='auto').every(p=>typeof p.fix==='function'));
-t('manual policies have no fix function',E.ACS_POLICIES.filter(p=>p.fixKind==='manual').every(p=>!p.fix));
+{
+  const manual = E.ACS_POLICIES.filter((p) => p.fixKind === 'manual');
+  t('there are manual policies, so this is a real check', manual.length >= 3);
+  const withFix = manual.filter((p) => typeof p.fix === 'function');
+  t('some manual policies have a resolution driven fix', withFix.length >= 2);
+  /* The safety property: called without a resolution the fix must do nothing, so a manual
+     finding can never be applied until somebody supplies the missing input. */
+  for (const p of withFix) {
+    const doc = { apiVersion: 'apps/v1', kind: 'Deployment',
+      metadata: { name: 'api', namespace: 'prod' },
+      spec: { template: { metadata: {}, spec: { containers: [{ name: 'c', image: 'q/a:1' }],
+        volumes: [{ name: 'data', hostPath: { path: '/opt/app/data' } }] } } } };
+    const before = JSON.stringify(doc);
+    t('  ' + p.id + ' does nothing without a resolution', !p.fix(doc));
+    t('  ' + p.id + ' leaves the document untouched too', JSON.stringify(doc) === before);
+    t('  ' + p.id + ' also does nothing given a finding with no resolution',
+      !p.fix(doc, { policy: p, obj: 'Deployment/api' }));
+  }
+}
 console.log('\nScanning');
 const files=[E.parseFileText('app.yaml',SRC)];
 t('file parsed',files[0].errors.length===0&&files[0].docs.length===1);

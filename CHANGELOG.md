@@ -11,6 +11,114 @@ at least; removing or renaming one is a major.
 Every release is tagged. `git tag -l` is the list, and the tag matches the version this
 tool stamps into every report and patch header it writes.
 
+## 1.13.0 - 2026-11-04
+
+### Fixed
+
+- **Per fix patch files contained every fix applied to the object, not just their own.**
+  `buildMergePatch` was called with the file's original state and its final state, so a
+  Deployment with a CPU fix and a memory fix produced two patch files that were byte for
+  byte identical, each named after one of the two. Anyone applying a subset of the patches
+  got fields from fixes they had not chosen. Each patch is now built from that one fix's
+  own before and after. Reported from production.
+- Patch files and the patch README now give the exact `oc patch` command and state that it
+  has to be a strategic patch. Strategic is already the default for `oc patch` and
+  `kubectl patch`, so the command spells out what you would get anyway; it spells it out
+  because `--type=merge` does something else entirely. These patches name a single
+  container inside `spec.template.spec.containers`, and a JSON merge patch replaces the
+  entire container list with the patch contents, deleting the image, ports, env and every
+  container not named in it.
+- Patch files are numbered in the order the fixes were applied.
+- `formatMem` could return a correct but unreadable quantity such as `2000000Ki`. A unit is
+  now only chosen if the quotient also stays under four digits.
+
+### Changed
+
+- **ACS.013 and ACS.014 derive the limit from the request instead of inserting a frozen
+  placeholder.** A value already present on the container is never overwritten, for either
+  requests or limits: only a missing value is filled in. Raising a request changes what the
+  scheduler reserves across every replica, and overwriting a tuned limit is not this tool's
+  decision to make.
+  - The limit is the request times the multiplier, or the floor, whichever is larger.
+    Defaults are 5x for CPU with a 500m floor, and 4x for memory with a 512Mi floor, so a
+    10Mi memory request yields 512Mi rather than 40Mi.
+  - Where a container has no request to derive from, the request itself is a placeholder
+    and the change note says so in those words.
+  - Where only a limit is present, the request is set to match it, which is what Kubernetes
+    already defaults it to.
+  - A Guaranteed mode sets the limit equal to the request. It is also inferred, per
+    container, when the other resource on that container is already pinned request equal to
+    limit. That inference is stated in the change note as INFERRED every time it fires; it
+    reads intent from the sibling resource and will occasionally be wrong.
+  - Guaranteed cannot honour the floor, because clearing it would mean raising the request.
+    When the request is below the floor the change note carries a WARNING naming the floor
+    it could not reach and what to do about it.
+  - Every change note distinguishes derived, raised to the floor, and genuine placeholder.
+    A derived limit is only as good as the request it came from; `scripts/acs_resources.sh`
+    is still the way to get a measured number.
+
+### Added
+
+- Resource limits panel on the Remediate tab: mode, both multipliers, both floors and both
+  default requests, with a worked example showing the arithmetic on real numbers. A value
+  that is not a usable quantity is refused and named rather than silently defaulted.
+- CLI flags `--cpu-multiplier`, `--mem-multiplier`, `--cpu-floor`, `--mem-floor`,
+  `--cpu-request`, `--mem-request` and `--guaranteed`. A bad value exits 2 with the value
+  quoted back.
+- `test/page.cjs` suite `resourceLimits`, 49 assertions. Every one was mutation tested;
+  two of them failed to fail on the first attempt and were rewritten.
+
+## 1.12.0 - 2026-10-30
+
+### Added
+
+- **A manual finding can be marked resolved, and then it is fixable.** ACS.012 and ACS.017
+  were manual because the right answer needed an input the scanner cannot see: which claim,
+  which service account. The edit itself was never the hard part. Apply the matching file out
+  of `recommended/`, press Mark applied on the row, and the checkbox enables. The fix then
+  rewrites the volume to that claim, or sets `serviceAccountName`, using the name from the
+  file you applied rather than one you retyped.
+
+  A recommended ServiceAccount is now generated too, deliberately bare with no RoleBindings,
+  which is strictly better than the namespace default that every other workload shares.
+
+  ACS.011 and ACS.020 stay manual. They are resolved by removing something, not by editing a
+  field, and a resolution would not help.
+
+- **A third posture card.** Current, after auto fixes, and after auto fixes plus the
+  resolutions recorded. A workload hardened in every respect but one `hostPath` read 91 and
+  94, while actually resolving it reached 100, and those points were invisible: manual
+  findings always count against the projected score, so the tool offered no feedback for
+  doing the hard work and the same feedback for waiving it as for fixing it.
+
+- **Resolutions ride in the exceptions file as a second entry type**, with the policy, object,
+  the value, the artifact it came from and a timestamp. One document to hand up the chain
+  showing both what was fixed and what was accepted, rather than two.
+
+  The prerequisite ordering is the same as the Secret work: the export prints
+  `oc get pvc <name> -n <ns>` ahead of the apply instructions, warns that Pending means the
+  pod waits too, and repeats that nothing was copied out of the host path. The tool has no
+  cluster access, so a resolution is your assertion and the verification is yours to run.
+
+### Fixed
+
+- **`renderRemediateTab()` was still writing the posture cards.** It runs after `render()`, so
+  it silently replaced whatever the Audit half had put there, which is why a third card added
+  in `render()` never appeared at all. The comment directly above that block claimed the
+  problem had been removed in the page merge; it had not. `render()` is now the only writer
+  and the remediate specific numbers moved into it.
+
+- **A resolutions only exceptions file could not be loaded back.** The shape check accepted a
+  file carrying `entries` or `rules` and rejected anything else as not ours, so an export
+  holding only resolutions was discarded whole.
+
+### Changed
+
+- `manual policies have no fix function` was asserted in the suite and is now deliberately
+  false. Replaced with the property that actually matters: a manual policy's fix must do
+  nothing when called without a resolution, so a manual finding can never be swept into a
+  bulk apply.
+
 ## 1.11.0 - 2026-10-11
 
 ### Added

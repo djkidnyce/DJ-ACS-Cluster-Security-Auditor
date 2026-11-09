@@ -2040,6 +2040,149 @@ async function annotations() {
   h9.cleanup();
   h8.cleanup();
 
+
+  console.log('\n  A manual finding becomes fixable once its recommendation is applied');
+  /* The only lever the tool offered on a manual finding was an exception, and an exception
+     does not move the score. So a team doing the work properly got the same feedback as a
+     team waiving it. The value comes out of the generated artifact rather than the keyboard,
+     because a retyped claim name is how a manifest comes to reference something absent. */
+  const hR = await open('dj_acs_auditor.html',
+    'window.__load=(i)=>loadItems(i);window.__tab=(t)=>showTab(t);window.__S=()=>STATE;' +
+    'window.__rows=()=>FROWS;window.__res=()=>RESOLVED;window.__bundle=()=>optOutBundle();' +
+    'window.__import=(d)=>optOutImport(d);window.__sync=()=>syncFindingSelection();' +
+    'window.__key=(f)=>findingRowKey(f);');
+  const depR = ['apiVersion: apps/v1', 'kind: Deployment',
+    'metadata: { name: api, namespace: prod }', 'spec:', '  template:', '    spec:',
+    '      containers:', '      - { name: c, image: q/a:1.2.3 }', '      volumes:',
+    '      - { name: data, hostPath: { path: /opt/app/data } }'].join('\n');
+  hR.w.__load([{ name: 'm/a.yaml', text: depR }]);
+  hR.w.__tab('remediate');
+  hR.$('fixMode').value = 'manual';
+  hR.$('fixMode').dispatchEvent(new hR.w.Event('change'));
+
+  const rowOf = (pol) => {
+    const rows = hR.w.__rows();
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i].policy.id === pol) {
+        return hR.$('rtable').querySelector('tbody tr[data-i="' + i + '"]');
+      }
+    }
+    return null;
+  };
+  const clickR = (el) => el.dispatchEvent(new hR.w.Event('click', { bubbles: true }));
+
+  t('a manual finding with a resolution driven fix offers one',
+    !!rowOf('ACS.012').querySelector('button.rres'));
+  t('and its checkbox starts disabled, because nothing is resolved yet',
+    rowOf('ACS.012').querySelector('td.selcell input').disabled === true);
+  /* ACS.011 and ACS.020 are resolved by removing something, not editing a field, so they
+     have no resolution fix and must not offer the button. */
+  const noFix = hR.w.__S().findings.find((f) => f.policy.id === 'ACS.011' || f.policy.id === 'ACS.020');
+  if (noFix) {
+    t('a manual finding with no resolution fix does not offer one',
+      !rowOf(noFix.policy.id).querySelector('button.rres'));
+  }
+
+  clickR(rowOf('ACS.012').querySelector('button.rres'));
+  t('after marking it applied the checkbox enables', rowOf('ACS.012').querySelector('td.selcell input').disabled === false);
+  t('and the row says it is ready', !!rowOf('ACS.012').querySelector('.pill.res'));
+  t('a resolution was recorded', hR.w.__res().size === 1);
+  const rec = Array.from(hR.w.__res().values())[0];
+  t('it carries the claim name from the generated artifact, not typed input',
+    rec.claimName === 'api-data');
+  t('and names the file that was applied', /recommended\/pvc-api-data\.yaml/.test(rec.artifact));
+  t('with a timestamp, so it is an audit record', /^\d{4}-\d{2}-\d{2}/.test(rec.when));
+
+  console.log('\n  It rides in the exceptions file, as a second entry type');
+  const bun = hR.w.__bundle();
+  t('resolutions travel alongside the waivers', Array.isArray(bun.resolutions));
+  t('and there is one', bun.resolutions.length === 1);
+  t('with the policy and the object it belongs to',
+    bun.resolutions[0].policy === 'ACS.012' && /api/.test(bun.resolutions[0].obj));
+  /* A resolution with no value would mark a finding fixable and then produce no fix, which
+     reads as the tool having silently done nothing. */
+  const badImport = hR.w.__import({ mark: 'dj-acs-auditor/exceptions',
+    resolutions: [{ key: 'k1' }, { key: 'k2', claimName: '' }] });
+  t('an imported resolution with no value is rejected', badImport.rejected === 2);
+
+  console.log('\n  The fix it unlocks is the mechanical one');
+  hR.w.eval('FSELECTED.clear(); for (const f of STATE.findings) if (fFixable(f)) FSELECTED.add(findingRowKey(f));');
+  hR.w.__sync();
+  const outR = [];
+  hR.w.download = (n, c) => outR.push({ name: n, text: c });
+  delete hR.w.JSZip;
+  hR.$('btnExportFixed').click();
+  await new Promise((r) => setTimeout(r, 2500));
+  const yR = outR.find((g) => /\.ya?ml$/.test(g.name) && !/^(secret|pvc|serviceaccount|networkpolicy)/.test(g.name));
+  const docR = hR.w.jsyaml.load(yR.text);
+  const volR = docR.spec.template.spec.volumes[0];
+  t('the hostPath is gone', volR.hostPath === undefined);
+  t('and the volume is a claim on the recommended name',
+    volR.persistentVolumeClaim.claimName === 'api-data');
+
+  console.log('\n  And the prerequisite comes before the apply instructions');
+  const mdR = outR.find((g) => /READ_THIS_FIRST/.test(g.name));
+  t('the export says what has to exist first',
+    /These must exist before you apply anything/.test(mdR.text));
+  t('it prints the command to confirm the claim is Bound',
+    /oc get pvc api-data -n prod/.test(mdR.text));
+  t('it warns that Pending means the pod waits too', /Pending/.test(mdR.text));
+  t('it repeats that nothing was copied out of the host path',
+    /[Nn]othing was copied/.test(mdR.text));
+  t('and it appears before the apply instructions',
+    mdR.text.indexOf('must exist before you apply') < mdR.text.indexOf('## Applying them'));
+
+  console.log('\n  Marking it again undoes it');
+  clickR(rowOf('ACS.012').querySelector('button.rres'));
+  t('the resolution is removed', hR.w.__res().size === 0);
+  t('and the finding is manual again',
+    rowOf('ACS.012').querySelector('td.selcell input').disabled === true);
+  hR.cleanup();
+
+  console.log('\n  The score shows what resolving is worth, and only render() owns the cards');
+  /* renderRemediateTab also wrote #cards and ran second, so it silently replaced whatever
+     the Audit half put there and a card added in render() never appeared at all. */
+  const hC = await open('dj_acs_auditor.html',
+    'window.__load=(i)=>loadItems(i);window.__tab=(t)=>showTab(t);window.__rows=()=>FROWS;');
+  const hardened = ['apiVersion: apps/v1', 'kind: Deployment',
+    'metadata: { name: api, namespace: prod }', 'spec:', '  template:', '    spec:',
+    '      serviceAccountName: api-sa', '      automountServiceAccountToken: false',
+    '      containers:', '      - name: c', '        image: q/a:1.2.3',
+    '        securityContext: { privileged: false, allowPrivilegeEscalation: false, runAsNonRoot: true, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }',
+    '        resources: { requests: { cpu: 100m, memory: 128Mi }, limits: { cpu: 500m, memory: 256Mi } }',
+    '      volumes:', '      - { name: data, hostPath: { path: /opt/app/data } }'].join('\n');
+  hC.w.__load([{ name: 'm/a.yaml', text: hardened }]);
+  const cardsOf = () => Array.from(hC.w.document.querySelectorAll('#cards .card'))
+    .map((c) => ({ n: c.querySelector('.num').textContent, l: c.querySelector('.lbl').textContent }));
+  t('there is no resolved card before anything is resolved',
+    !cardsOf().some((c) => /resolved/.test(c.l)));
+  const base = cardsOf();
+  t('the first card is the current posture', /Posture/.test(base[0].l));
+  t('the second is the auto fix projection', /After auto fixes/.test(base[1].l));
+  /* The merged card set, proving render() is the only writer. Before this, switching to the
+     Remediate tab replaced these with a different set. */
+  t('the remediate numbers are on the same card set, one owner',
+    cardsOf().some((c) => /Fixes applied/.test(c.l)) &&
+    cardsOf().some((c) => /Need a decision/.test(c.l)));
+  hC.w.__tab('remediate');
+  hC.$('fixMode').value = 'manual';
+  hC.$('fixMode').dispatchEvent(new hC.w.Event('change'));
+  t('and switching tabs does not replace them',
+    cardsOf().some((c) => /After auto fixes/.test(c.l)));
+  const rowsC = hC.w.__rows();
+  let trC = null;
+  for (let i = 0; i < rowsC.length; i++) {
+    if (rowsC[i].policy.id === 'ACS.012') trC = hC.$('rtable').querySelector('tbody tr[data-i="' + i + '"]');
+  }
+  trC.querySelector('button.rres').dispatchEvent(new hC.w.Event('click', { bubbles: true }));
+  const after3 = cardsOf();
+  const resCard = after3.find((c) => /resolved/.test(c.l));
+  t('a third card appears once something is resolved', !!resCard);
+  t('it names how many', /Plus 1 resolved/.test(resCard.l));
+  t('and it is higher than the auto fix projection, which is the point',
+    Number(resCard.n) > Number(after3.find((c) => /After auto fixes/.test(c.l)).n));
+  hC.cleanup();
+
   console.log('\n  Looking at the page does not stamp what is loaded');
   t('the loaded YAML carries no annotation',
     !/acs-auditor\/applied/.test(w.jsyaml.dump(w.__S().files[0].docs[0])));
@@ -3176,6 +3319,209 @@ async function specBudget() {
   cleanup();
 }
 
+
+/* --------------------------------------------------------- resource limits
+ *
+ * Two defects live here, and both were reported from production.
+ *
+ * The first is that a limit should be derived from whatever request is already present
+ * rather than frozen, and that an existing value is never to be touched.
+ *
+ * The second is the one that cost someone a workload: the per fix patch files were each
+ * built by diffing the file's original state against its final state, so every patch for an
+ * object contained every fix applied to that object while being named after one of them.
+ * Applying what looked like the memory patch therefore also carried the cpu changes, and
+ * applying a subset carried fields nobody had chosen.
+ */
+async function resourceLimits() {
+  const { w, $, cleanup } = await open('dj_acs_auditor.html',
+    'window.__load=(i)=>loadItems(i);window.__tab=(t)=>showTab(t);window.__S=()=>STATE;' +
+    'window.__frows=()=>STATE.findings;window.__requestFix=(f)=>requestFix(f);' +
+    'window.resourcePlan=resourcePlan;');
+  const S = () => w.__S();
+  const DEP = ['apiVersion: apps/v1', 'kind: Deployment',
+    'metadata: { name: payments-api, namespace: prod }', 'spec:', '  template:', '    spec:',
+    '      containers:',
+    '      - name: api', '        image: q/a:1',
+    '        ports: [{ containerPort: 8080 }]',
+    '        env: [{ name: MODE, value: prod }]',
+    '        resources: { requests: { memory: 10Mi } }',
+    '      - name: sidecar', '        image: q/s:2',
+    '        resources: { requests: { cpu: 500m }, limits: { cpu: 500m } }'].join('\n');
+  w.__load([{ name: 'm/api.yaml', text: DEP }]);
+  w.__tab('remediate');
+  $('fixMode').value = 'auto'; $('fixMode').dispatchEvent(new w.Event('change'));
+  $('skipConfirm').checked = true;
+
+  const find = (id) => w.__frows().find((f) => f.policy.id === id && !f.applied);
+  const apply = (id) => { const f = find(id); if (f) w.__requestFix(f); };
+
+  console.log('\n  A limit is derived from the request that is already there');
+  apply('ACS.013');
+  apply('ACS.014');
+  const cur = () => S().files[0].docs[0].spec.template.spec.containers;
+  const api = () => cur().find((c) => c.name === 'api');
+  const side = () => cur().find((c) => c.name === 'sidecar');
+
+  t('the 10Mi request is left exactly as it was found',
+    api().resources.requests.memory === '10Mi');
+  t('and the memory limit is raised to the 512Mi floor rather than 40Mi',
+    api().resources.limits.memory === '512Mi');
+  t('the cpu request it never had is a placeholder',
+    api().resources.requests.cpu === '100m');
+  t('and its cpu limit is that request times five',
+    api().resources.limits.cpu === '500m');
+
+  console.log('\n  Applying the memory fix does not undo the cpu fix');
+  t('cpu survives the memory fix', !!api().resources.limits.cpu);
+  t('memory survives alongside it', !!api().resources.limits.memory);
+  t('the image is untouched', api().image === 'q/a:1');
+  t('the ports are untouched', api().ports[0].containerPort === 8080);
+  t('the env is untouched', api().env[0].name === 'MODE');
+
+  console.log('\n  An existing value is a decision, so it is not overwritten');
+  t('the sidecar cpu request is unchanged', side().resources.requests.cpu === '500m');
+  t('the sidecar cpu limit is unchanged', side().resources.limits.cpu === '500m');
+  t('its memory limit matches its request, because cpu is already pinned',
+    side().resources.limits.memory === side().resources.requests.memory);
+  const infNote = S().history.map((h) => (h.changes || []).join(' ')).join(' ');
+  t('and the change note says that was inferred rather than asserting it quietly',
+    /INFERRED/.test(infNote));
+
+  console.log('\n  One patch file per fix, carrying only that fix');
+  /* jsdom has no working Blob for JSZip to assemble into, which is why every other export
+     suite deletes JSZip and takes the fallback. There is no fallback on this button, so
+     record what the page hands to zip.file instead. That is the artifact under test; JSZip
+     turning a string into bytes is not. */
+  const body = {};
+  let zipped = false;
+  w.JSZip = function () {
+    return {
+      file: (n, c) => { body[n] = c; },
+      generateAsync: () => { zipped = true; return Promise.resolve('ZIPBYTES'); },
+    };
+  };
+  const blobs = [];
+  w.download = (n, c) => blobs.push({ name: n, body: c });
+  $('btnPatches').click();
+  await new Promise((r) => setTimeout(r, 2500));
+  t('a patch zip was written', zipped && blobs.length === 1 && /patches/.test(blobs[0].name));
+  const names = Object.keys(body).filter((n) => /^patches\//.test(n));
+  t('there is a patch for the cpu fix and one for the memory fix',
+    names.length === 2 && names.some((n) => /013/.test(n)) && names.some((n) => /014/.test(n)));
+  const cpuFile = names.find((n) => /013/.test(n));
+  const memFile = names.find((n) => /014/.test(n));
+  const yamlOf = (n) => w.jsyaml.load(body[n].split('\n').filter((l) => l[0] !== '#').join('\n'));
+  const cpuPatch = yamlOf(cpuFile), memPatch = yamlOf(memFile);
+  const pc = (pp, nm) => pp.spec.template.spec.containers.find((c) => c.name === nm);
+
+  t('the cpu patch sets a cpu limit', !!pc(cpuPatch, 'api').resources.limits.cpu);
+  t('the cpu patch does NOT carry the memory fix, which is the defect this locks',
+    pc(cpuPatch, 'api').resources.limits.memory === undefined);
+  t('the memory patch sets a memory limit', !!pc(memPatch, 'api').resources.limits.memory);
+  t('the memory patch does NOT carry the cpu fix',
+    pc(memPatch, 'api').resources.limits.cpu === undefined);
+  t('the two patches are not byte for byte identical', body[cpuFile] !== body[memFile]);
+
+  console.log('\n  The patch says how to apply it, because the wrong type deletes containers');
+  for (const n of [cpuFile, memFile]) {
+    t('  ' + n.replace('patches/', '') + ' names --type=strategic',
+      /--type=strategic/.test(body[n]));
+    t('  ' + n.replace('patches/', '') + ' warns that a plain merge patch replaces the list',
+      /REPLACES the whole container list/.test(body[n]));
+  }
+  t('the README repeats it, since that is what a reviewer reads first',
+    /--type=strategic/.test(body['README.md']));
+  t('the files are numbered so the apply order is not a guess',
+    names.every((n) => /^patches\/\d{3}_/.test(n)));
+
+  console.log('\n  The multipliers and floors are settable from the page');
+  $('btnResPanel').click();
+  t('the panel opens', !$('resForm').classList.contains('hidden'));
+  t('it is filled from the live settings, not from markup defaults',
+    $('resCpuMult').value === '5' && $('resMemMult').value === '4' &&
+    $('resMemFloor').value === '512Mi' && $('resCpuFloor').value === '500m');
+  t('the worked example shows the arithmetic on a real number',
+    /100m becomes 500m/.test($('resWorked').textContent));
+  t('and shows the floor firing, which is the case that surprises people',
+    /10Mi becomes 512Mi/.test($('resWorked').textContent));
+
+  const set = (id, v) => { $(id).value = v; $(id).dispatchEvent(new w.Event('change')); };
+  set('resMemMult', '8');
+  t('changing the memory multiplier is reflected in the worked example',
+    /1Gi becomes 8Gi/.test($('resWorked').textContent));
+  set('resMemFloor', '1Gi');
+  t('changing the floor is reflected too', /10Mi becomes 1Gi/.test($('resWorked').textContent));
+
+  console.log('\n  A value that is not a quantity is refused, not quietly defaulted');
+  set('resMemFloor', '512 megs');
+  t('the problem is named', /512 megs/.test($('resProblem').textContent));
+  t('and it says nothing was changed', /Nothing was changed/.test($('resProblem').textContent));
+  t('the previous good floor is still in force',
+    /10Mi becomes 1Gi/.test($('resWorked').textContent));
+  set('resMemFloor', '1Gi');
+  set('resCpuMult', '0');
+  t('a multiplier below one is refused and named',
+    /cpuMultiplier "0"/.test($('resProblem').textContent));
+  t('and the zero multiplier never reached the arithmetic',
+    /100m becomes 500m/.test($('resWorked').textContent));
+  set('resCpuMult', '-3');
+  t('a negative multiplier is refused too',
+    /cpuMultiplier "-3"/.test($('resProblem').textContent));
+  /* A number input discards non-numeric text before any script sees it, so the value that
+     arrives is the empty string rather than "five". It still has to be refused, and the
+     message has to show what the field actually holds rather than what was typed at it. */
+  set('resCpuMult', 'five');
+  t('text typed into a number field arrives empty, and is still refused',
+    $('resCpuMult').value === '' && /cpuMultiplier ""/.test($('resProblem').textContent));
+
+  /* Leave every field away from its default so the reset has something to undo. Setting
+     them back by hand first made this assertion pass against a reset that did nothing. */
+  set('resCpuMult', '9'); set('resMemMult', '7'); set('resMemFloor', '2Gi');
+  set('resCpuFloor', '900m'); set('resMode', 'guaranteed');
+  t('the fields really are off the defaults before the reset',
+    $('resCpuMult').value === '9' && $('resMemFloor').value === '2Gi');
+  $('btnResReset').click();
+  t('Back to defaults restores every field',
+    $('resCpuMult').value === '5' && $('resMemMult').value === '4' &&
+    $('resMemFloor').value === '512Mi' && $('resCpuFloor').value === '500m' &&
+    $('resMode').value === 'multiplier');
+  t('and the engine settings follow, not just the inputs',
+    /10Mi becomes 512Mi/.test($('resWorked').textContent));
+
+  console.log('\n  Guaranteed mode applies to a container with nothing set');
+  set('resMode', 'guaranteed');
+  t('the panel explains what Guaranteed costs, not just what it gives',
+    /reserve the full amount/.test($('resWorked').textContent));
+  w.__load([{ name: 'm/second.yaml', text: ['apiVersion: apps/v1', 'kind: Deployment',
+    'metadata: { name: bare, namespace: prod }', 'spec:', '  template:', '    spec:',
+    '      containers:', '      - name: only', '        image: q/b:1'].join('\n') }]);
+  $('fixMode').value = 'auto'; $('fixMode').dispatchEvent(new w.Event('change'));
+  $('skipConfirm').checked = true;
+  const bare = () => S().files.find((f) => f.name === 'm/second.yaml')
+    .docs[0].spec.template.spec.containers[0];
+  apply('ACS.013'); apply('ACS.014');
+  t('cpu limit equals cpu request', bare().resources.limits.cpu === bare().resources.requests.cpu);
+  t('memory limit equals memory request',
+    bare().resources.limits.memory === bare().resources.requests.memory);
+  const gNote = S().history.map((h) => (h.changes || []).join(' ')).join(' ');
+  t('and the note says it was the selected mode rather than an inference',
+    /for Guaranteed QoS, as selected/.test(gNote));
+
+  console.log('\n  Guaranteed cannot honour the floor, and says so rather than hiding it');
+  /* A 10Mi request under Guaranteed yields a 10Mi limit. Raising it would mean raising the
+     request, which this tool does not do, so the conflict has to reach the operator. */
+  $('btnResPanel').click(); set('resMode', 'guaranteed'); $('btnResPanel').click();
+  const low = { name: 'c', resources: { requests: { memory: '10Mi' } } };
+  const lowPlan = w.resourcePlan(low, 'memory');
+  t('the limit equals the 10Mi request', lowPlan.limit === '10Mi');
+  t('and a warning names the floor it could not reach',
+    lowPlan.notes.some((n) => /WARNING/.test(n) && /512Mi floor/.test(n)));
+  t('and says why, so it is actionable rather than just alarming',
+    lowPlan.notes.some((n) => /without raising the request/.test(n)));
+  cleanup();
+}
+
 (async () => {
   /* One try around the lot meant one throw cost every suite after it.
    *
@@ -3208,6 +3554,7 @@ async function specBudget() {
     ['selectionUi', selectionUi],
     ['specCases', specCases],
     ['specBudget', specBudget],
+    ['resourceLimits', resourceLimits],
     ['noManifests', () => noManifests('dj_acs_auditor.html')],
   ];
   const only = process.argv.slice(2).filter((a) => a[0] !== '-');
