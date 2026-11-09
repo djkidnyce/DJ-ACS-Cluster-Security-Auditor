@@ -70,6 +70,8 @@ tool stamps into every report and patch header it writes.
 
 ## 1.12.0 - 2026-10-30
 
+> No `1.12.0` tag exists. This version was never released on its own: its changes shipped inside **`v1.13.0`**. The version number was bumped while the work was in progress, and the next tag cut carried it.
+
 ### Added
 
 - **A manual finding can be marked resolved, and then it is fixable.** ACS.012 and ACS.017
@@ -199,6 +201,8 @@ tool stamps into every report and patch header it writes.
 
 ## 1.10.0 - 2026-10-11
 
+> No `1.10.0` tag exists. This version was never released on its own: its changes shipped inside **`v1.11.0`**. The version number was bumped while the work was in progress, and the next tag cut carried it.
+
 Minor rather than patch: the `cis` field on every policy is replaced by `cisK8s` and
 `cisOcp`, which changes the shape of the findings JSON.
 
@@ -249,6 +253,8 @@ Minor rather than patch: the `cis` field on every policy is replaced by `cisK8s`
   still needs doing and is the obvious next piece.
 
 ## 1.9.3 - 2026-10-06
+
+> No `1.9.3` tag exists. This version was never released on its own: its changes shipped inside **`v1.11.0`**. The version number was bumped while the work was in progress, and the next tag cut carried it.
 
 ### Fixed, in the policy catalogue
 
@@ -364,6 +370,8 @@ reading it.
   `Get-Help` works natively and they never had the defect.
 
 ## 1.9.1 - 2026-09-29
+
+> No `1.9.1` tag exists. This version was never released on its own: its changes shipped inside **`v1.9.2`**. The version number was bumped while the work was in progress, and the next tag cut carried it.
 
 ### Fixed
 
@@ -1281,6 +1289,8 @@ rather than being folded into a release that is already out.
 
 ## 1.1.0 - 2026-08-21
 
+> No `1.1.0` tag exists. This version was never released on its own: its changes shipped inside **`v1.2.0`**. The version number was bumped while the work was in progress, and the next tag cut carried it.
+
 ### Fixed
 
 - **The pages reported a posture of 100 out of 100, Grade A, when no manifests had been
@@ -1423,6 +1433,8 @@ rather than being folded into a release that is already out.
   violations panel and the fix routes. Both Word guides updated throughout.
 
 ## 1.0.0 - 2026-08-19
+
+> No `1.0.0` tag exists. This version was never released on its own: its changes shipped inside **`v1.2.0`**. The version number was bumped while the work was in progress, and the next tag cut carried it.
 
 Initial release.
 
