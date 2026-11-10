@@ -1093,14 +1093,14 @@ console.log('\nacs_rollout.sh, driven against a fake cluster');
   const dispatch = src.slice(src.lastIndexOf('case "$CMD" in'));
   const subs = (dispatch.match(/^\s{2}(\w+)\)/gm) || [])
     .map((x) => x.trim().replace(')', ''));
-  t('the case statement has every subcommand this suite drives', subs.length === 7);
+  t('the case statement has every subcommand this suite drives', subs.length === 8);
   const listed = help.out.split('SUBCOMMANDS')[1].split('OPTIONS')[0];
   for (const sub of subs) {
     t('  ' + sub + ' is in the SUBCOMMANDS list, not merely mentioned somewhere',
       new RegExp('^\\s+' + sub + '\\s', 'm').test(listed));
   }
   t('every option the parser accepts is documented too',
-    ['-n', '--namespace', '-o', '--out', '--to-revision', '-h', '--help']
+    ['-n', '--namespace', '-o', '--out', '--to-revision', '--all', '-h', '--help']
       .every((o) => help.out.indexOf(o) !== -1));
   t('it shows a worked example of each of the two rollback verbs',
     /rollout undo/.test(help.out) && /oc rollback/.test(help.out));
@@ -1154,6 +1154,256 @@ console.log('\nacs_rollout.sh, driven against a fake cluster');
   fs.rmSync(work, { recursive: true, force: true });
 }
 
+
+
+/* ------------------------------------------------- acs_rollout.sh drift
+ *
+ * The case this exists for, reported from production: a fix was applied, landed at one
+ * revision, and three revisions later the running template no longer had it. The finding
+ * came back, the YAML on disk was still correct, and the auditor annotation was still on
+ * the object because whatever replaced the template carried its own. Nothing in the tool
+ * could tell that apart from a fix that was never applied.
+ *
+ * drift answers it from the cluster alone. It does not read the annotation to decide which
+ * hardening to expect, because the annotation records a run and not a list of policies, so
+ * doing that would report drift on a policy the operator deliberately left alone. It
+ * compares the live pod template against the template kept in every revision instead.
+ */
+console.log('\nacs_rollout.sh drift, against a cluster that lost a fix');
+{
+  const os = require('os');
+  const { execFileSync } = require('child_process');
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'drift-'));
+  const bin = path.join(work, 'bin');
+  const data = path.join(work, 'data');
+  fs.mkdirSync(bin); fs.mkdirSync(data);
+  const LOG = path.join(work, 'calls.log');
+  const SCRIPT = path.join(DIR, 'acs_rollout.sh');
+
+  const OLD = '2026-11-06 14:02Z / DJ ACS Auditor 1.11.0 / ACS-20261106-1402-007';
+  const NEW = '2026-11-09 09:15Z / DJ ACS Auditor 1.11.0 / ACS-20261109-0915-003';
+
+  const cont = (res) => {
+    const c = { name: 'api', image: 'q/a:1', securityContext: {
+      allowPrivilegeEscalation: false, readOnlyRootFilesystem: true,
+      capabilities: { drop: ['ALL'] } } };
+    if (res) c.resources = { requests: { cpu: '100m', memory: '10Mi' },
+                             limits: { cpu: '500m', memory: '512Mi' } };
+    return c;
+  };
+  const tpl = (res, stamp) => ({
+    metadata: stamp ? { annotations: { 'acs-auditor/applied': stamp } } : {},
+    spec: { containers: [cont(res)], automountServiceAccountToken: false } });
+  const dep = (name, rev, res, stamp) => ({
+    kind: 'Deployment', metadata: { name: name, namespace: 'prod',
+      annotations: { 'deployment.kubernetes.io/revision': String(rev) },
+      managedFields: [
+        { manager: 'kubectl-client-side-apply', operation: 'Update', time: '2026-11-06T14:02:11Z' },
+        { manager: 'kubectl-edit', operation: 'Update', time: '2026-11-07T08:41:55Z' }] },
+    spec: { replicas: 3, template: tpl(res, stamp) }, status: { readyReplicas: 3 } });
+  const rs = (name, owner, rev, res, stamp) => ({
+    kind: 'ReplicaSet', metadata: { name: name, namespace: 'prod',
+      annotations: { 'deployment.kubernetes.io/revision': String(rev) },
+      ownerReferences: [{ kind: 'Deployment', name: owner }] },
+    spec: { template: tpl(res, stamp) } });
+
+  const write = (f, o) => fs.writeFileSync(path.join(data, f), JSON.stringify(o));
+  /* payments-api is DJ's workload: limits at 87, gone by 90, same reference still live.
+     legacy-batch was never hardened and carries no annotation.
+     billing-api is still hardened. Neither control may appear. */
+  /* cart-api exists to pin down WHICH good revision gets named. It has two revisions that
+     still had the fix, 9 and 10, and lost it at 11. The answer must be 10, the newest.
+     The numbers are deliberately either side of ten, because "9" sorts after "10" as a
+     string: a lexical sort would name 9 and look plausible. */
+  write('works.json', { items: [
+    dep('payments-api', 90, false, OLD),
+    dep('legacy-batch', 3, false, null),
+    dep('billing-api', 12, true, OLD),
+    dep('cart-api', 11, false, OLD),
+  ] });
+  write('works_new.json', { items: [
+    dep('payments-api', 90, false, NEW),
+    dep('legacy-batch', 3, false, null),
+    dep('billing-api', 12, true, OLD),
+  ] });
+  write('rss.json', { items: [
+    rs('payments-api-aaa', 'payments-api', 87, true, OLD),
+    rs('payments-api-bbb', 'payments-api', 88, false, OLD),
+    rs('payments-api-ccc', 'payments-api', 89, false, OLD),
+    rs('payments-api-ddd', 'payments-api', 90, false, OLD),
+    rs('legacy-batch-xxx', 'legacy-batch', 3, false, null),
+    rs('billing-api-yyy', 'billing-api', 12, true, OLD),
+    rs('cart-api-r9',  'cart-api', 9,  true,  OLD),
+    rs('cart-api-r10', 'cart-api', 10, true,  OLD),
+    rs('cart-api-r11', 'cart-api', 11, false, OLD),
+  ] });
+  write('empty.json', { items: [] });
+  /* A StatefulSet keeps its history in ControllerRevisions, which nest the template one
+     level deeper under .data. Getting that path wrong would silently report no drift. */
+  write('sts.json', { items: [
+    { kind: 'StatefulSet', metadata: { name: 'clustersync', namespace: 'prod' },
+      spec: { replicas: 1, template: tpl(false, OLD) }, status: { readyReplicas: 1 } },
+  ] });
+  write('crs.json', { items: [
+    { kind: 'ControllerRevision', revision: 4, metadata: { name: 'clustersync-4', namespace: 'prod',
+        ownerReferences: [{ kind: 'StatefulSet', name: 'clustersync' }] },
+      data: { spec: { template: tpl(true, OLD) } } },
+    { kind: 'ControllerRevision', revision: 5, metadata: { name: 'clustersync-5', namespace: 'prod',
+        ownerReferences: [{ kind: 'StatefulSet', name: 'clustersync' }] },
+      data: { spec: { template: tpl(false, OLD) } } },
+  ] });
+
+  fs.writeFileSync(path.join(bin, 'oc'), [
+    '#!/bin/sh',
+    'echo "$@" >> "$OC_LOG"',
+    'case "$1 $2" in',
+    '  "get deployment,statefulset,daemonset") cat "$OC_DATA/${OC_WORKS:-works.json}"; exit 0 ;;',
+    '  "get deploymentconfig") cat "$OC_DATA/empty.json"; exit 0 ;;',
+    '  "get replicasets") cat "$OC_DATA/${OC_RSS:-rss.json}"; exit 0 ;;',
+    '  "get controllerrevisions") cat "$OC_DATA/${OC_CRS:-empty.json}"; exit 0 ;;',
+    '  "get replicationcontrollers") cat "$OC_DATA/empty.json"; exit 0 ;;',
+    'esac',
+    'case "$1" in',
+    '  get)',
+    '    case "$2" in',
+    '      deployment/*|statefulset/*)',
+    '        n=`echo "$2" | sed "s|.*/||"`',
+    '        jq --arg n "$n" \'[.items[]|select(.metadata.name==$n)][0]\' "$OC_DATA/${OC_WORKS:-works.json}"',
+    '        exit 0 ;;',
+    '      *) echo "{\\"items\\":[]}"; exit 0 ;;',
+    '    esac ;;',
+    '  *) echo "FAKE OC REFUSED A WRITE: $*" >&2; exit 99 ;;',
+    'esac',
+  ].join('\n'), { mode: 0o755 });
+
+  const run = (args, extraEnv, shell) => {
+    try {
+      const out = execFileSync(shell || 'bash', [SCRIPT].concat(args), {
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60000,
+        env: Object.assign({}, process.env, {
+          PATH: bin + ':' + process.env.PATH, OC_LOG: LOG, OC_DATA: data,
+        }, extraEnv || {}),
+      });
+      return { out: out, code: 0 };
+    } catch (e) {
+      return { out: (e.stdout || '') + (e.stderr || ''), code: e.status === undefined ? -1 : e.status };
+    }
+  };
+
+  console.log('\n  It finds the lost fix and names the revision that still has it');
+  const d = run(['drift', '-n', 'prod']);
+  t('it exits 0', d.code === 0);
+  t('the affected workload is reported', /deployment\/payments-api in prod/.test(d.out));
+  t('the current revision is stated', /current revision: 90/.test(d.out));
+  t('the cpu request is reported lost', /ACS\.013 cpu request\s+last held at revision 87/.test(d.out));
+  t('the cpu limit too', /ACS\.013 cpu limit\s+last held at revision 87/.test(d.out));
+  t('the memory request too', /ACS\.014 memory request\s+last held at revision 87/.test(d.out));
+  t('the memory limit too', /ACS\.014 memory limit\s+last held at revision 87/.test(d.out));
+  t('it names 87 and not 88, 89 or 90, which no longer had it',
+    !/last held at revision (88|89|90)/.test(d.out));
+  t('the rollback command targets 87',
+    /oc rollout undo deployment\/payments-api -n prod --to-revision=87/.test(d.out));
+
+  console.log('\n  Of several revisions that still had it, the newest is the one named');
+  const cart = d.out.slice(d.out.indexOf('deployment/cart-api'));
+  const cartBlock = cart.slice(0, cart.indexOf('put it back') + 120);
+  t('cart-api is reported', /deployment\/cart-api in prod/.test(cartBlock));
+  t('it names revision 10, the newest that still had the fix',
+    /ACS\.013 cpu request\s+last held at revision 10/.test(cartBlock));
+  t('not revision 9, which is older and also had it',
+    !/last held at revision 9\b/.test(cartBlock));
+  t('and the rollback targets 10 rather than 9',
+    /--to-revision=10/.test(cartBlock) && !/--to-revision=9\b/.test(cartBlock));
+
+  console.log('\n  It does not invent drift');
+  t('a workload that was never hardened is absent', d.out.indexOf('legacy-batch') === -1);
+  t('a workload that is still hardened is absent', d.out.indexOf('billing-api') === -1);
+  t('nothing claims a property the fixture never set, such as host network',
+    d.out.indexOf('host network') === -1);
+  t('and it says plainly that a never applied fix cannot appear here',
+    /never applied at all never held/.test(d.out));
+
+  console.log('\n  Same reference means somebody edited it, and it says so once');
+  t('the verdict is the edit one', /SAME auditor reference/.test(d.out));
+  t('it does not also claim a later auditor apply',
+    d.out.indexOf('DIFFERENT auditor reference') === -1);
+  /* Scoped to one workload on purpose. Counting globally made this assertion fail the
+     moment a second drifting workload joined the fixture, which is the assertion being
+     wrong rather than the output: the verdict is one fact per workload. */
+  const pay = d.out.slice(d.out.indexOf('deployment/payments-api'));
+  const payBlock = pay.slice(0, pay.indexOf('put it back'));
+  t('the verdict appears once in the workload block, not once per lost property',
+    (payBlock.match(/SAME auditor reference/g) || []).length === 1 &&
+    (payBlock.match(/last held at revision/g) || []).length === 4);
+  t('and once per drifting workload across the whole report',
+    (d.out.match(/auditor reference/g) || []).length ===
+    (d.out.match(/^  deployment\//gm) || []).length);
+  t('the writer list is shown, since that is the lead',
+    /kubectl-edit\s+Update\s+2026-11-07T08:41:55Z/.test(d.out));
+  /* A bare list of manager strings is not actionable to somebody who has not seen them
+     before, and the difference between them decides whether the fix goes in the cluster or
+     in somebody's config. */
+  t('and the names are explained rather than left as jargon',
+    /kubectl-edit or oc-edit is a person/.test(d.out));
+  t('it names the tools that will undo the fix again',
+    /Terraform/.test(d.out) && /argocd-application-controller/.test(d.out));
+  t('and says the value belongs in their config rather than the cluster',
+    /belongs in its config, not in/.test(d.out));
+
+  console.log('\n  A different reference means a later apply replaced the template');
+  const d2 = run(['drift', '-n', 'prod'], { OC_WORKS: 'works_new.json' });
+  t('the verdict flips', /DIFFERENT auditor reference/.test(d2.out));
+  t('and the edit verdict is not also printed',
+    d2.out.indexOf('SAME auditor reference') === -1);
+  t('it prints both references so the dates can be compared',
+    /had: 2026-11-06 14:02Z/.test(d2.out) && /live: 2026-11-09 09:15Z/.test(d2.out));
+  t('it explains that a full manifest apply replaces the whole template',
+    /whole pod template/.test(d2.out));
+  t('and points at the per fix patches as the way out', /per fix/.test(d2.out));
+
+  console.log('\n  A StatefulSet keeps history in ControllerRevisions, nested under data');
+  const d3 = run(['drift', '-n', 'prod'],
+    { OC_WORKS: 'sts.json', OC_RSS: 'empty.json', OC_CRS: 'crs.json' });
+  t('the StatefulSet is reported', /statefulset\/clustersync in prod/.test(d3.out));
+  t('and the revision it names comes from the ControllerRevision',
+    /last held at revision 4/.test(d3.out));
+  t('not from the newer one that had already lost it',
+    !/last held at revision 5/.test(d3.out));
+
+  console.log('\n  Nothing lost means nothing reported');
+  const d4 = run(['drift', '-n', 'prod'], { OC_WORKS: 'empty.json', OC_RSS: 'empty.json' });
+  t('it still exits 0', d4.code === 0);
+  t('no workload is listed', d4.out.indexOf('in prod') === -1);
+  t('and it warns that a pruned revision looks clean here',
+    /revisionHistoryLimit defaults to 10/.test(d4.out));
+
+  console.log('\n  --all widens past the annotated workloads');
+  const d5 = run(['drift', '-n', 'prod', '--all']);
+  t('it is accepted as an option rather than a workload name', d5.code === 0);
+  t('the annotated workload is still reported', /payments-api/.test(d5.out));
+
+  console.log('\n  It reads and never writes');
+  const log = fs.existsSync(LOG) ? fs.readFileSync(LOG, 'utf8') : '';
+  t('the fake oc really was called', log.split('\n').filter(Boolean).length > 5);
+  t('every call it made was a get',
+    log.split('\n').filter(Boolean).every((l) => /^get /.test(l)));
+  t('the fake never had to refuse a write',
+    ![d, d2, d3, d4, d5].some((r) => /FAKE OC REFUSED/.test(r.out)));
+  t('it says up front that it is read only', /It is read only/.test(d.out));
+
+  console.log('\n  It runs under dash as well as bash');
+  const dashBin = fs.existsSync('/bin/dash') ? '/bin/dash' : null;
+  if (dashBin) {
+    const dd = run(['drift', '-n', 'prod'], null, dashBin);
+    t('dash reports the same workload', /deployment\/payments-api/.test(dd.out));
+    t('dash names the same revision', /last held at revision 87/.test(dd.out));
+    t('dash reaches the same verdict', /SAME auditor reference/.test(dd.out));
+  } else {
+    console.log('  (dash not installed, skipped)');
+  }
+
+  fs.rmSync(work, { recursive: true, force: true });
+}
 
 /* ---------------------------------------------------- every script, uniformly
  *

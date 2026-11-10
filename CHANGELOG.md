@@ -11,6 +11,71 @@ at least; removing or renaming one is a major.
 Every release is tagged. `git tag -l` is the list, and the tag matches the version this
 tool stamps into every report and patch header it writes.
 
+## 1.14.0 - 2026-11-10
+
+### Added
+
+- **`acs_rollout.sh drift`: hardening an earlier revision had and the running one does not.**
+
+  Reported from production. A fix was applied, landed at one revision, and three revisions
+  later the running template no longer had it. The finding came back, the YAML on disk was
+  still correct, and the auditor annotation was still on the object because whatever
+  replaced the template had written its own. Nothing in the tool could tell that apart from
+  a fix that was never applied, and the two have completely different remedies.
+
+  `drift` does not read the annotation to decide what hardening to expect. The annotation
+  records a run, not a list of policies, so inferring expectations from it would report
+  drift on a policy the operator deliberately left alone. It compares the live pod template
+  against the template stored in every revision the cluster still keeps, and reports only
+  what the cluster can prove was lost: a property that held in an earlier revision and does
+  not hold now. It then names the newest revision that still had it, which is the rollback
+  target, and prints that rollback command without running it.
+
+  It also says which of two things happened, once per workload. If the revision that still
+  had the fix carries the same auditor reference as the live object, the auditor was not
+  what replaced it and something edited the template afterwards. If it carries a different
+  reference, a later auditor apply replaced it, which happens because a full manifest apply
+  writes the whole pod template: an export generated without a given fix removes that fix.
+  The per fix patches do not have this problem.
+
+  `managedFields` is printed with it, since that is the only record the API keeps of who
+  wrote the object last, with a legend: `kubectl-edit` and `oc-edit` are a person at a
+  console, `client-side-apply` is somebody applying a manifest, and Terraform, Helm, Argo CD
+  or an operator name means that tool owns the field and will undo the fix again, so the
+  value belongs in its config rather than in the cluster.
+
+  Covers Deployments through ReplicaSets, StatefulSets and DaemonSets through
+  ControllerRevisions, and DeploymentConfigs through ReplicationControllers. Five reads for
+  the whole scope regardless of cluster size. `--all` widens it past annotated workloads.
+  `snapshot` now captures a `drift.txt` too, for a machine that cannot reach the cluster.
+
+  The output states its own limits: a fix that was never applied never held in any revision
+  and so cannot appear, and a pruned revision cannot be compared, which matters because
+  `revisionHistoryLimit` defaults to 10.
+
+  The script remains self contained, shell and jq only, no Node and no dependency on
+  anything else in the repository, so this one file can be carried to an air gapped box
+  running an older release. Verified by dropping it onto a pristine v1.11.0 checkout.
+
+### Fixed
+
+- **An empty field in the middle of a record silently shifted every field after it.** The
+  subcommand loops split records on a tab, and tab is IFS whitespace, so `read` collapses
+  two consecutive tabs into one. A StatefulSet has no `deployment.kubernetes.io/revision`
+  annotation, so its revision field is empty, and the drift report printed its auditor
+  reference where the revision number belonged and the revision count where the reference
+  belonged. The drift loop now splits on a unit separator, which is not whitespace.
+
+### Notes
+
+- 38 new assertions in `test/scripts.cjs`, driven against fake `oc` binaries that record
+  every call, asserting among other things that every call made is a `get`. All were
+  mutation tested. Three did not fail when they should have: two because the fixture had
+  only one good revision, so picking the oldest instead of the newest and sorting revisions
+  lexically both went unnoticed, and one because it counted a per workload verdict across
+  the whole report. The fixture now carries a workload whose good revisions are 9 and 10,
+  either side of ten so that a lexical sort names the wrong one.
+
 ## 1.13.0 - 2026-11-04
 
 ### Fixed

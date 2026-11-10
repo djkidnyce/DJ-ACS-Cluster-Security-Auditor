@@ -77,6 +77,7 @@ ALL_NS=1
 OUTDIR=""
 TO_REV=""
 RESTORE_FILE=""
+DRIFT_ALL=0
 
 need() {
   command -v "$1" >/dev/null 2>&1 && return 0
@@ -111,6 +112,7 @@ SUBCOMMANDS
   plan                     broken workloads, auditor touched workloads, and the overlap
   broken                   workloads with unhealthy pods, why, and how to go back
   touched                  workloads carrying an auditor annotation, healthy or not
+  drift                    hardening an earlier revision had and the running one does not
   history [KIND/NAME]      revision history, with the change cause against each revision
   snapshot                 write the lot to files, readable where the cluster is not
   undo KIND/NAME           print the rollback command for one workload
@@ -120,12 +122,15 @@ OPTIONS
   -n, --namespace NS       one namespace. Omit it for every namespace
   -o, --out DIR            where snapshot writes. Default acs_rollout_<timestamp>
       --to-revision N      target revision, for undo
+      --all                for drift: every workload, not only annotated ones
   -h, --help               this text
 
 EXAMPLES
   acs_rollout.sh plan
   acs_rollout.sh broken -n prod
   acs_rollout.sh touched -n prod
+  acs_rollout.sh drift -n prod
+  acs_rollout.sh drift -n prod --all
   acs_rollout.sh history -n prod deployment/payments-api
   acs_rollout.sh snapshot -o ./rollback
   acs_rollout.sh undo -n prod deployment/payments-api --to-revision 6
@@ -156,6 +161,7 @@ while [ $# -gt 0 ]; do
     -n|--namespace) NS="${2:-}"; ALL_NS=0; shift 2 || usage ;;
     -o|--out)       OUTDIR="${2:-}"; shift 2 || usage ;;
     --to-revision)  TO_REV="${2:-}"; shift 2 || usage ;;
+    --all)          DRIFT_ALL=1; shift ;;
     -h|--help)      usage 0 ;;
     -*)             echo "Unknown option: $1" >&2; usage ;;
     *)
@@ -464,6 +470,7 @@ cmd_snapshot() {
   done
 
   { cmd_plan; } > "$_dir/plan.txt" 2>&1 || true
+  { cmd_drift; } > "$_dir/drift.txt" 2>&1 || true
 
   cat > "$_dir/READ_ME.txt" <<TXT
 Rollout snapshot taken $(date -u +"%Y-%m-%d %H:%M:%SZ") by acs_rollout.sh.
@@ -558,10 +565,194 @@ cmd_restore() {
   jq --arg ns "$NS" --arg kind "$_kind" --arg name "$_name" "$PICK_JQ[0] | $CLEAN_JQ" "$RESTORE_FILE"
 }
 
+
+# ---------------------------------------------------------------- drift
+#
+# A fix that was applied and then overwritten looks exactly like a fix that was never
+# applied: the finding is back, the YAML on disk is correct, and the annotation is still
+# sitting on the object because whatever replaced the template wrote its own.
+#
+# This does not try to work out which policies you applied. It cannot: the annotation
+# records a run, not a list of policies, so reading hardening out of it would be a guess,
+# and a guess here reports drift on a policy you deliberately left alone.
+#
+# It compares the live pod template against the template kept in every historical revision
+# instead. A property that is satisfied in some earlier revision and not in the current one
+# was lost, and the cluster is the evidence. Nothing is inferred and nothing is assumed
+# about intent.
+#
+# One get per kind for the whole scope rather than one per workload, for the same reason
+# the rest of this file works that way.
+PROFILE_JQ='
+  def conts: ((.containers // []) + (.initContainers // []));
+  def capdrop: ((.securityContext.capabilities.drop // []) | map(ascii_upcase | sub("^CAP_";"")));
+  def profile:
+    . as $ps | ($ps | conts) as $cs |
+    { "ACS.013 cpu request":    ($cs | all((.resources.requests.cpu // "") != "")),
+      "ACS.013 cpu limit":      ($cs | all((.resources.limits.cpu // "") != "")),
+      "ACS.014 memory request": ($cs | all((.resources.requests.memory // "") != "")),
+      "ACS.014 memory limit":   ($cs | all((.resources.limits.memory // "") != "")),
+      "ACS.001 not privileged": ($cs | all((.securityContext.privileged // false) != true)),
+      "ACS.002 read only root": ($cs | all((.securityContext.readOnlyRootFilesystem // false) == true)),
+      "ACS.003 no privilege escalation": ($cs | all((.securityContext.allowPrivilegeEscalation // true) == false)),
+      "ACS.008 drops ALL capabilities":  ($cs | all(capdrop | index("ALL") != null)),
+      "ACS.009 runs as non root": ((($ps.securityContext.runAsNonRoot // false) == true)
+                                   or ($cs | all((.securityContext.runAsNonRoot // false) == true))),
+      "ACS.016 no token automount": (($ps.automountServiceAccountToken // true) == false),
+      "ACS.019 no privileged host port": ($cs | all(((.ports // []) | all(((.hostPort // 0) == 0) or ((.hostPort // 0) >= 1024))))),
+      "host network not shared": (($ps.hostNetwork // false) != true),
+      "host PID not shared":     (($ps.hostPID // false) != true),
+      "host IPC not shared":     (($ps.hostIPC // false) != true) };
+'
+
+DRIFT_JQ='
+  (((.[0].items // []) + (.[1].items // []))) as $works
+  | (.[2].items // []) as $rss
+  | (.[3].items // []) as $crs
+  | (.[4].items // []) as $rcs
+  | [ $works[]
+      | . as $w
+      | ($w.metadata // {}) as $m
+      | ($m.namespace // "?") as $ns
+      | ($w.kind // "?") as $kind
+      | ($m.name // "?") as $name
+      | ($w.spec.template // {}) as $tpl
+      | (($tpl.metadata.annotations // {})[$ANNOT] // "") as $stamp
+      | select($stamp != "" or $ALLW == "1")
+      | (($m.annotations // {})["deployment.kubernetes.io/revision"] // "") as $rev
+      | (($tpl.spec // {}) | profile) as $now
+      | ( if $kind == "Deployment" then
+            [ $rss[] | select((.metadata.namespace // "?") == $ns)
+              | select(((.metadata.ownerReferences // [])[]? | select(.kind == "Deployment") | .name) == $name)
+              | { rev: ((.metadata.annotations // {})["deployment.kubernetes.io/revision"] // "0"),
+                  stamp: (((.spec.template.metadata.annotations // {})[$ANNOT]) // ""),
+                  prof: ((.spec.template.spec // {}) | profile) } ]
+          elif $kind == "StatefulSet" or $kind == "DaemonSet" then
+            [ $crs[] | select((.metadata.namespace // "?") == $ns)
+              | select(((.metadata.ownerReferences // [])[]? | select(.kind == $kind) | .name) == $name)
+              | { rev: ((.revision // 0) | tostring),
+                  stamp: (((.data.spec.template.metadata.annotations // {})[$ANNOT]) // ""),
+                  prof: ((.data.spec.template.spec // {}) | profile) } ]
+          elif $kind == "DeploymentConfig" then
+            [ $rcs[] | select((.metadata.namespace // "?") == $ns)
+              | select(((.metadata.annotations // {})["openshift.io/deployment-config.name"] // "") == $name)
+              | { rev: ((.metadata.annotations // {})["openshift.io/deployment-config.latest-version"] // "0"),
+                  stamp: (((.spec.template.metadata.annotations // {})[$ANNOT]) // ""),
+                  prof: ((.spec.template.spec // {}) | profile) } ]
+          else [] end ) as $hist
+      | ( [ $now | keys[] ] | map(. as $k
+            | ( [ $hist[] | select(.prof[$k] == true) ] | sort_by(.rev | tonumber) | last ) as $best
+            | select(($now[$k] == false) and ($best != null))
+            | { key: $k, bestRev: $best.rev, bestStamp: $best.stamp } ) ) as $lost
+      | select(($lost | length) > 0)
+      | { ns: $ns, kind: ($kind | ascii_downcase), name: $name, rev: $rev, stamp: $stamp,
+          revisions: ($hist | length), lost: $lost } ]
+  | sort_by(.ns, .name)
+  | .[]
+  | [ .ns, .kind, .name, .rev, .stamp, (.revisions|tostring),
+      ([ .lost[] | (.key + "~" + .bestRev + "~" + .bestStamp) ] | join("|")) ]
+  | join("\u001f")'
+
+get_rs()  { $OC get replicasets          $NSARGS -o json 2>/dev/null || echo '{"items":[]}'; }
+get_crs() { $OC get controllerrevisions  $NSARGS -o json 2>/dev/null || echo '{"items":[]}'; }
+get_rcs() { $OC get replicationcontrollers $NSARGS -o json 2>/dev/null || echo '{"items":[]}'; }
+
+# Who wrote the live object last, and when. managedFields is the only record of this the API
+# keeps, and it is what separates a person at a console from a controller: kubectl-edit and
+# oc-edit are a human, kubectl-client-side-apply is somebody applying a manifest, and an
+# operator or GitOps controller writes under its own name.
+print_writers() {
+  _ns="$1"; _kind="$2"; _name="$3"
+  $OC get "$_kind/$_name" -n "$_ns" -o json 2>/dev/null |
+    jq -r '(.metadata.managedFields // [])[]
+           | "      " + (.manager // "?") + "  " + (.operation // "?") + "  " + (.time // "no timestamp")' ||
+    echo "      could not read managedFields"
+}
+
+cmd_drift() {
+  echo "Hardening that an earlier revision had and the running one does not."
+  echo
+  echo "This compares the live pod template against the template stored in every revision"
+  echo "the cluster still keeps. It does not read your exceptions and it does not know which"
+  echo "policies you chose, so it reports only what the cluster can prove was lost: a"
+  echo "property that held in an earlier revision and does not hold now."
+  echo
+  echo "It is read only. The rollback commands below are printed, never run."
+  echo
+  _found=0
+  { get_workloads; get_dcs; get_rs; get_crs; get_rcs; } |
+  jq -s -r --arg ANNOT "$ANNOT" --arg ALLW "$DRIFT_ALL" "$PROFILE_JQ$DRIFT_JQ" |
+  # Unit separator, not tab. Tab is IFS whitespace, so read collapses two consecutive tabs
+  # into one and an empty field in the middle disappears, shifting every field after it. A
+  # StatefulSet has no revision annotation, so its revision field is empty and this bug
+  # reported its auditor reference as a revision number. US is not whitespace.
+  while IFS="$(printf '\037')" read -r ns kind name rev stamp revisions lost; do
+    _found=1
+    rule
+    echo "  $kind/$name in $ns"
+    echo "    current revision: ${rev:-unknown}   revisions kept: $revisions"
+    say_stamp "$stamp"
+    echo "    lost since an earlier revision:"
+    _diffstamp=0; _samestamp=0; _other=""
+    printf '%s\n' "$lost" | tr '|' '\n' | while IFS='~' read -r key bestrev beststamp; do
+      [ -n "$key" ] || continue
+      echo "      $key   last held at revision $bestrev"
+    done
+    # Whether a later auditor run replaced the template, or something edited it afterwards,
+    # is one fact about the workload rather than one per property. Said once.
+    _beststamps="$(printf '%s\n' "$lost" | tr '|' '\n' | sed -n 's/^[^~]*~[^~]*~\(.*\)$/\1/p' | sort -u)"
+    _verdict="unknown"
+    if [ -n "$stamp" ]; then
+      if printf '%s\n' "$_beststamps" | grep -qvxF "$stamp"; then _verdict="replaced"; else _verdict="edited"; fi
+    fi
+    echo
+    case "$_verdict" in
+      edited)
+        echo "    The revision that still had it carries the SAME auditor reference as the"
+        echo "    live object, so the auditor was not what replaced it. Something edited the"
+        echo "    template afterwards. The writer list below is where to look."
+        ;;
+      replaced)
+        echo "    The revision that still had it carries a DIFFERENT auditor reference, so a"
+        echo "    later auditor apply replaced the template. A full manifest apply writes the"
+        echo "    whole pod template, so an export that did not include this fix removes it."
+        echo "    Re-export with every policy you want selected, or apply the per fix"
+        echo "    patches, which touch only the fields their own fix changed."
+        printf '%s\n' "$_beststamps" | sed 's/^/      had: /'
+        echo "      live: $stamp"
+        ;;
+      *)
+        echo "    The live object carries no auditor reference, so this tool cannot say"
+        echo "    whether the auditor ever wrote this template. Treat the revision numbers"
+        echo "    above as the evidence and the writer list below as the lead."
+        ;;
+    esac
+    echo
+    echo "    who wrote the live object last:"
+    print_writers "$ns" "$kind" "$name"
+    echo "      (kubectl-edit or oc-edit is a person at a console. client-side-apply is"
+    echo "       somebody applying a manifest, possibly an older export. Terraform, helm,"
+    echo "       argocd-application-controller or an operator name means that tool owns the"
+    echo "       field and will undo this again: the value belongs in its config, not in"
+    echo "       the cluster. An unfamiliar name is a lead, not a dead end.)"
+    echo "    put it back to the revision that still had it:"
+    echo "      $(undo_command "$ns" "$kind" "$name" "$(printf '%s\n' "$lost" | tr '|' '\n' | sed -n '1s/^[^~]*~\([^~]*\)~.*/\1/p')")"
+  done
+  echo
+  echo "Nothing above means no workload in scope lost a property it previously had. It does"
+  echo "NOT mean the workloads are hardened: a fix that was never applied at all never held"
+  echo "in any revision, so it cannot show up here. Run an audit for that."
+  echo
+  echo "A revision that is gone cannot be compared. revisionHistoryLimit defaults to 10, so"
+  echo "a workload that has rolled more than ten times since the fix has already pruned the"
+  echo "evidence and will look clean here."
+}
+
 case "$CMD" in
   history)  cmd_history ;;
   broken)   cmd_broken ;;
   touched)  cmd_touched ;;
+  drift)    cmd_drift ;;
   plan)     cmd_plan ;;
   snapshot) cmd_snapshot ;;
   undo)     cmd_undo ;;

@@ -1,9 +1,9 @@
 DJ's ACS Auditor
-version   1.13.0
-build     20261104-210202
-tests     2074 with jsdom, 1256 without
+version   1.14.0
+build     20261110-123619
+tests     2120 with jsdom, 1302 without
           Those are the numbers from a clean clone of this repository. A working copy
-          that also has handoff.md reports 2082 and 1264, because eight assertions in
+          that also has handoff.md reports 2128 and 1310, because eight assertions in
           test/ci.cjs read that file and skip when it is absent. handoff.md is not
           published, so the higher numbers are not reproducible from here.
 
